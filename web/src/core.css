@@ -54,3 +54,27 @@
 .core-line.click { cursor: pointer; border-radius: 6px; padding: 4px 6px; margin: 0 -6px; }
 .core-line.click:hover { background: var(--panel-2); }
 .core-warn { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--warn); font-size: var(--fs-12); }
+/* Matériel : une carte en 3D à gauche, ses prises à droite. */
+.core-hw-body { display: flex; gap: 28px; align-items: flex-start; }
+.core-hw-figure { flex: 0 1 620px; min-width: 320px; display: flex; flex-direction: column; gap: 8px; }
+.core-hw-card3d { position: relative; width: 100%; user-select: none; color: var(--text-2); }
+.core-hw-card3d > img { position: absolute; inset: 0 auto auto 0; display: block; cursor: pointer; }
+.core-hw-leaders { position: absolute; inset: 0 auto auto 0; pointer-events: none; overflow: visible; }
+.core-hw-leader { pointer-events: auto; cursor: pointer; }
+.core-hw-num { font: 700 14px var(--font); }
+.core-hw-sub { font: 500 11px var(--font); fill: var(--text-3); }
+.core-hw-legend { display: flex; gap: 14px; font-size: var(--fs-12); color: var(--text-2); }
+.core-hw-legend span { display: flex; align-items: center; gap: 6px; }
+.core-hw-legend span::before { content: ''; width: 9px; height: 9px; border-radius: 50%; background: var(--c); }
+.core-hw-ports { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.core-hw-port { display: grid; grid-template-columns: 10px 130px auto 1fr; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; border: 1px solid transparent; cursor: pointer; }
+.core-hw-port.nic { grid-template-columns: 10px 1fr auto auto; }
+.core-hw-port:hover { background: var(--panel-2); }
+.core-hw-port.sel { border-color: var(--line-2); background: var(--panel-2); }
+.core-hw-port-name { display: flex; flex-direction: column; min-width: 0; font-size: var(--fs-12); }
+.core-hw-port-name .st-muted { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.core-hw-dot { width: 10px; height: 10px; border-radius: 50%; }
+.core-hw-wire { min-width: 0; }
+.core-hw-genlock { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 8px 8px 0; border-top: 1px solid var(--line); margin-top: 4px; }
+.core-hw-role { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 600; color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); }
+@media (max-width: 1100px) { .core-hw-body { flex-direction: column; } .core-hw-figure { flex-basis: auto; width: 100%; } }

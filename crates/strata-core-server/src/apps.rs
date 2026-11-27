@@ -172,6 +172,8 @@ pub fn launch_of(a: &Installed, data_dir: &Path, cfg: &ServerConfig, core_port: 
         ("STRATA_CORE_URL", format!("http://127.0.0.1:{core_port}")),
         ("STRATA_CORE_VERSION", strata_core::VERSION.to_string()),
         ("STRATA_SERVER_NAME", cfg.name.clone()),
+        // Les réglages réseau de NDI, les mêmes pour toutes les applis (Matériel › NDI).
+        ("NDI_CONFIG_DIR", crate::hardware::ndi::config_dir(data_dir).display().to_string()),
     ];
     Some(Launch { program, args: run.args.clone(), cwd: a.dir.clone(), env: env.into_iter().map(|(k, v)| (k.to_string(), v)).collect(), port: m.port })
 }

@@ -70,6 +70,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Serveur
+        # Le pont DeckLink (C++) est exigé dans une release : sans lui, pas de cartes SDI.
+        env:
+          STRATA_DECKLINK_REQUIRED: '1'
         run: cargo build --release --locked -p strata-core-server
 
       - name: Archive du serveur

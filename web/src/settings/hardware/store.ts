@@ -1,0 +1,163 @@
+// Le matériel du serveur : ce que voit la machine (relu à la demande) et les réglages en cours
+// d'édition, partagés par les pages Cartes SDI, NDI, ST 2110, Réseau et Horloge (un seul
+// enregistrement pour tout).
+import { create } from 'zustand';
+import { t, toast } from '@strata/ui';
+import { api } from '../../api';
+import { friendly } from '../../errors';
+
+export type Port = 'in' | 'out' | 'both';
+export type Fn = 'unused' | 'input' | 'output';
+
+export interface DetectedCard {
+  id: string;
+  modelName: string;
+  legacyModel: string;
+  connectors: number;
+  /** L'appareil Desktop Video de chaque connecteur. */
+  devices: number[];
+  ports: Port[];
+  hasReference: boolean;
+  referenceLocked?: boolean | null;
+  referenceKind?: 'blackBurst' | 'triLevel' | null;
+  referenceFormat?: string | null;
+  interface?: string | null;
+  profile?: string | null;
+  profiles: string[];
+  internalKeyer: boolean;
+  externalKeyer: boolean;
+}
+
+export interface Model {
+  name: string;
+  legacy: string;
+  jack: 'din' | 'bnc';
+  connectors: number;
+  order: number[];
+  reference: boolean | null;
+  ports: Port[];
+}
+
+export interface Card {
+  id: string;
+  name: string;
+  modelName: string;
+  connectors: { name: string; function: Fn }[];
+  genlock: boolean;
+  genlockOffset: number;
+}
+
+export interface Nic {
+  name: string;
+  ipv4: string[];
+  mac?: string | null;
+  mtu?: number | null;
+  speed?: number | null;
+  up?: boolean | null;
+  kind?: string | null;
+  model?: string | null;
+  /** La carte PCI (`0000:3b:00`) : les ports d'une même carte la partagent. */
+  pci?: string | null;
+  port?: number | null;
+  onboard: boolean;
+  connector?: 'sfp' | 'rj45' | null;
+}
+
+export interface Flow {
+  id: string;
+  name: string;
+  direction: 'input' | 'output';
+  essence: 'video' | 'audio' | 'data';
+  red: string;
+  blue?: string | null;
+  /** Le port média (1 ou 2), avec deux ports indépendants. */
+  port?: number;
+}
+
+export type Role = 'management' | 'ndi' | 'media1' | 'media2' | 'ptp';
+
+export interface HwConfig {
+  cards: Card[];
+  network: Record<Role, string> & { mediaMode: 'redundant' | 'separate' };
+  ndi: { discovery: string; machine: string };
+  flows: Flow[];
+  ptp: { domain: number; taiOffset: number };
+}
+
+export interface Snapshot {
+  config: HwConfig;
+  decklink: { built: boolean; driver: boolean; driverPath?: string | null; version?: string | null; fake: boolean; cards: DetectedCard[] };
+  models: Model[];
+  nics: Nic[];
+  ndi: { path?: string; version?: string | null; error?: string };
+}
+
+export const useHw = create<{ snap: Snapshot | null; draft: HwConfig | null; saving: boolean }>(() => ({ snap: null, draft: null, saving: false }));
+
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
+/** Relit ce que voit la machine ; les réglages en cours d'édition restent. */
+export async function loadHw() {
+  try {
+    const snap = await api<Snapshot>('GET', '/api/hardware');
+    const { snap: before, draft } = useHw.getState();
+    const keep = before && draft && !same(draft, before.config);
+    useHw.setState({ snap, draft: keep ? draft : structuredClone(snap.config) });
+  } catch (e) {
+    toast(friendly(e), 'error');
+  }
+}
+
+/** Change les réglages en cours d'édition. */
+export function editHw(fn: (d: HwConfig) => void) {
+  const d = useHw.getState().draft;
+  if (!d) return;
+  const next = structuredClone(d);
+  fn(next);
+  useHw.setState({ draft: next });
+}
+
+export function useHwDirty() {
+  return useHw((s) => !!s.snap && !!s.draft && !same(s.draft, s.snap.config));
+}
+
+export async function saveHw() {
+  const draft = useHw.getState().draft;
+  if (!draft) return;
+  useHw.setState({ saving: true });
+  try {
+    const snap = await api<Snapshot & { ndiChanged?: boolean }>('PUT', '/api/hardware', draft);
+    useHw.setState({ snap, draft: structuredClone(snap.config) });
+    toast(t('Settings saved'));
+    if (snap.ndiChanged) toast(t('Restart the apps that use NDI: they read these settings when they start.'), 'info');
+  } catch (e) {
+    toast(friendly(e), 'error');
+  }
+  useHw.setState({ saving: false });
+}
+
+export function discardHw() {
+  const snap = useHw.getState().snap;
+  if (snap) useHw.setState({ draft: structuredClone(snap.config) });
+}
+
+/** Ce qu'un connecteur fait par défaut : ce que seul il sait faire, sinon rien. */
+export const defaultFn = (p: Port | undefined): Fn => (p === 'in' ? 'input' : p === 'out' ? 'output' : 'unused');
+
+/** Les réglages d'une carte détectée (ceux par défaut si elle n'en a pas encore). */
+export function cardOf(draft: HwConfig, d: DetectedCard): Card {
+  const c = draft.cards.find((x) => x.id === d.id);
+  const connectors = Array.from({ length: d.connectors }, (_, i) => c?.connectors[i] ?? { name: '', function: defaultFn(d.ports[i]) });
+  return { id: d.id, name: c?.name ?? '', modelName: d.modelName, genlock: c?.genlock ?? false, genlockOffset: c?.genlockOffset ?? 0, connectors };
+}
+
+/** Change les réglages d'une carte détectée (créés au premier changement). */
+export function editCard(d: DetectedCard, fn: (c: Card) => void) {
+  editHw((draft) => {
+    const c = cardOf(draft, d);
+    fn(c);
+    const i = draft.cards.findIndex((x) => x.id === d.id);
+    if (i >= 0) draft.cards[i] = c;
+    else draft.cards.push(c);
+  });
+}

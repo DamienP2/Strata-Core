@@ -53,6 +53,17 @@ puis faites pointer `strata.test` et `*.strata.test` vers `127.0.0.1` : une lign
 (`address=/strata.test/127.0.0.1`). Le cockpit est alors `http://strata.test:8080/` et LiveCut
 `http://livecut.strata.test:8080/`, avec la même connexion.
 
+## Le matériel sans le matériel
+
+Des cartes simulées, pour travailler sur *Réglages › Matériel* :
+
+```bash
+STRATA_FAKE_DECKLINK=quad2,8kpro,duo2,minimonitor STRATA_FAKE_NICS=connectx,e810,i350 cargo run -p strata-core-server -- --data-dir ./data
+```
+
+Le pont DeckLink (`crates/strata-decklink`) se compile avec g++ ; sans compilateur C++, le Core se
+construit sans lui (avertissement). Le pilote Desktop Video n'est nécessaire qu'à l'exécution.
+
 ## Le HTTPS en local
 
 *Réglages › Ce serveur › HTTPS › Fait par Strata*, avec un port libre (8443) : le Core fait son autorité

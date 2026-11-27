@@ -27,6 +27,8 @@ pub struct AppState {
     pub relay: relay::HttpClient,
     /// Le port où le Core écoute (donné aux applis : `STRATA_CORE_URL`).
     core_port: AtomicU16,
+    /// L'état de NTP et PTP (Matériel › Horloge).
+    pub clock: crate::hardware::sync::Watch,
     /// Les mises à jour du Core et des applis.
     pub updates: Updates,
     /// Le HTTPS : certificat et écoute.
@@ -51,6 +53,7 @@ impl AppState {
             core_port: AtomicU16::new(8080),
             tls: Tls::new(&data_dir),
             updates: Updates::default(),
+            clock: Default::default(),
             restart: AtomicBool::new(false),
             restart_signal: tokio::sync::Notify::new(),
             started_at: Instant::now(),

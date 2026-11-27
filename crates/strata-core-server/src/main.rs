@@ -54,6 +54,11 @@ fn main() -> anyhow::Result<()> {
 fn run(a: RunArgs) -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,tower_http=warn".into())).init();
     let data_dir = a.data_dir.unwrap_or_else(strata_core_server::user_data_dir);
+    // Les réglages réseau de NDI que partagent le Core et les applis (Matériel › NDI) ; avant
+    // tout fil, la bibliothèque NDI le lit en se chargeant.
+    if std::env::var_os("NDI_CONFIG_DIR").is_none() {
+        std::env::set_var("NDI_CONFIG_DIR", strata_core_server::hardware::ndi::config_dir(&data_dir));
+    }
     // Retenu avant tout : une mise à jour remplace le fichier, et son chemin ne se relirait plus.
     let exe = std::env::current_exe()?;
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;

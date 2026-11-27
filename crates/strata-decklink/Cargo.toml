@@ -1,0 +1,12 @@
+[package]
+name = "strata-decklink"
+description = "Les cartes Blackmagic DeckLink : le pont C++ vers le SDK (chargé au lancement), repris de CG."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+
+[build-dependencies]
+cc = "1.2"

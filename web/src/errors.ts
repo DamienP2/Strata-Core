@@ -31,6 +31,16 @@ const SHAPED: [RegExp, string, string[]][] = [
   [/^port (\d+) is already the HTTP one$/, 'Port {port} is already the HTTP one', ['port']],
   [/^the certificate does not cover (.+)$/, 'The certificate does not cover {names}', ['names']],
   [/^the certificate expired on (.+)$/, 'The certificate expired on {date}', ['date']],
+  // Matériel
+  [/^SDI (\d+) of (.+) cannot be an input$/, 'SDI {n} of {model} cannot be an input', ['n', 'model']],
+  [/^SDI (\d+) of (.+) cannot be an output$/, 'SDI {n} of {model} cannot be an output', ['n', 'model']],
+  [/invalid socket address/, 'An address is written ip:port (239.10.2.1:5004)', []],
+  [/^(.+) has (\d+) connectors$/, '{model} has {n} connectors', ['model', 'n']],
+  [/^(.+): the genlock offset is out of range$/, '{card}: the genlock offset is out of range', ['card']],
+  [/^(.+): the (red|blue) address must be multicast \(224\.0\.0\.0 to 239\.255\.255\.255\) with a port$/, '{flow}: the {leg} address must be multicast (224.0.0.0 to 239.255.255.255) with a port', ['flow', 'leg']],
+  [/^(.+) is used by two flows$/, '{address} is used by two flows', ['address']],
+  [/^(.+): in SMPTE 2022-7, a flow has an address on each network \(red and blue\)$/, '{flow}: in SMPTE 2022-7, a flow has an address on each network (red and blue)', ['flow']],
+  [/^(.+): the media port is 1 or 2$/, '{flow}: the media port is 1 or 2', ['flow']],
   // Mises à jour
   [/^(.+) has no release of the Core$/, '{repo} has no release of the Core', ['repo']],
   [/^this Core is already the latest \((.+)\)$/, 'This Core is already the latest ({version})', ['version']],

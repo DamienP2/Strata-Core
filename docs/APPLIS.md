@@ -126,6 +126,29 @@ Garanties du Core :
   siens.
 - Appli éteinte ou qui démarre : le Core répond `502` avec une page qui se recharge toute seule.
 
+## Le matériel du serveur
+
+Le matériel se règle une fois, dans le Core (*Réglages › Matériel*), pour toutes les applis : une
+entrée SDI est une entrée pour toutes. L'appli lit ces réglages sur la machine, sans session :
+
+```
+GET $STRATA_CORE_URL/api/hardware/shared
+```
+
+| Partie | Contenu |
+| --- | --- |
+| `sdi` | les cartes DeckLink : nom, modèle, présente ou non, genlock ; pour chaque connecteur (`number` = SDI n, numéro logiciel), son nom, sa fonction (`input`, `output`, `unused`) et l'appareil Desktop Video à ouvrir (`device`) |
+| `network` | les interfaces et leur adresse : `management`, `ndi`, `media1`, `media2`, `ptp` ; `mediaMode` : `redundant` (SMPTE 2022-7 : `media1` rouge, `media2` bleu) ou `separate` (deux ports indépendants) |
+| `flows` | les flux ST 2110 : nom, sens, essence, `red` (et `blue` en 2022-7), `port` (1 ou 2, ports indépendants) |
+| `ndi` | le dossier des réglages NDI (`configDir`), le serveur de découverte, le nom de machine |
+| `ptp` | le domaine PTP, le décalage TAI − UTC |
+
+NDI : le Core donne `NDI_CONFIG_DIR` à l'appli qu'il lance ; la bibliothèque NDI y lit l'interface,
+le serveur de découverte et le nom de machine, les mêmes pour toutes les applis.
+
+À venir : les entrées DeckLink captées une seule fois par le Core et partagées entre les applis
+(le pilote n'en laisse qu'un programme à la fois).
+
 ## Ce que l'appli garde pour elle
 
 - **Les droits** : qui peut faire quoi dans ses écrans, par groupe ou par personne, en s'appuyant sur

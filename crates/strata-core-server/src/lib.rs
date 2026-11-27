@@ -11,6 +11,7 @@ pub mod cli;
 pub mod config;
 pub mod groups;
 pub mod guard;
+pub mod hardware;
 pub mod install;
 pub mod prefs;
 pub mod relay;
