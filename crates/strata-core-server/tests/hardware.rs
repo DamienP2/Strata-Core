@@ -188,6 +188,30 @@ async fn hardware_settings_and_what_apps_read() {
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
     assert!(app.join().unwrap() > 0);
 
+    // Le mode des connecteurs : en full duplex, SDI 5 à 8 deviennent les sorties des paires ; une
+    // entrée réglée là redevient « inutilisé ».
+    let (_, h) = call(&srv.remote, "GET", "/api/hardware", host, c, None).await;
+    let quad = h["decklink"]["cards"].as_array().unwrap().iter().find(|d| d["id"] == *quad_id).unwrap().clone();
+    assert_eq!((quad["profile"].as_str(), quad["fullDuplex"].as_bool()), (Some("2dhd"), Some(false)));
+    let mut cfg = h["config"].clone();
+    let mut ks = cfg["cards"][0]["connectors"].as_array().unwrap().clone();
+    ks.resize(8, json!({"name": "", "function": "unused"}));
+    ks[5] = json!({"name": "Caméra 6", "function": "input"});
+    cfg["cards"][0]["connectors"] = json!(ks);
+    let (st, v) = call(&srv.remote, "PUT", "/api/hardware", host, c, Some(cfg)).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let (st, v) = call(&srv.remote, "POST", "/api/hardware/decklink/profile", host, c, Some(json!({"card": quad_id, "profile": "1dfd"}))).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let quad = v["decklink"]["cards"].as_array().unwrap().iter().find(|d| d["id"] == *quad_id).unwrap().clone();
+    assert_eq!(quad["ports"], json!(["both", "both", "both", "both", "out", "out", "out", "out"]));
+    assert_eq!(quad["paired"][5], true);
+    assert_eq!(v["config"]["cards"][0]["connectors"][5]["function"], "unused");
+    let (st, _) = call(&srv.remote, "POST", "/api/hardware/decklink/profile", host, c, Some(json!({"card": quad_id, "profile": "9xyz"}))).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+    let (st, v) = call(&srv.remote, "POST", "/api/hardware/decklink/profile", host, c, Some(json!({"card": quad_id, "profile": "2dhd"}))).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["decklink"]["cards"].as_array().unwrap().iter().find(|d| d["id"] == *quad_id).unwrap()["ports"][5], "both");
+
     // Les flux : un flux reçu n'est rejoint que quand on regarde son aperçu.
     let (_, v) = call(&srv.remote, "GET", "/api/hardware/flows", host, c, None).await;
     assert_eq!(v["flows"][0], json!({"id": "flow-1", "reception": null}));

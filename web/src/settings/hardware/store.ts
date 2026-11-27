@@ -26,6 +26,9 @@ export interface DetectedCard {
   profiles: string[];
   internalKeyer: boolean;
   externalKeyer: boolean;
+  /** Chaque connecteur qui est la sortie d'une paire en full duplex (jamais une entrée). */
+  paired: boolean[];
+  fullDuplex: boolean;
 }
 
 export interface Model {

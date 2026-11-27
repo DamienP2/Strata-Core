@@ -41,6 +41,63 @@ function fnOptions(port: Port) {
   }));
 }
 
+/** Les modes des connecteurs (profils Desktop Video) : ce qu'ils veulent dire ici. */
+function profileLabel(p: string, perPair: boolean): string {
+  switch (p) {
+    case '2dhd':
+      return t('Independent');
+    case '1dfd':
+      return perPair ? t('In pairs') : t('1 pair');
+    case '4dhd':
+      return t('4 independent');
+    case '2dfd':
+      return t('2 pairs');
+    case '1dhd':
+      return t('1 connector');
+    default:
+      return p;
+  }
+}
+
+/** Le mode des connecteurs d'une carte : chacun à part, ou par paires (une entrée et sa sortie). */
+function DuplexMode({ d }: { d: DetectedCard }) {
+  const [busy, setBusy] = useState(false);
+  if (d.profiles.length < 2 || !d.profile) return null;
+  const perPair = !/8k/i.test(d.modelName);
+  const order = ['2dhd', '4dhd', '1dfd', '2dfd', '1dhd'];
+  const profiles = [...d.profiles].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  return (
+    <div className="core-hw-genlock">
+      <span className="core-service">
+        <span className="st-muted">{t('Connectors')}</span>
+        <Segmented<string>
+          value={d.profile}
+          options={profiles.map((p) => ({ value: p, label: profileLabel(p, perPair), disabled: busy }))}
+          onChange={async (p) => {
+            if (p === d.profile) return;
+            const ok = await confirmDialog({
+              title: t('Change the connector mode?'),
+              message: t('The captures of this card stop for a few seconds. In pairs, each pair is one input and its output (loop-through, or fill and key): the second connector of a pair can no longer be an input.'),
+              confirm: t('Change'),
+            });
+            if (!ok) return;
+            setBusy(true);
+            try {
+              await api('POST', '/api/hardware/decklink/profile', { card: d.id, profile: p });
+              await loadHw();
+              toast(t('Connector mode changed'));
+            } catch (e) {
+              toast(friendly(e), 'error');
+            }
+            setBusy(false);
+          }}
+        />
+      </span>
+      <span className="st-muted">{d.fullDuplex ? t('Full duplex: one input and its output per pair') : t('Half duplex: each connector an input or an output')}</span>
+    </div>
+  );
+}
+
 function RefPill({ d, genlock }: { d: DetectedCard; genlock: boolean }) {
   if (!d.hasReference || d.referenceLocked == null) return null;
   if (d.referenceLocked)
@@ -89,12 +146,14 @@ function SdiCard({ d, snap, draft }: { d: DetectedCard; snap: Snapshot; draft: H
                 <span className="core-hw-port-name">
                   <strong>SDI {i + 1}</strong>
                   {printed !== null && <span className="st-muted">{t('n° {n} on the bracket', { n: printed })}</span>}
+                  {d.paired?.[i] && <span className="st-muted">{t('output of its pair')}</span>}
                 </span>
                 <Segmented<Fn> value={k.function} options={fnOptions(d.ports[i] ?? 'both')} onChange={(f) => editCard(d, (x) => void (x.connectors[i].function = f))} />
                 <input className="core-hw-wire" value={k.name} placeholder={t('Wired to…')} onChange={(e) => editCard(d, (x) => void (x.connectors[i].name = e.target.value))} />
               </div>
             );
           })}
+          <DuplexMode d={d} />
           {reference && (
             <div className="core-hw-genlock">
               <Switch checked={c.genlock} onChange={(v) => editCard(d, (x) => void (x.genlock = v))} label={t('Genlock: the outputs follow the reference input')} />

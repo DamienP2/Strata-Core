@@ -215,7 +215,8 @@ int64_t int_attribute(IDeckLinkProfileAttributes *attrs, BMDDeckLinkAttributeID 
 }
 
 // Capabilities of a device: bit 0 output, 1 input, 2 internal keyer,
-// 3 external keyer, 4 input format detection.
+// 3 external keyer, 4 input format detection, 5 inactive in the current
+// profile (the second connector of a full-duplex pair), 6 full duplex.
 int caps_of(IDeckLink *dev) {
     int caps = 0;
     IDeckLinkOutput *out = NULL;
@@ -236,6 +237,30 @@ int caps_of(IDeckLink *dev) {
     }
     if (flag_attribute(dev, BMDDeckLinkSupportsInputFormatDetection)) {
         caps |= 16;
+    }
+    // What the current profile lets the device do: capture, play out, or
+    // nothing (its connector is the other half of a full-duplex pair).
+    IDeckLinkProfileAttributes *attrs = NULL;
+    if (dev->QueryInterface(IID_IDeckLinkProfileAttributes, (void **)&attrs) == S_OK && attrs) {
+        int64_t io = 0;
+        if (attrs->GetInt(BMDDeckLinkVideoIOSupport, &io) == S_OK) {
+            caps &= ~3;
+            if (io & bmdDeviceSupportsPlayback) {
+                caps |= 1;
+            }
+            if (io & bmdDeviceSupportsCapture) {
+                caps |= 2;
+            }
+        }
+        int64_t duplex = 0;
+        if (attrs->GetInt(BMDDeckLinkDuplex, &duplex) == S_OK) {
+            if (duplex == bmdDuplexInactive) {
+                caps = (caps & ~3) | 32;
+            } else if (duplex == bmdDuplexFull) {
+                caps |= 64;
+            }
+        }
+        release(attrs);
     }
     return caps;
 }

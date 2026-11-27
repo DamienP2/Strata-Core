@@ -321,9 +321,27 @@ const DESKTOP_VIDEO: &[&str] = &[
 ];
 
 /// Ce que voit la machine, et les réglages.
+/// Un connecteur réglé en entrée que la carte ne sait plus capter (passée en full duplex : la
+/// sortie d'une paire) redevient « inutilisé ». Vrai si quelque chose a changé.
+fn fit_to_cards(cfg: &mut HardwareConfig, cards: &[decklink::DetectedCard]) -> bool {
+    let mut changed = false;
+    for c in &mut cfg.cards {
+        let Some(d) = cards.iter().find(|d| d.id == c.id) else { continue };
+        for (i, k) in c.connectors.iter_mut().enumerate() {
+            let port = d.ports.get(i).copied().unwrap_or(decklink::Port::Both);
+            if (k.function == Function::Input && port == decklink::Port::Out) || (k.function == Function::Output && port == decklink::Port::In) {
+                k.function = Function::Unused;
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
 fn snapshot(s: &Shared) -> Value {
-    let cfg = HardwareConfig::load(&s.data_dir);
+    let mut cfg = HardwareConfig::load(&s.data_dir);
     let (cards, version, fake) = decklink::detect();
+    fit_to_cards(&mut cfg, &cards);
     let path = DESKTOP_VIDEO.iter().find(|p| Path::new(p).exists());
     let ndi = match ndi::runtime() {
         Ok((path, version)) => json!({"path": path, "version": version}),
@@ -355,6 +373,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/hardware/shared", get(shared))
         .route("/api/hardware/inputs", get(inputs))
         .route("/api/hardware/inputs/{card}/{n}/preview.jpg", get(preview))
+        .route("/api/hardware/decklink/profile", axum::routing::post(decklink_profile))
         .route("/api/hardware/outputs", get(outputs))
         .route("/api/hardware/outputs/{card}/{n}/preview.jpg", get(output_preview))
         .route("/api/hardware/flows", get(flows))
@@ -391,6 +410,38 @@ async fn preview(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(
     let key = format!("in/{card}/{n}");
     let jpeg = blocking(move || s2.previews.jpeg(&key, || preview::Feed::share(share))).await?.map_err(|e| (StatusCode::NOT_FOUND, e))?;
     Ok(jpeg_response(jpeg))
+}
+
+#[derive(Deserialize)]
+struct ProfileBody {
+    card: String,
+    profile: String,
+}
+
+/// Change le mode des connecteurs d'une carte (half duplex : chacun à part ; full duplex : par
+/// paires, une entrée et sa sortie). Les captures de la carte s'arrêtent le temps du changement.
+async fn decklink_profile(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(b): Json<ProfileBody>) -> ApiResult<Json<Value>> {
+    require(me.admin)?;
+    let s2 = s.clone();
+    let what = format!("{} switched to {}", b.card, b.profile);
+    let v = blocking(move || {
+        let (cards, _, simulated) = decklink::detect();
+        let card = cards.iter().find(|c| c.id == b.card).ok_or("no such card")?;
+        s2.captures.stop_all();
+        let r = decklink::set_card_profile(card, &b.profile, simulated);
+        let (cards, _, _) = decklink::detect();
+        let mut cfg = HardwareConfig::load(&s2.data_dir);
+        if fit_to_cards(&mut cfg, &cards) {
+            strata_core::files::write_json(&HardwareConfig::path(&s2.data_dir), &cfg, false).map_err(|e| format!("cannot save the hardware settings: {e}"))?;
+        }
+        reconcile_inputs(&s2);
+        r?;
+        Ok::<_, String>(snapshot(&s2))
+    })
+    .await?
+    .map_err(bad)?;
+    tracing::info!("DeckLink card {what} by {}", me.username);
+    Ok(Json(v))
 }
 
 /// Ce qu'une appli publie dans un partage de sortie : qui, quel format, quel timecode.

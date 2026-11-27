@@ -207,6 +207,11 @@ pub struct DetectedCard {
     /// The driver says the card has an internal / external keyer.
     pub internal_keyer: bool,
     pub external_keyer: bool,
+    /// Each connector that is the second half of a full-duplex pair in the active profile: the
+    /// output of the pair (loop-through, or fill/key), never an input.
+    pub paired: Vec<bool>,
+    /// Some connectors work in full-duplex pairs.
+    pub full_duplex: bool,
 }
 
 fn fourcc(v: u32) -> String {
@@ -308,14 +313,23 @@ fn card(id: String, devs: &[&DeviceInfo]) -> DetectedCard {
     // pair): the card's first device.
     let devices: Vec<u32> = slots.into_iter().map(|s| s.unwrap_or(first.index)).collect();
     let connector_profiles = devices.iter().map(|i| devs.iter().find(|d| d.index == *i).and_then(|d| d.profile).map(fourcc)).collect();
+    // What each connector can do, from its own device in the active profile (a full-duplex pair:
+    // one input, its partner only an output).
+    let caps_of = |i: usize| devs.iter().find(|d| d.index == devices[i]).map_or(first.caps, |d| d.caps);
     let ports = (0..connectors as usize)
-        .map(|i| match m.and_then(|m| m.ports.get(i)) {
-            Some(p) => *p,
-            None if !first.caps.input && first.caps.output => Port::Out,
-            None if first.caps.input && !first.caps.output => Port::In,
-            None => Port::Both,
+        .map(|i| {
+            let c = caps_of(i);
+            match m.and_then(|m| m.ports.get(i)) {
+                Some(p) => *p,
+                None if c.inactive => Port::Out,
+                None if !c.input && c.output => Port::Out,
+                None if c.input && !c.output => Port::In,
+                None => Port::Both,
+            }
         })
         .collect();
+    let paired: Vec<bool> = (0..connectors as usize).map(|i| caps_of(i).inactive).collect();
+    let full_duplex = devs.iter().any(|d| d.caps.full_duplex || d.caps.inactive);
     let has_reference = m.and_then(|m| m.reference).unwrap_or_else(|| devs.iter().any(|d| d.has_reference_input));
     let reference_locked = devs.iter().find_map(|d| d.reference_locked);
     let reference = devs.iter().find_map(|d| d.reference_mode).filter(|_| reference_locked == Some(true)).map(reference_of);
@@ -342,6 +356,8 @@ fn card(id: String, devs: &[&DeviceInfo]) -> DetectedCard {
         connector_profiles,
         internal_keyer: devs.iter().any(|d| d.caps.internal_keyer),
         external_keyer: devs.iter().any(|d| d.caps.external_keyer),
+        paired,
+        full_duplex,
     }
 }
 
@@ -356,10 +372,14 @@ fn fake_models() -> Option<Vec<String>> {
 /// connectors, group id, reference (locked, signal), profiles.
 type Fake = (&'static str, &'static str, &'static [u32], i64, Option<(bool, &'static [u8; 4])>, &'static [&'static str]);
 
-/// Made-up devices, as a driver would list them.
+/// The profile chosen for each made-up card (by group id), as Desktop Video would keep it.
+static FAKE_PROFILES: std::sync::Mutex<Vec<(i64, u32)>> = std::sync::Mutex::new(Vec::new());
+
+/// Made-up devices, as a driver would list them. In a full-duplex profile, the second half of
+/// the sub-devices is inactive (the outputs of the pairs).
 pub(crate) fn fake_devices(models: &[String]) -> Vec<DeviceInfo> {
     let mut out = Vec::new();
-    let caps = strata_decklink::Caps { output: true, input: true, internal_keyer: true, external_keyer: true, format_detection: true };
+    let caps = strata_decklink::Caps { output: true, input: true, internal_keyer: true, external_keyer: true, format_detection: true, ..Default::default() };
     for (slot, m) in models.iter().enumerate() {
         // Desktop Video order of the sub-devices (connector numbers).
         let (model, short, order, group, reference, profiles): Fake = match m.as_str() {
@@ -370,7 +390,25 @@ pub(crate) fn fake_devices(models: &[String]) -> Vec<DeviceInfo> {
             _ => continue,
         };
         let n = order.len();
+        let active = FAKE_PROFILES.lock().unwrap().iter().find(|(g, _)| *g == group).map(|(_, p)| *p).or_else(|| profiles.last().and_then(|p| from_fourcc(p)));
+        // Sub-devices that work: all in half duplex ; 1 or 2 in « 1dfd » / « 2dfd ».
+        // Duo 2, Quad 2 : un profil par paire (« 1dfd » : la paire en full duplex) ; 8K Pro : un
+        // profil pour la carte.
+        let per_pair = !model.contains("8K");
+        let working = match active.map(fourcc).as_deref() {
+            Some("1dfd") if per_pair => n / 2,
+            Some("1dfd" | "1dhd") => 1,
+            Some("2dfd") => 2,
+            _ => n,
+        };
         for c in order {
+            let sub = *c as usize - 1;
+            let duplex = active.map(fourcc).is_some_and(|p| p.ends_with("fd"));
+            let dev_caps = if sub >= working {
+                strata_decklink::Caps { input: false, output: false, inactive: true, ..caps }
+            } else {
+                strata_decklink::Caps { full_duplex: duplex, ..caps }
+            };
             let mode = reference.map(|r| u32::from_be_bytes(*r.1)).filter(|m| *m != 0);
             out.push(DeviceInfo {
                 index: out.len() as u32,
@@ -385,9 +423,9 @@ pub(crate) fn fake_devices(models: &[String]) -> Vec<DeviceInfo> {
                 reference_locked: reference.map(|r| r.0),
                 reference_mode: mode,
                 interface: from_fourcc("pci "),
-                profile: profiles.last().and_then(|p| from_fourcc(p)),
+                profile: active,
                 profiles: profiles.iter().filter_map(|p| from_fourcc(p)).collect(),
-                caps: if model.contains("Monitor") { strata_decklink::Caps { input: false, format_detection: false, ..caps } } else { caps },
+                caps: if model.contains("Monitor") { strata_decklink::Caps { input: false, format_detection: false, ..caps } } else { dev_caps },
             });
         }
     }
@@ -405,6 +443,35 @@ pub fn detect() -> (Vec<DetectedCard>, Option<String>, bool) {
     (group(&devices), version, false)
 }
 
+/// Switches a card to a profile (`2dhd` : every connector on its own ; `1dfd` : full-duplex pairs,
+/// an input and its output ; on an 8K Pro, `4dhd`, `2dfd`…), on each of its pairs. The captures
+/// on that card must be stopped first.
+pub fn set_card_profile(card: &DetectedCard, profile: &str, simulated: bool) -> Result<(), String> {
+    let target = from_fourcc(profile).ok_or("not a DeckLink profile")?;
+    if !card.profiles.iter().any(|p| p == profile) {
+        return Err(format!("{} has no such mode", card.model_name));
+    }
+    if simulated {
+        let group = i64::from_str_radix(&card.id, 16).map_err(|e| e.to_string())?;
+        let mut f = FAKE_PROFILES.lock().unwrap();
+        f.retain(|(g, _)| *g != group);
+        f.push((group, target));
+        return Ok(());
+    }
+    let mut ids: Vec<u32> = card.devices.clone();
+    ids.dedup();
+    // Activer un profil change toute une paire : les appareils déjà dans ce profil sont sautés.
+    for id in ids {
+        let infos = strata_decklink::device_infos()?;
+        let Some(d) = infos.iter().find(|d| d.index == id) else { continue };
+        if d.profile == Some(target) || !d.profiles.contains(&target) {
+            continue;
+        }
+        strata_decklink::set_profile(id, target)?;
+    }
+    Ok(())
+}
+
 /// The connector pairs of a card (0-based): from the model table, else
 /// 1+2, 3+4… when the driver says the card keys.
 pub fn pairs_of(d: &DetectedCard) -> Vec<(u32, u32)> {
@@ -417,6 +484,25 @@ pub fn pairs_of(d: &DetectedCard) -> Vec<(u32, u32)> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_full_duplex_pair_has_one_input_and_its_output() {
+        let mut devs = fake_devices(&["quad2".into()]);
+        // Le pilote : les quatre derniers connecteurs sont les sorties des paires.
+        for d in &mut devs {
+            let c = connector_of(d, 8).unwrap();
+            if c > 4 {
+                d.caps = strata_decklink::Caps { input: false, output: false, inactive: true, ..d.caps };
+            } else {
+                d.caps.full_duplex = true;
+            }
+        }
+        let card = &group(&devs)[0];
+        assert_eq!(card.ports[..4], [Port::Both; 4]);
+        assert_eq!(card.ports[4..], [Port::Out; 4]);
+        assert_eq!(card.paired, vec![false, false, false, false, true, true, true, true]);
+        assert!(card.full_duplex);
+    }
     use super::*;
 
     #[test]

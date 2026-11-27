@@ -98,6 +98,11 @@ pub struct Caps {
     pub internal_keyer: bool,
     pub external_keyer: bool,
     pub format_detection: bool,
+    /// Inactive in the current profile: its connector is the second half of a full-duplex pair
+    /// (the output of the pair: loop-through, or fill/key).
+    pub inactive: bool,
+    /// The device works in full duplex (an input and an output, on a pair of connectors).
+    pub full_duplex: bool,
 }
 
 /// A device as Desktop Video lists it: what it is, which physical card it
@@ -256,7 +261,15 @@ pub fn devices() -> Result<Vec<String>, String> {
 #[cfg(decklink_shim)]
 impl Caps {
     fn from_bits(c: i32) -> Self {
-        Caps { output: c & 1 != 0, input: c & 2 != 0, internal_keyer: c & 4 != 0, external_keyer: c & 8 != 0, format_detection: c & 16 != 0 }
+        Caps {
+            output: c & 1 != 0,
+            input: c & 2 != 0,
+            internal_keyer: c & 4 != 0,
+            external_keyer: c & 8 != 0,
+            format_detection: c & 16 != 0,
+            inactive: c & 32 != 0,
+            full_duplex: c & 64 != 0,
+        }
     }
 }
 
