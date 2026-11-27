@@ -124,6 +124,10 @@
 .core-jline.error .core-jlevel, .core-jline.crash .core-jlevel { color: var(--t-red); font-weight: 600; }
 .core-jline.warn .core-jlevel { color: var(--warn); font-weight: 600; }
 @media (max-width: 760px) { .core-jline { grid-template-columns: 1fr; gap: 2px; } }
+/* Les serveurs */
+.core-invite { display: flex; flex-direction: column; gap: 10px; }
+.core-invite p { margin: 0; }
+.core-invite-code { font-size: 30px; font-weight: 600; letter-spacing: .08em; text-align: center; padding: 14px; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--line); }
 /* Les alertes */
 .core-switches { display: flex; flex-direction: column; gap: 8px; }
 .core-channel { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 12px 0; border-top: 1px solid var(--line); }

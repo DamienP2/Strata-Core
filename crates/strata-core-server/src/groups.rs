@@ -127,6 +127,21 @@ impl Groups {
         })
     }
 
+    /// Les groupes du maître, sur un membre : ils remplacent les siens (même identifiants). Vrai si
+    /// quelque chose a changé.
+    pub fn mirror(&self, groups: Vec<(String, String)>) -> bool {
+        let next: Vec<Group> = groups.into_iter().map(|(id, name)| Group { id, name, directory: Vec::new() }).collect();
+        let mut list = self.list.lock().unwrap();
+        if *list == next {
+            return false;
+        }
+        if strata_core::files::write_json(&self.path, &next, false).is_err() {
+            return false;
+        }
+        *list = next;
+        true
+    }
+
     pub fn delete(&self, id: &str) -> Result<Group, String> {
         self.edit(|l| {
             let i = l.iter().position(|g| g.id == id).ok_or_else(|| "no such group".to_string())?;

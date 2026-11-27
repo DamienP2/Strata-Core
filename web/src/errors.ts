@@ -50,6 +50,9 @@ const SHAPED: [RegExp, string, string[]][] = [
   [/^cannot replace (.+): (.+)$/, 'Cannot replace {path}: {why}', ['path', 'why']],
   [/^cannot keep the current Core: (.+)$/, 'Cannot keep the current Core: {why}', ['why']],
   [/^release (.+) has no Core archive$/, 'Release {tag} has no Core archive', ['tag']],
+  // Serveurs
+  [/^cannot reach the master: (.+)$/, 'cannot reach the master: {why}', ['why']],
+  [/^the master answered HTTP (\d+)$/, 'the master answered HTTP {code}', ['code']],
   // SNMP
   [/^not an address or a network: (.+)$/, 'not an address or a network: {a}', ['a']],
   [/^not an address for the traps: (.+)$/, 'not an address for the traps: {a}', ['a']],

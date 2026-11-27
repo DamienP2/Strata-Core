@@ -298,24 +298,40 @@ async fn log(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id):
     Ok(Json(json!({ "lines": s.supervisor.log(&id) })))
 }
 
-/// Ce que montre le cockpit (`CockpitData` de @strata/ui) : les applis actives, ce serveur, une
-/// instance par appli. Plusieurs serveurs (maître et membres) : brief § 4 bis, à venir.
+/// Ce que montre le cockpit (`CockpitData` de @strata/ui) : les applis actives de ce serveur et,
+/// sur un maître, celles de ses membres (brief § 4 bis) ; une tuile par appli, une instance par
+/// serveur où elle tourne.
 ///
 /// Les droits sont gérés dans chaque appli : le Core leur demandera « cet utilisateur a-t-il accès ? »
 /// quand elles sauront répondre ; d'ici là, toute appli active est montrée à tout utilisateur connecté.
 async fn cockpit(State(s): State<Shared>, CurrentUser(me): CurrentUser, headers: HeaderMap) -> Json<Value> {
     let cfg = s.config.load();
-    let server = hostname();
-    let apps: Vec<Installed> = s.apps.list().into_iter().filter(|a| a.active && a.compatible).collect();
+    let me_id = s.cluster.id.clone();
+    let local: Vec<Installed> = s.apps.list().into_iter().filter(|a| a.active && a.compatible).collect();
+    let mut apps: Vec<Value> = local.iter().map(|a| json!({"id": a.manifest.id, "name": a.manifest.name, "icon": a.manifest.icon})).collect();
     let mut instances = Vec::new();
-    for a in &apps {
+    for a in &local {
         let up = answers(a.manifest.port).await;
-        instances.push(json!({"app": a.manifest.id, "server": server, "url": cfg.app_url_at(&a.manifest.id, host(&headers)), "up": up}));
+        instances.push(json!({"app": a.manifest.id, "server": me_id, "url": cfg.app_url_at(&a.manifest.id, host(&headers)), "up": up}));
+    }
+    let mut servers = vec![
+        json!({"id": me_id, "name": cfg.name, "host": hostname(), "up": true, "alerts": s.alerts.active().len(), "master": true, "url": cfg.core_url_at(host(&headers))}),
+    ];
+    // Les membres : leurs applis, d'après leur dernier battement.
+    for (m, beat) in s.cluster.live_members() {
+        let machine = m.url.split("://").nth(1).unwrap_or(&m.url).split(['/', ':']).next().unwrap_or_default().to_string();
+        servers.push(json!({"id": m.id, "name": beat.as_ref().map_or(m.name.clone(), |b| b.name.clone()), "host": machine, "up": beat.is_some(), "alerts": beat.as_ref().map_or(0, |b| b.problems), "master": false, "url": m.url}));
+        for a in beat.map(|b| b.apps).unwrap_or_default() {
+            if !apps.iter().any(|x| x["id"] == a.id.as_str()) {
+                apps.push(json!({"id": a.id, "name": a.name, "icon": a.icon}));
+            }
+            instances.push(json!({"app": a.id, "server": m.id, "url": a.url, "up": a.up}));
+        }
     }
     Json(json!({
         "admin": me.admin,
-        "apps": apps.iter().map(|a| json!({"id": a.manifest.id, "name": a.manifest.name, "icon": a.manifest.icon})).collect::<Vec<_>>(),
-        "servers": [{"id": server, "name": cfg.name, "host": server, "up": true, "alerts": 0, "master": true}],
+        "apps": apps,
+        "servers": servers,
         "instances": instances,
     }))
 }

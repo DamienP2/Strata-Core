@@ -24,6 +24,9 @@ pub struct ServerConfig {
     pub sso: crate::sso::SsoConfig,
     /// Les mises à jour du Core et des applis.
     pub updates: UpdatesConfig,
+    /// Membre d'un cockpit : l'adresse de ce Core donnée au maître (avec son port s'il en a un).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_url: Option<String>,
 }
 
 /// Le dépôt des releases du Core.
@@ -97,6 +100,7 @@ impl Default for ServerConfig {
             timezone: "Europe/Paris".into(),
             https: HttpsConfig::default(),
             updates: UpdatesConfig::default(),
+            member_url: None,
             sso: crate::sso::SsoConfig::default(),
         }
     }

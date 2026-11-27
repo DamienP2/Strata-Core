@@ -592,6 +592,8 @@ async fn state(State(s): State<Shared>, MaybeUser(user): MaybeUser) -> Json<serd
         "version": strata_core::VERSION,
         "sso": cfg.sso.active().then(|| cfg.sso.button_name()),
         "localAccounts": cfg.sso.local_accounts_now(),
+        // Membre d'un cockpit : la connexion passe par le maître (s'il répond).
+        "cluster": s.cluster.master().map(|m| json!({"masterName": m.name, "masterUrl": m.url, "masterUp": s.cluster.master_up()})),
     }))
 }
 

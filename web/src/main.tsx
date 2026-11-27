@@ -81,6 +81,13 @@ function useCockpit(signedIn: boolean) {
 
 const open = (i: CockpitInstance) => openAppTab(i.url, instanceKey(i));
 
+/** Les réglages d'un serveur : ceux-ci ici, ceux d'un membre dans son propre onglet. */
+function openServer(data: CockpitData, id: string) {
+  const s = data.servers.find((x) => x.id === id) as (CockpitData['servers'][number] & { url?: string }) | undefined;
+  if (!s || s.master) navigate('/reglages/serveur');
+  else if (s.url) window.open(`${s.url.replace(/\/$/, '')}/reglages/serveur`, `strata-settings-${id}`);
+}
+
 /** `?next=` : où aller une fois connecté (le serveur vérifie aussi celui du SSO). */
 const nextParam = new URLSearchParams(location.search).get('next');
 
@@ -92,7 +99,7 @@ function returnTo(): { local: string } | { app: string } | null {
   if (!nextParam) return null;
   try {
     const u = new URL(nextParam, location.origin);
-    if (u.origin === location.origin) return { local: u.pathname };
+    if (u.origin === location.origin) return { local: u.pathname + u.search };
     const ours = u.hostname.endsWith(`.${location.hostname}`) && !u.hostname.slice(0, -location.hostname.length - 1).includes('.');
     if (ours && (u.protocol === 'https:' || u.protocol === 'http:') && !u.username && !u.password) return { app: u.href };
   } catch {
@@ -117,6 +124,11 @@ function App() {
       location.replace(back.app);
       return;
     }
+    // Une adresse du serveur (le maître qui connecte un membre) : chargée telle quelle.
+    if (back.local.startsWith('/api/')) {
+      location.replace(back.local);
+      return;
+    }
     setBack(null);
     history.replaceState(null, '', location.pathname);
     navigate(back.local, true);
@@ -128,16 +140,31 @@ function App() {
     else if (path !== '/' && !(user.admin && path.startsWith('/reglages/'))) navigate('/', true);
   }, [user, path, back]);
 
+  // Membre d'un cockpit : le cockpit est celui du maître, la connexion aussi (sauf `?local=1`, ou
+  // un maître qui ne répond pas : les comptes locaux de secours).
+  const cluster = auth?.cluster;
+  const viaMaster = !!cluster?.masterUp && !new URLSearchParams(location.search).has('local');
+  useEffect(() => {
+    if (!cluster || !viaMaster) return;
+    if (!user && !auth?.needsSetup) location.replace(`/api/cluster/login?next=${encodeURIComponent(back && 'app' in back ? back.app : location.pathname)}`);
+    else if (user && path === '/' && !back) location.replace(cluster.masterUrl);
+  }, [cluster, viaMaster, user, path, back, auth?.needsSetup]);
+
   if (!auth) return null;
   if (user && back && 'app' in back) return null;
+  if (cluster && viaMaster && (!user || path === '/')) return null;
   if (!user)
     return (
       <Login
         module="Core"
         serverName={auth.serverName}
         setup={auth.needsSetup}
-        sso={auth.sso}
-        ssoHref={`/api/auth/sso/start?next=${encodeURIComponent(back && 'app' in back ? back.app : location.pathname)}`}
+        sso={cluster ? cluster.masterName : auth.sso}
+        ssoHref={
+          cluster
+            ? `/api/cluster/login?next=${encodeURIComponent(back && 'app' in back ? back.app : location.pathname)}`
+            : `/api/auth/sso/start?next=${encodeURIComponent(back && 'app' in back ? back.app : location.pathname)}`
+        }
         cliHint="sudo strata-core user add admin"
         onLogin={async (username, password) => {
           await api('POST', '/api/auth/login', { username, password });
@@ -179,7 +206,7 @@ function App() {
           </>
         }
       />
-      <div className="st-content">{inSettings ? <Settings path={path.slice('/reglages/'.length)} /> : data && <Cockpit data={data} onOpen={open} onServer={user.admin ? () => navigate('/reglages/serveur') : undefined} />}</div>
+      <div className="st-content">{inSettings ? <Settings path={path.slice('/reglages/'.length)} /> : data && <Cockpit data={data} onOpen={open} onServer={user.admin ? (id) => openServer(data, id) : undefined} />}</div>
       <ContextMenuHost />
       <DialogHost />
       <Toasts />

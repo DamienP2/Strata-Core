@@ -76,6 +76,14 @@ de `/etc`, sans rien relancer.
 Le pont DeckLink (`crates/strata-decklink`) se compile avec g++ ; sans compilateur C++, le Core se
 construit sans lui (avertissement). Le pilote Desktop Video n'est nécessaire qu'à l'exécution.
 
+## Plusieurs serveurs en local
+
+Deux Core sur la même machine, chacun son dossier de données et son port, avec deux noms qui
+mènent à `127.0.0.1` (`/etc/hosts` : `127.0.0.1 strata.test strata2.test`) réglés dans *Nom et
+adresses*. Sur le premier : *Serveurs › Ajouter un serveur* ; sur le second : *Rejoindre un cockpit*
+avec `http://strata.test:8090` et le code. Les appels entre serveurs suivent les variables de proxy
+(`HTTPS_PROXY`, `NO_PROXY`).
+
 ## Le HTTPS en local
 
 *Réglages › Ce serveur › HTTPS › Fait par Strata*, avec un port libre (8443) : le Core fait son autorité

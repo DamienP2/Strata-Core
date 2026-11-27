@@ -130,6 +130,12 @@ Les comptes, les groupes et la configuration SSO ne sont gérés **que sur le ma
 - chaque membre garde un **compte administrateur local de secours** ;
 - si le SSO de l'entreprise est utilisé, le maître transmet sa configuration aux membres, qui peuvent **connecter directement par le SSO** quand le maître ne répond pas.
 
+### Ce qui est fait
+
+*Réglages › Serveurs* : ajouter un serveur (code d'invitation de 10 caractères, une fois, 10 minutes), rejoindre un cockpit, détacher (depuis le maître ou le membre). Chaque serveur a une clé Ed25519 ; le rattachement est scellé par le code (HMAC dans les deux sens), puis chaque requête entre eux est signée. Le membre bat vers le maître toutes les 3 s (nom, applis et leur état, problèmes) ; sans battement depuis 10 s, il est injoignable. Le maître montre les applis de ses membres dans son cockpit et leur donne ses groupes. Connexion unique : un membre sans session renvoie au maître, qui revient avec un jeton signé (60 s, une fois) ; le compte est créé ou mis à jour sur le membre. Maître injoignable : les comptes locaux du membre se connectent (`?local=1`).
+
+Reste : transmettre le SSO du maître aux membres (connexion directe quand il est tombé) ; « cet utilisateur a-t-il accès ? » quand les applis sauront répondre.
+
 ### Ce qui reste propre à chaque machine
 
 - Le matériel : une entrée SDI de `strata01` n'est utilisable que par les applis de `strata01` (entre serveurs, les images passent par NDI ou ST 2110).

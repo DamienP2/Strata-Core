@@ -9,6 +9,7 @@ pub mod api;
 pub mod apps;
 pub mod auth;
 pub mod cli;
+pub mod cluster;
 pub mod config;
 pub mod groups;
 pub mod guard;
@@ -111,6 +112,7 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
     resources::start(&s);
     alerts::start(&s);
     snmp::apply(&s).await;
+    cluster::start(&s);
     let keeper = {
         let s = s.clone();
         tokio::spawn(async move {

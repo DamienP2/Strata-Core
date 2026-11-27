@@ -34,6 +34,8 @@ export interface AuthState {
   sso: string | null;
   /** Qui peut encore utiliser un compte local. */
   localAccounts: 'none' | 'adminOnly' | 'all';
+  /** Membre d'un cockpit : la connexion passe par le maître. */
+  cluster?: { masterName: string; masterUrl: string; masterUp: boolean } | null;
 }
 
 /** L'état de l'interface : la connexion, et la liaison avec le serveur. */

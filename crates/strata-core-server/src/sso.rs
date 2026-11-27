@@ -543,7 +543,7 @@ async fn callback(State(s): State<Shared>, headers: HeaderMap, Query(q): Query<C
 }
 
 /// Un nom d'utilisateur tiré de l'identifiant de l'annuaire : caractères permis, unique (`-2`, `-3`…).
-fn free_username(login: &str, list: &[User]) -> String {
+pub(crate) fn free_username(login: &str, list: &[User]) -> String {
     let mut base: String = login.chars().filter(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '@')).take(60).collect();
     if base.is_empty() {
         base = "user".into();

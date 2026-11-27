@@ -85,6 +85,10 @@ fn sign_in_first(cfg: &ServerConfig, req: &Request) -> Response {
     }
     let host = auth::host(req.headers()).unwrap_or_default();
     let here = format!("{}://{host}{}", cfg.scheme(), req.uri().path_and_query().map(|p| p.as_str()).unwrap_or("/"));
+    // Membre d'un cockpit : la connexion passe par le maître (qui revient aussitôt).
+    if cfg.member_url.is_some() {
+        return Redirect::to(&format!("{}api/cluster/login?next={}", cfg.core_url_at(Some(host)), enc(&here))).into_response();
+    }
     Redirect::to(&format!("{}?next={}", cfg.core_url_at(Some(host)), enc(&here))).into_response()
 }
 

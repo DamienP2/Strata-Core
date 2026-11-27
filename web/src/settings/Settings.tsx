@@ -2,7 +2,7 @@
 // (vue d'ensemble, nom et adresses, HTTPS), Applis (la Bibliothèque, puis une page par appli installée)
 // et Personnes (Utilisateurs, Groupes, Annuaire). Les autres sections viendront avec leurs briques
 // Matériel (Cartes SDI, NDI, ST 2110, Réseau, Horloge) ; Santé (Ressources, Journal, Alertes, SNMP).
-import { Activity, BellRing, Clock, Network as SnmpIcon, CloudDownload, ScrollText, EthernetPort as Ethernet, Globe, KeyRound, LayoutDashboard, LayoutGrid, Lock, MonitorPlay, Radio, Users as UsersIcon, UsersRound, Waves } from 'lucide-react';
+import { Activity, BellRing, Clock, Server as ServersIcon, Network as SnmpIcon, CloudDownload, ScrollText, EthernetPort as Ethernet, Globe, KeyRound, LayoutDashboard, LayoutGrid, Lock, MonitorPlay, Radio, Users as UsersIcon, UsersRound, Waves } from 'lucide-react';
 import { Suspense, lazy, useEffect, useState } from 'react';
 import { NavItem, NavSection, SidePage, t } from '@strata/ui';
 import { appIcon } from '../icons';
@@ -13,6 +13,7 @@ import { Groups } from './Groups';
 import { Users } from './Users';
 import { Addresses, Https, Overview } from './Server';
 import { Updates } from './Updates';
+import { Servers } from './Servers';
 // Le matériel (et three.js, pour ses cartes en 3D) n'est chargé qu'en ouvrant ses pages.
 const hw = () => import('./hardware/Hardware');
 const SdiPage = lazy(() => hw().then((m) => ({ default: m.SdiPage })));
@@ -48,10 +49,11 @@ export function Settings({ path }: { path: string }) {
   let page: React.ReactNode = null;
   const hardware = ['sdi', 'ndi', 'st2110', 'reseau', 'horloge'];
   const health = ['ressources', 'journal', 'alertes', 'snmp'];
-  const fixed = [...hardware, ...health, 'serveur', 'adresses', 'https', 'mises-a-jour', 'utilisateurs', 'groupes', 'annuaire'].includes(path);
+  const fixed = [...hardware, ...health, 'serveurs', 'serveur', 'adresses', 'https', 'mises-a-jour', 'utilisateurs', 'groupes', 'annuaire'].includes(path);
   if (path === 'serveur') page = <Overview apps={apps} />;
   else if (path === 'adresses') page = <Addresses />;
   else if (path === 'https') page = <Https />;
+  else if (path === 'serveurs') page = <Servers />;
   else if (path === 'sdi') page = <SdiPage />;
   else if (path === 'ndi') page = <NdiPage />;
   else if (path === 'st2110') page = <St2110Page />;
@@ -75,6 +77,7 @@ export function Settings({ path }: { path: string }) {
         <NavItem icon={LayoutDashboard} label={t('Overview')} on={path === 'serveur'} onClick={() => navigate('/reglages/serveur')} />
         <NavItem icon={Globe} label={t('Name and addresses')} on={path === 'adresses'} onClick={() => navigate('/reglages/adresses')} />
         <NavItem icon={Lock} label="HTTPS" on={path === 'https'} onClick={() => navigate('/reglages/https')} />
+        <NavItem icon={ServersIcon} label={t('Servers')} on={path === 'serveurs'} onClick={() => navigate('/reglages/serveurs')} />
         <NavItem icon={CloudDownload} label={t('Updates')} on={path === 'mises-a-jour'} onClick={() => navigate('/reglages/mises-a-jour')} count={pending || undefined} />
       </div>
       <div>
