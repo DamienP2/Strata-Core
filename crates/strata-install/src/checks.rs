@@ -180,6 +180,16 @@ pub fn desktop_video() -> Option<String> {
 }
 
 /// Une archive Desktop Video déjà copiée sur le serveur (la plus récente).
+/// Ce que Blackmagic donne à télécharger, ou ce qui en sort : l'archive (.tar.gz, .tgz, .tar),
+/// son dossier déballé, le paquet .deb, un installateur .sh / .run.
+pub fn is_desktop_video(name: &str, dir: bool) -> bool {
+    let n = name.to_lowercase().replace(['-', ' '], "_");
+    if !(n.contains("desktop_video") || n.contains("desktopvideo")) || n.contains("uninstall") || n.contains("gui") {
+        return false;
+    }
+    dir || [".tar.gz", ".tgz", ".tar", ".deb", ".sh", ".run"].iter().any(|x| n.ends_with(x))
+}
+
 pub fn find_desktop_video() -> Option<PathBuf> {
     let mut dirs: Vec<PathBuf> = vec![std::env::current_dir().unwrap_or_default(), "/root".into(), "/tmp".into()];
     if let Ok(home) = std::fs::read_dir("/home") {
@@ -188,10 +198,7 @@ pub fn find_desktop_video() -> Option<PathBuf> {
     let mut found: Vec<PathBuf> = Vec::new();
     for d in dirs {
         for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
-            let n = e.file_name().to_string_lossy().into_owned();
-            if (n.starts_with("Blackmagic_Desktop_Video_Linux_") && (n.ends_with(".tar.gz") || n.ends_with(".tar")))
-                || (n.starts_with("desktopvideo_") && n.ends_with(".deb"))
-            {
+            if is_desktop_video(&e.file_name().to_string_lossy(), e.path().is_dir()) {
                 found.push(e.path());
             }
         }
@@ -262,6 +269,17 @@ pub fn installed_core(root: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recognises_the_blackmagic_download() {
+        assert!(is_desktop_video("Blackmagic_Desktop_Video_Linux_15.0.tar.gz", false));
+        assert!(is_desktop_video("Blackmagic_Desktop_Video_Linux_15.0", true));
+        assert!(is_desktop_video("desktopvideo_14.4.1a4_amd64.deb", false));
+        assert!(is_desktop_video("Blackmagic Desktop Video Linux 15.0.sh", false));
+        assert!(!is_desktop_video("desktopvideo-gui_14.4_amd64.deb", false));
+        assert!(!is_desktop_video("Blackmagic_Desktop_Video_Linux_15.0.zip", false));
+        assert!(!is_desktop_video("notes.txt", false));
+    }
 
     #[test]
     fn reads_the_system() {

@@ -362,36 +362,99 @@ fn system_files(ctx: &Ctx) -> Result<String, String> {
 
 /// Le pilote Blackmagic : son paquet sorti de l'archive, installé avec DKMS.
 fn desktop_video(ctx: &Ctx, src: &Path) -> Result<String, String> {
-    let deb = if src.extension().is_some_and(|e| e == "deb") {
+    // Ce qui a été copié : l'archive de Blackmagic (.tar.gz, .tar), son dossier déjà déballé, le
+    // paquet .deb, ou un installateur .sh / .run.
+    let dir = if src.is_dir() {
         src.to_path_buf()
-    } else {
+    } else if is_archive(src) {
+        let out = ctx.p("/var/cache/strata/desktopvideo");
+        let _ = std::fs::remove_dir_all(&out);
+        std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
         let f = std::fs::File::open(src).map_err(|e| format!("cannot open {}: {e}", src.display()))?;
-        let gz = src.to_string_lossy().ends_with(".gz");
-        let reader: Box<dyn std::io::Read> = if gz { Box::new(flate2::read::GzDecoder::new(f)) } else { Box::new(f) };
-        let mut ar = tar::Archive::new(reader);
-        let cache = ctx.p("/var/cache/strata");
-        std::fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
-        let mut found = None;
-        for e in ar.entries().map_err(|_| "the archive is damaged (copy it again)".to_string())? {
-            let mut e = e.map_err(|_| "the archive is damaged (copy it again)".to_string())?;
-            let p = e.path().map_err(|e| e.to_string())?.to_string_lossy().into_owned();
-            let name = p.rsplit('/').next().unwrap_or_default().to_string();
-            if p.contains("/deb/x86_64/") && name.starts_with("desktopvideo_") && name.ends_with(".deb") && !name.contains("-gui") {
-                let out = cache.join(&name);
-                let mut w = std::fs::File::create(&out).map_err(|e| e.to_string())?;
-                std::io::copy(&mut e, &mut w).map_err(|e| e.to_string())?;
-                found = Some(out);
-            }
-        }
-        found.ok_or("no desktopvideo package for x86-64 in this archive")?
+        let n = src.to_string_lossy().to_lowercase();
+        let reader: Box<dyn std::io::Read> = if n.ends_with(".gz") || n.ends_with(".tgz") { Box::new(flate2::read::GzDecoder::new(f)) } else { Box::new(f) };
+        tar::Archive::new(reader).unpack(&out).map_err(|_| "the archive is damaged (copy it again)".to_string())?;
+        out
+    } else {
+        src.parent().unwrap_or(Path::new("/")).to_path_buf()
     };
+    let files = if src.is_file() && !is_archive(src) { vec![src.to_path_buf()] } else { files_in(&dir) };
     let headers = format!("linux-headers-{}", String::from_utf8_lossy(&Command::new("uname").arg("-r").output().map(|o| o.stdout).unwrap_or_default()).trim());
     ctx.run("apt-get", &["install", "-y", "-q", "dkms", &headers])?;
-    ctx.run("apt-get", &["install", "-y", "-q", &deb.display().to_string()])?;
+    if let Some(deb) = pick_deb(&files) {
+        ctx.run("apt-get", &["install", "-y", "-q", &deb.display().to_string()])?;
+    } else if let Some(sh) = pick_installer(&files) {
+        // L'installateur de Blackmagic : lancé dans son dossier, chaque question acceptée.
+        let cwd = sh.parent().unwrap_or(Path::new("/"));
+        let cmd = format!("cd '{}' && yes | sh '{}'", cwd.display(), sh.display());
+        ctx.run("sh", &["-c", &cmd])?;
+    } else {
+        let mut names: Vec<String> = files.iter().map(|f| f.strip_prefix(&dir).unwrap_or(f).display().to_string()).collect();
+        names.sort();
+        names.truncate(12);
+        return Err(format!("no Desktop Video package (.deb) nor installer (.sh) found; it holds: {}", names.join(", ")));
+    }
     let _ = ctx.run("modprobe", &["blackmagic"]);
     let _ = ctx.run("modprobe", &["blackmagic-io"]);
     let loaded = ctx.dry() || Path::new("/dev/blackmagic").exists();
     Ok(if loaded { "pilote installé (DKMS)".into() } else { "pilote installé : redémarrez le serveur pour le charger".into() })
+}
+
+fn is_archive(p: &Path) -> bool {
+    let n = p.to_string_lossy().to_lowercase();
+    n.ends_with(".tar.gz") || n.ends_with(".tgz") || n.ends_with(".tar")
+}
+
+/// Les fichiers d'un dossier, sous-dossiers compris.
+fn files_in(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut todo = vec![dir.to_path_buf()];
+    while let Some(d) = todo.pop() {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() && !p.is_symlink() {
+                todo.push(p);
+            } else if p.is_file() {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+fn lower_name(p: &Path) -> String {
+    p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default()
+}
+
+/// Le paquet du pilote pour x86-64 (`desktopvideo_14.4.1a4_amd64.deb`), sans l'interface graphique.
+fn pick_deb(files: &[PathBuf]) -> Option<PathBuf> {
+    let mut v: Vec<&PathBuf> = files
+        .iter()
+        .filter(|p| {
+            let n = lower_name(p);
+            n.starts_with("desktopvideo") && n.ends_with(".deb") && !n.contains("gui") && !n.contains("arm64") && !n.contains("aarch64")
+        })
+        .collect();
+    v.sort();
+    v.pop().cloned()
+}
+
+/// Un installateur `.sh` / `.run` (pas un désinstallateur), pour x86-64 ; celui qui parle de
+/// Desktop Video ou d'installation d'abord.
+fn pick_installer(files: &[PathBuf]) -> Option<PathBuf> {
+    let mut v: Vec<(bool, &PathBuf)> = files
+        .iter()
+        .filter(|p| {
+            let n = lower_name(p);
+            (n.ends_with(".sh") || n.ends_with(".run")) && !n.contains("uninstall") && !n.contains("arm64") && !n.contains("aarch64")
+        })
+        .map(|p| {
+            let n = lower_name(p).replace(['_', '-', ' '], "");
+            (n.contains("desktopvideo") || n.contains("install"), p)
+        })
+        .collect();
+    v.sort();
+    v.pop().map(|(_, p)| p.clone())
 }
 
 /// La bibliothèque NDI, sortie du SDK (licence acceptée).
@@ -591,6 +654,7 @@ pub fn steps(plan: &Plan) -> Vec<Step> {
                     std::fs::remove_dir_all(ctx.p(paths::DATA))
                         .or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) })
                         .map_err(|e| e.to_string())?;
+                    let _ = std::fs::remove_dir_all(ctx.p("/var/cache/strata"));
                     let _ = ctx.run("userdel", &[paths::USER]);
                     Ok(format!("{} effacé", paths::DATA))
                 }));
@@ -636,6 +700,22 @@ pub fn run(ctx: &Ctx, steps: &[Step], on: &(dyn Fn(Event) + Sync)) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn finds_the_blackmagic_driver_in_what_was_copied() {
+        let p = |v: &[&str]| v.iter().map(PathBuf::from).collect::<Vec<_>>();
+        let debs = p(&[
+            "x/deb/x86_64/desktopvideo-gui_14.4_amd64.deb",
+            "x/deb/x86_64/desktopvideo_14.4_amd64.deb",
+            "x/deb/arm64/desktopvideo_14.4_arm64.deb",
+            "x/mediaexpress_3.8_amd64.deb",
+        ]);
+        assert_eq!(pick_deb(&debs).unwrap(), PathBuf::from("x/deb/x86_64/desktopvideo_14.4_amd64.deb"));
+        let shs = p(&["x/uninstall.sh", "x/README.sh", "x/Blackmagic_Desktop_Video_Linux_15.0_installer.sh"]);
+        assert_eq!(pick_installer(&shs).unwrap(), PathBuf::from("x/Blackmagic_Desktop_Video_Linux_15.0_installer.sh"));
+        assert!(pick_deb(&shs).is_none());
+        assert!(is_archive(Path::new("/root/Blackmagic_Desktop_Video_Linux_15.0.TAR.GZ")) && !is_archive(Path::new("a.sh")));
+    }
 
     #[test]
     fn core_errors_keep_their_cause() {

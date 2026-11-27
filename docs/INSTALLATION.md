@@ -16,7 +16,8 @@ empreinte et le lance. Un écran plein terminal, au clavier :
 4. **Matériel** :
    - **DeckLink** : le pilote Desktop Video de Blackmagic n'est pas redistribuable. L'installateur
      donne la marche à suivre (le télécharger sur son ordinateur, le copier par `scp` avec la
-     commande exacte) et attend l'archive ; il installe le paquet avec DKMS.
+     commande exacte) et l'attend : l'archive telle que téléchargée (`.tar.gz`), son dossier
+     déballé, ou ce qu'elle contient (`.deb`, installateur `.sh`). Il installe le pilote avec DKMS.
    - **NDI** : le SDK NDI est téléchargé, sa licence affichée ; la bibliothèque n'est installée
      qu'une fois la licence acceptée.
    - **GPU** : le pilote NVIDIA recommandé par Ubuntu (`ubuntu-drivers`, avec NVENC/NVDEC) ;
@@ -60,6 +61,16 @@ curl -fsSL https://github.com/DamienP2/Strata-Core/releases/latest/download/inst
 - `--ndi --accept-ndi-license` : la bibliothèque NDI ;
 - `--gpu-drivers` : le pilote NVIDIA, ou VA-API, selon les GPU présents ;
 - `--update`, `--repair`, `--uninstall [--purge]`.
+
+## Repartir de zéro
+
+Relancer la commande d'installation sur un serveur installé ouvre un menu : *Désinstaller*
+(données gardées) ou *Tout effacer* (données, comptes, applis et le compte `strata`). Les pilotes
+(Blackmagic, NDI, NVIDIA) restent. Sans écran :
+
+```bash
+curl -fsSL https://github.com/DamienP2/Strata-Core/releases/latest/download/install.sh | sudo bash -s -- --uninstall --purge
+```
 
 ## Essai à blanc
 

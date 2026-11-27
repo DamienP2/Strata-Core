@@ -24,7 +24,10 @@ use crate::{
     Args,
 };
 
-// Les couleurs de Strata.
+// Les couleurs de Strata, sur un fond noir posé par l'installateur (lisibles quel que soit le
+// thème du terminal, clair ou sombre).
+const BG: Color = Color::Rgb(0, 0, 0);
+const FG: Color = Color::Rgb(236, 238, 243);
 const ACCENT: Color = Color::Rgb(143, 163, 255);
 const OK: Color = Color::Rgb(34, 197, 94);
 const WARN: Color = Color::Rgb(245, 165, 36);
@@ -138,9 +141,25 @@ struct App {
     quit: bool,
 }
 
-const MENU: [&str; 6] = ["Mettre à jour Strata Core", "Ajouter des applis", "Installer DeckLink / NDI", "Réparer", "Désinstaller (données gardées)", "Quitter"];
+const MENU: [&str; 7] = [
+    "Mettre à jour Strata Core",
+    "Ajouter des applis",
+    "Installer DeckLink / NDI",
+    "Réparer",
+    "Désinstaller (données gardées)",
+    "Tout effacer (repartir de zéro)",
+    "Quitter",
+];
 
 pub fn run(args: Args) -> std::io::Result<()> {
+    let mut app = new_app(args);
+    let mut term = ratatui::try_init()?;
+    let r = main_loop(&mut term, &mut app);
+    ratatui::restore();
+    r
+}
+
+fn new_app(args: Args) -> App {
     let (tx, rx) = channel();
     let root = args.root.clone().unwrap_or_else(|| PathBuf::from("/"));
     let installed = checks::installed_core(&root);
@@ -191,10 +210,7 @@ pub fn run(args: Args) -> std::io::Result<()> {
     app.gpu_names = gpus.iter().map(|(v, d)| format!("{v} ({})", d.as_deref().unwrap_or("sans pilote"))).collect();
     (app.gpu_nvidia, app.gpu_vaapi) = checks::gpu_needs(&gpus);
     app.gpu_wanted = app.gpu_nvidia || !app.gpu_vaapi.is_empty();
-    let mut term = ratatui::try_init()?;
-    let r = main_loop(&mut term, &mut app);
-    ratatui::restore();
-    r
+    app
 }
 
 fn main_loop(term: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
@@ -341,6 +357,10 @@ impl App {
                     }
                     4 => {
                         self.plan.action = Action::Uninstall { purge: false };
+                        self.go(Screen::Summary);
+                    }
+                    5 => {
+                        self.plan.action = Action::Uninstall { purge: true };
                         self.go(Screen::Summary);
                     }
                     _ => self.quit = true,
@@ -544,11 +564,12 @@ fn field(f: &mut Frame, area: Rect, label: &str, input: &Input, focused: bool) {
 
 fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
+    f.render_widget(Block::new().style(Style::new().bg(BG).fg(FG)), area);
     let [head, body, foot] = Layout::vertical([Constraint::Length(3), Constraint::Min(5), Constraint::Length(2)]).areas(area);
     let dry = if app.args.root.is_some() { "  ·  essai à blanc" } else { "" };
     f.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled("  ▲ Strata", Style::new().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled("  ▲ Strata", Style::new().fg(FG).add_modifier(Modifier::BOLD)),
             Span::styled(" Install", Style::new().fg(ACCENT)),
             Span::styled(format!("   {}{dry}", env!("CARGO_PKG_VERSION")), Style::new().fg(MUTED)),
         ]))
@@ -625,7 +646,7 @@ fn draw(f: &mut Frame, app: &App) {
                         lines.push(Line::from(vec![
                             mark(c.level),
                             Span::raw(format!("  {:12}", c.label)),
-                            Span::styled(c.detail.clone(), Style::new().fg(if c.level == Level::Ok { MUTED } else { Color::White })),
+                            Span::styled(c.detail.clone(), Style::new().fg(if c.level == Level::Ok { MUTED } else { FG })),
                         ]));
                     }
                 }
@@ -719,7 +740,7 @@ fn draw(f: &mut Frame, app: &App) {
             for (i, l) in app.labels.iter().enumerate() {
                 let (m, detail, style) = match &app.states[i] {
                     StepState::Waiting => (Span::styled("·", Style::new().fg(MUTED)), String::new(), Style::new().fg(MUTED)),
-                    StepState::Running(d) => (Span::styled("…", Style::new().fg(ACCENT)), d.clone(), Style::new().fg(Color::White)),
+                    StepState::Running(d) => (Span::styled("…", Style::new().fg(ACCENT)), d.clone(), Style::new().fg(FG)),
                     StepState::Done(d) => (Span::styled("✓", Style::new().fg(OK)), d.clone(), Style::new()),
                     StepState::Failed(e) => (Span::styled("✗", Style::new().fg(BAD)), e.clone(), Style::new().fg(BAD)),
                 };
@@ -796,32 +817,38 @@ fn draw_hardware(f: &mut Frame, body: Rect, app: &App) {
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
 }
 
-/// La marche à suivre pour le pilote Blackmagic, en attendant l'archive.
+/// La marche à suivre pour le pilote Blackmagic, en attendant l'archive. Plein écran et sans
+/// cadre : les commandes se copient à la souris telles quelles, chacune sur une ligne.
 fn draw_wait(f: &mut Frame, area: Rect) {
-    let w = area.width.saturating_sub(8).min(96);
-    let r = Rect { x: area.x + (area.width - w) / 2, y: area.y + 3, width: w, height: 17.min(area.height.saturating_sub(4)) };
+    let r = Rect { x: area.x, y: area.y + 3, width: area.width, height: area.height.saturating_sub(5) };
     f.render_widget(Clear, r);
+    f.render_widget(Block::new().style(Style::new().bg(BG).fg(FG)), r);
     let who = std::env::var("SUDO_USER").unwrap_or_else(|_| "root".into());
     let host = checks::local_ips().first().map(|i| i.to_string()).unwrap_or_else(|| "<ce serveur>".into());
+    let cmd = |c: String| Line::from(Span::styled(c, Style::new().fg(ACCENT)));
     let lines = vec![
+        title("Pilote Blackmagic Desktop Video"),
         Line::from(""),
-        Line::from(" 1. Sur votre ordinateur, ouvrez blackmagicdesign.com › Support › Capture and Playback,"),
-        Line::from("    et téléchargez « Desktop Video » pour Linux (Blackmagic demande un formulaire)."),
+        Line::from("1. Sur votre ordinateur, téléchargez « Desktop Video » pour Linux :"),
+        Line::from("   blackmagicdesign.com › Support › Capture and Playback (Blackmagic demande un formulaire)."),
         Line::from(""),
-        Line::from(" 2. Copiez l'archive sur ce serveur, depuis un terminal de votre ordinateur :"),
-        Line::from(Span::styled(format!("      scp ~/Downloads/Blackmagic_Desktop_Video_Linux_*.tar.gz {who}@{host}:~/"), Style::new().fg(ACCENT))),
-        Line::from(Span::styled("    (Windows, PowerShell : scp $HOME\\Downloads\\Blackmagic_Desktop_Video_Linux_*.tar.gz …)", Style::new().fg(MUTED))),
+        Line::from("2. Copiez-le sur ce serveur tel quel (.tar.gz), ou ce qu'il contient (.sh, .deb)."),
+        Line::from("   Dans un terminal de votre ordinateur :"),
         Line::from(""),
-        Line::from(" 3. Elle est trouvée toute seule : l'installation continue."),
+        Line::from(Span::styled("   Mac, Linux :", Style::new().fg(MUTED))),
         Line::from(""),
-        Line::from(Span::styled(" En attente de l'archive…   P : passer, sans pilote Blackmagic", Style::new().fg(WARN))),
+        cmd(format!("scp ~/Downloads/Blackmagic_Desktop_Video_Linux_* {who}@{host}:")),
+        Line::from(""),
+        Line::from(Span::styled("   Windows (PowerShell) :", Style::new().fg(MUTED))),
+        Line::from(""),
+        cmd(format!("Get-ChildItem $HOME\\Downloads\\Blackmagic_Desktop_Video_Linux_* | % {{ scp $_.FullName {who}@{host}: }}")),
+        Line::from(""),
+        Line::from("3. Le fichier est trouvé tout seul (dossier personnel, /root, /tmp) : l'installation continue."),
+        Line::from(""),
+        Line::from(Span::styled("En attente du fichier…   P : passer, sans pilote Blackmagic", Style::new().fg(WARN))),
     ];
-    f.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .block(Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(ACCENT)).title(title("Pilote Blackmagic Desktop Video"))),
-        r,
-    );
+    // Sans retour à la ligne : une commande n'est jamais coupée en deux.
+    f.render_widget(Paragraph::new(lines), r.inner(ratatui::layout::Margin { horizontal: 3, vertical: 1 }));
 }
 
 fn draw_summary(f: &mut Frame, body: Rect, app: &App) {
@@ -858,9 +885,17 @@ fn draw_summary(f: &mut Frame, body: Rect, app: &App) {
             }
         }
         Action::Repair => lines.push(row("Réparer", "fichiers du système, droits, puis relance".into())),
-        Action::Uninstall { .. } => {
+        Action::Uninstall { purge } => {
             lines.push(row("Désinstaller", "le service, le programme, les fichiers du système".into()));
-            lines.push(row("Garder", format!("les données ({})", paths::DATA)));
+            if *purge {
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{:16}", "Effacer"), Style::new().fg(MUTED)),
+                    Span::styled(format!("les données ({}) : comptes, réglages, applis ; le compte « {} »", paths::DATA, paths::USER), Style::new().fg(BAD)),
+                ]));
+            } else {
+                lines.push(row("Garder", format!("les données ({})", paths::DATA)));
+            }
+            lines.push(row("Garder", "les pilotes (Blackmagic, NDI, NVIDIA)".into()));
         }
     }
     lines.push(Line::from(""));
@@ -915,4 +950,43 @@ fn draw_end(f: &mut Frame, body: Rect, app: &App) {
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(format!("Journal : {}", paths::under(&app.root(), paths::LOG).display()), Style::new().fg(MUTED))));
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    #[test]
+    fn black_background_everywhere() {
+        let mut app = new_app(Args::default());
+        for screen in [Screen::Welcome, Screen::Hardware, Screen::Summary] {
+            app.screen = screen;
+            app.dv_waiting = screen == Screen::Hardware;
+            let mut term = Terminal::new(TestBackend::new(110, 36)).unwrap();
+            term.draw(|f| draw(f, &app)).unwrap();
+            let buf = term.backend().buffer();
+            assert!(buf.content().iter().all(|c| c.bg == BG), "{screen:?}");
+            assert!(buf.content().iter().all(|c| c.fg != Color::Reset), "{screen:?}");
+        }
+    }
+
+    #[test]
+    fn the_copy_commands_stay_on_one_line() {
+        let mut app = new_app(Args::default());
+        app.screen = Screen::Hardware;
+        app.dv_waiting = true;
+        let mut term = Terminal::new(TestBackend::new(130, 36)).unwrap();
+        term.draw(|f| draw(f, &app)).unwrap();
+        let buf = term.backend().buffer();
+        let rows: Vec<String> = (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>()).collect();
+        if std::env::var("SHOW").is_ok() {
+            println!("{}", rows.join("\n"));
+        }
+        let line = |start: &str| rows.iter().map(|r| r.trim()).find(|r| r.starts_with(start)).map(str::to_string);
+        assert!(line("scp ~/Downloads/Blackmagic_Desktop_Video_Linux_* ").unwrap().ends_with(':'));
+        assert!(line("Get-ChildItem $HOME\\Downloads\\Blackmagic_Desktop_Video_Linux_* | % { scp $_.FullName ").unwrap().ends_with(": }"));
+        // Rien d'autre sur la ligne d'une commande (pas de cadre).
+        assert!(!rows.iter().any(|r| r.contains('│')));
+    }
 }
