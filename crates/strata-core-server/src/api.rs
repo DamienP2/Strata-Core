@@ -40,6 +40,7 @@ pub fn router() -> Router<Shared> {
         .merge(crate::server::routes())
         .merge(crate::updates::routes())
         .merge(crate::hardware::routes())
+        .merge(crate::streams::api::routes())
         .merge(crate::health::routes())
         .merge(crate::resources::routes())
         .merge(crate::alerts::routes())

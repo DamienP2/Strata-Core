@@ -68,6 +68,8 @@ pub struct Canvas {
     /// L'horodatage RTP de la dernière fin d'image, et l'écart entre deux (90 kHz).
     last_ts: Option<u32>,
     period: Option<u32>,
+    /// Un écart plus long vu une fois.
+    longer: Option<u32>,
     /// Fins d'image (bit marqueur) vues.
     pub markers: u64,
     pub packets: u64,
@@ -83,6 +85,7 @@ impl Default for Canvas {
             interlaced: false,
             last_ts: None,
             period: None,
+            longer: None,
             markers: 0,
             packets: 0,
         }
@@ -140,8 +143,16 @@ impl Canvas {
             self.markers += 1;
             if let Some(last) = self.last_ts {
                 let d = ts.wrapping_sub(last);
+                // Une image perdue double l'écart : un écart plus court est pris aussitôt, un plus
+                // long seulement s'il revient (la source a vraiment changé de cadence).
                 if d > 0 && d < 90_000 {
-                    self.period = Some(d);
+                    match self.period {
+                        Some(p) if d > p && self.longer != Some(d) => self.longer = Some(d),
+                        _ => {
+                            self.period = Some(d);
+                            self.longer = None;
+                        }
+                    }
                 }
             }
             self.last_ts = Some(ts);
@@ -452,7 +463,8 @@ pub mod tests {
         let tx = UdpSocket::bind("127.0.0.1:0").unwrap();
         let end = Instant::now() + Duration::from_secs(5);
         let mut ts = 0u32;
-        while rx.picture().is_none() && Instant::now() < end {
+        // Jusqu'à une image et une cadence établie (une machine chargée perd des paquets au début).
+        while (rx.picture().is_none() || rx.status().format.as_deref() != Some("720p50")) && Instant::now() < end {
             for p in packets(1280, 720, false, true, 90, ts, 640) {
                 let _ = tx.send_to(&p, ("127.0.0.1", port));
             }

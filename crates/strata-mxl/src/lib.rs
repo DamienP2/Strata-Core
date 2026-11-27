@@ -103,6 +103,28 @@ impl Mxl {
         Ok(VideoReader { inst: self.inst.clone(), grains, rate, video })
     }
 
+    /// Crée (ou reprend) le flux audio `id` (float32, 48 kHz, `channels` canaux).
+    pub fn audio_writer(&self, id: Uuid, label: &str, channels: u32) -> Result<AudioWriter, String> {
+        let def = audio_flow_def(id, label, channels);
+        let (w, _, _) = self.inst.create_flow_writer(&def, None).map_err(|e| format!("cannot create the MXL flow {id}: {e}"))?;
+        let samples = w.to_samples_writer().map_err(|e| e.to_string())?;
+        let max = samples.get_max_write_length_samples().unwrap_or(4800).max(1);
+        Ok(AudioWriter { inst: self.inst.clone(), samples, channels: channels as usize, next: None, max })
+    }
+
+    /// Ouvre le flux audio `id` en lecture.
+    pub fn audio_reader(&self, id: Uuid) -> Result<AudioReader, String> {
+        let def = self.inst.get_flow_def(&id.to_string()).map_err(|e| format!("no MXL flow {id}: {e}"))?;
+        let v: serde_json::Value = serde_json::from_str(&def).map_err(|e| e.to_string())?;
+        if v["media_type"] != "audio/float32" || v["sample_rate"]["numerator"].as_u64() != Some(AUDIO_RATE as u64) {
+            return Err(format!("the MXL flow {id} is not 48 kHz float32 audio"));
+        }
+        let channels = v["channel_count"].as_u64().unwrap_or(2) as usize;
+        let r = self.inst.create_flow_reader(&id.to_string()).map_err(|e| format!("cannot read the MXL flow {id}: {e}"))?;
+        let samples = r.to_samples_reader().map_err(|e| e.to_string())?;
+        Ok(AudioReader { inst: self.inst.clone(), samples, channels, next: None })
+    }
+
     /// Le nom qu'un flux se donne (`label` de sa description).
     pub fn flow_label(&self, id: Uuid) -> Option<String> {
         let def = self.inst.get_flow_def(&id.to_string()).ok()?;
@@ -190,6 +212,22 @@ pub struct VideoWriter {
 impl VideoWriter {
     pub fn video(&self) -> Video {
         self.video
+    }
+
+    /// De combien de grains l'écrivain est en avance sur maintenant (MXL ne garde que 200 ms :
+    /// trop d'avance, et ce qui est écrit est perdu).
+    pub fn ahead(&self) -> i64 {
+        let now = self.inst.get_current_index(&self.rate) as i64;
+        self.last.map_or(0, |l| l as i64 - now)
+    }
+
+    /// L'instant de la dernière image écrite, en échantillons à 48 kHz (sa première trame en
+    /// entrelacé) : où poser son son pour qu'il reste calé dessus.
+    pub fn last_frame_audio_index(&self) -> Option<u64> {
+        let l = self.last?;
+        let first = if self.video.interlaced { l.saturating_sub(1) } else { l };
+        let (num, den) = (self.rate.numerator.max(1) as u128, self.rate.denominator.max(1) as u128);
+        Some((first as u128 * AUDIO_RATE as u128 * den / num) as u64)
     }
 
     /// L'index du prochain grain : celui de maintenant, jamais un déjà écrit. En entrelacé, une
@@ -297,6 +335,142 @@ impl VideoReader {
     }
 }
 
+// ---------- Le son ----------
+
+/// Le son des flux de Strata : 48 kHz, float32, un tampon par canal.
+pub const AUDIO_RATE: u32 = 48_000;
+const AUDIO_RATIONAL: mxl::Rational = mxl::Rational { numerator: AUDIO_RATE as i64, denominator: 1 };
+
+/// La description NMOS d'un flux audio float32 48 kHz.
+pub fn audio_flow_def(id: Uuid, label: &str, channels: u32) -> String {
+    serde_json::json!({
+        "description": label,
+        "id": id.to_string(),
+        "tags": { "urn:x-nmos:tag:grouphint/v1.0": [format!("Strata:{label}")] },
+        "format": "urn:x-nmos:format:audio",
+        "label": label,
+        "parents": [],
+        "media_type": "audio/float32",
+        "sample_rate": { "numerator": AUDIO_RATE },
+        "channel_count": channels,
+        "bit_depth": 32
+    })
+    .to_string()
+}
+
+/// L'écrivain d'un flux audio : des blocs d'échantillons entrelacés, posés à la suite.
+pub struct AudioWriter {
+    inst: mxl::MxlInstance,
+    samples: mxl::SamplesWriter,
+    channels: usize,
+    /// L'index du prochain échantillon.
+    next: Option<u64>,
+    max: usize,
+}
+
+impl AudioWriter {
+    pub fn channels(&self) -> usize {
+        self.channels
+    }
+
+    /// Des échantillons entrelacés posés à partir de l'index `start` (celui d'une image : le son
+    /// reste calé sur elle).
+    pub fn write_at(&mut self, start: u64, pcm: &[f32]) -> Result<(), String> {
+        self.next = Some(start);
+        self.write_interleaved(pcm)
+    }
+
+    /// Des échantillons entrelacés (`channels` par instant). Posés à la suite des précédents (une
+    /// source qui livre son son par paquets écrit un peu en avance : c'est voulu) ; recalés sur
+    /// maintenant s'ils s'en écartent de plus d'une seconde (source arrêtée puis reprise).
+    pub fn write_interleaved(&mut self, pcm: &[f32]) -> Result<(), String> {
+        let n_total = pcm.len() / self.channels.max(1);
+        let now = self.inst.get_current_index(&AUDIO_RATIONAL);
+        let start = match self.next {
+            Some(n) if n.abs_diff(now) < AUDIO_RATE as u64 => n,
+            _ => now,
+        };
+        let mut done = 0;
+        while done < n_total {
+            let n = (n_total - done).min(self.max);
+            let head = start + (done + n) as u64 - 1;
+            let mut w = self.samples.open_samples(head, n).map_err(|e| format!("cannot open MXL samples {head}: {e}"))?;
+            for c in 0..self.channels.min(w.channels()) {
+                let (a, b) = w.channel_data_mut(c).map_err(|e| e.to_string())?;
+                let mut k = done;
+                for chunk in [a, b] {
+                    for dst in chunk.chunks_exact_mut(4) {
+                        if k >= done + n {
+                            break;
+                        }
+                        dst.copy_from_slice(&pcm[k * self.channels + c].to_le_bytes());
+                        k += 1;
+                    }
+                }
+            }
+            w.commit().map_err(|e| format!("cannot commit MXL samples {head}: {e}"))?;
+            done += n;
+        }
+        self.next = Some(start + n_total as u64);
+        Ok(())
+    }
+}
+
+/// Le lecteur d'un flux audio : des blocs à la suite, un peu derrière l'écrivain.
+pub struct AudioReader {
+    inst: mxl::MxlInstance,
+    samples: mxl::SamplesReader,
+    pub channels: usize,
+    next: Option<u64>,
+}
+
+impl AudioReader {
+    /// L'index de l'échantillon de maintenant (horloge TAI).
+    pub fn now(&self) -> u64 {
+        self.inst.get_current_index(&AUDIO_RATIONAL)
+    }
+
+    /// L'index du dernier échantillon écrit.
+    pub fn written(&self) -> Option<u64> {
+        self.samples.get_runtime_info().ok().map(|r| r.headIndex)
+    }
+
+    /// Les `n` échantillons suivants, entrelacés. Le lecteur suit l'écrivain, 40 ms derrière ce
+    /// qu'il a écrit (MXL ne garde que 200 ms : plus loin, c'est perdu) ; recalé s'il s'en écarte
+    /// de plus de 100 ms. None si ces échantillons ne sont pas (encore) là.
+    pub fn next_interleaved(&mut self, n: usize) -> Option<Vec<f32>> {
+        let written = self.samples.get_runtime_info().ok()?.headIndex;
+        let margin = AUDIO_RATE as u64 / 25;
+        let ideal = written.saturating_sub(margin + n as u64);
+        let start = match self.next {
+            Some(s) if s.abs_diff(ideal) < AUDIO_RATE as u64 / 10 => s,
+            _ => ideal,
+        };
+        if start + n as u64 - 1 > written {
+            self.next = Some(start);
+            return None;
+        }
+        self.next = Some(start + n as u64);
+        let head = start + n as u64 - 1;
+        let data = self.samples.get_samples_non_blocking(head, n).ok()?;
+        let mut out = vec![0f32; n * self.channels];
+        for c in 0..self.channels.min(data.num_of_channels()) {
+            let (a, b) = data.channel_data(c).ok()?;
+            let mut k = 0;
+            for chunk in [a, b] {
+                for src in chunk.chunks_exact(4) {
+                    if k >= n {
+                        break;
+                    }
+                    out[k * self.channels + c] = f32::from_le_bytes([src[0], src[1], src[2], src[3]]);
+                    k += 1;
+                }
+            }
+        }
+        Some(out)
+    }
+}
+
 // ---------- v210 ----------
 
 /// Octets par ligne en v210 : 6 pixels par bloc de 16 octets, lignes alignées sur 128 octets.
@@ -391,6 +565,45 @@ mod tests {
                 v210_to_uyvy(&got[y * stride..(y + 1) * stride], &mut line, 1280);
                 assert_eq!(line[1], ((y % 200) + 16) as u8, "line {y} interlaced {interlaced}");
             }
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    #[ignore]
+    fn writes_and_reads_real_audio() {
+        let dir = std::env::temp_dir().join(format!("strata-mxl-audio-{}", std::process::id()));
+        let mxl = Mxl::open_at(&dir).unwrap();
+        let id = flow_id("test/audio");
+        let mut w = mxl.audio_writer(id, "test", 2).unwrap();
+        let mut r = mxl.audio_reader(id).unwrap();
+        assert_eq!(r.channels, 2);
+        // 1 s de son, par blocs de 20 ms, à leur rythme : gauche = n, droite = -n.
+        let mut n = 0u32;
+        let mut got = Vec::new();
+        let start = std::time::Instant::now();
+        for block in 0..50u32 {
+            let pcm: Vec<f32> = (0..960)
+                .flat_map(|_| {
+                    n += 1;
+                    [n as f32, -(n as f32)]
+                })
+                .collect();
+            w.write_interleaved(&pcm).unwrap();
+            let due = start + Duration::from_millis(20 * (block as u64 + 1));
+            std::thread::sleep(due.saturating_duration_since(std::time::Instant::now()));
+            if let Some(b) = r.next_interleaved(960) {
+                got.extend(b);
+            }
+        }
+        // Le lecteur suit, 40 ms derrière : des blocs à la suite, sans trou, canaux à leur place.
+        assert!(got.len() >= 2 * 960 * 40, "read {} samples", got.len() / 2);
+        let first = got.iter().step_by(2).position(|x| *x > 0.0).expect("written samples");
+        let mut prev = got[first * 2];
+        for k in first + 1..got.len() / 2 {
+            assert_eq!(got[k * 2], prev + 1.0, "sample {k}");
+            assert_eq!(got[k * 2 + 1], -got[k * 2]);
+            prev = got[k * 2];
         }
         let _ = std::fs::remove_dir_all(dir);
     }

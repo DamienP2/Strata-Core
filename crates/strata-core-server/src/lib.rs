@@ -24,6 +24,7 @@ pub mod server;
 pub mod snmp;
 pub mod sso;
 pub mod state;
+pub mod streams;
 pub mod supervisor;
 pub mod tls;
 pub mod updates;
@@ -162,6 +163,7 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
     // Les entrées après les applis qui les lisent.
     let s2 = s.clone();
     let _ = tokio::task::spawn_blocking(move || {
+        s2.streams.stop_all();
         s2.st2110.stop_all();
         s2.playouts.stop_all();
         s2.captures.stop_all();

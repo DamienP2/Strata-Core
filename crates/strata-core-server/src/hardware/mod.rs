@@ -453,6 +453,7 @@ pub fn reconcile_inputs(s: &crate::state::AppState) {
         None => Err("not loaded yet".to_string()),
     };
     s.st2110.apply(&cfg, mtl, mxl_of(s));
+    crate::streams::reconcile(s);
 }
 
 /// Les entrées captées : signal, format, images par seconde, applis qui les lisent.

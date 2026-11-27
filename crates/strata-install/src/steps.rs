@@ -676,7 +676,8 @@ pub fn steps(plan: &Plan) -> Vec<Step> {
     let mut v: Vec<Step> = Vec::new();
     match plan.action.clone() {
         Action::Install => {
-            let mut pkgs = vec!["chrony", "linuxptp", "ethtool", "polkitd"];
+            // ffmpeg : les flux réseau (SRT, RTMP, HLS…) reçus et envoyés par le Core.
+            let mut pkgs = vec!["chrony", "linuxptp", "ethtool", "polkitd", "ffmpeg"];
             pkgs.extend(MTL_PKGS);
             if plan.ndi.is_some() {
                 pkgs.push("avahi-daemon");
@@ -727,11 +728,11 @@ pub fn steps(plan: &Plan) -> Vec<Step> {
             v.push(step("Démarrage du service", false, |ctx, _| start(ctx, false)));
         }
         Action::Update => {
-            v.push(step("Bibliothèques du ST 2110", true, |ctx, say| {
-                let mut args = vec!["install", "-y", "-q"];
+            v.push(step("Bibliothèques du ST 2110 et ffmpeg", true, |ctx, say| {
+                let mut args = vec!["install", "-y", "-q", "ffmpeg"];
                 args.extend(MTL_PKGS);
                 ctx.run_live("apt-get", &args, say)?;
-                Ok(MTL_PKGS.join(", "))
+                Ok(format!("ffmpeg, {}", MTL_PKGS.join(", ")))
             }));
             let p = plan.clone();
             v.push(step("Strata Core", false, move |ctx, say| put_core(ctx, &p, say)));

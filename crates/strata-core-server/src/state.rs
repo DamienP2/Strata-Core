@@ -37,6 +37,8 @@ pub struct AppState {
     pub previews: crate::hardware::preview::Previews,
     /// Les flux ST 2110 reçus et envoyés par le Core (MTL).
     pub st2110: crate::hardware::st2110io::Engine,
+    /// Les flux réseau (SRT, RTMP, HLS…) reçus et envoyés par le Core.
+    pub streams: crate::streams::engine::Engine,
     /// MTL : chargée au démarrage si elle est installée (sinon la raison).
     pub mtl: std::sync::OnceLock<Result<std::path::PathBuf, String>>,
     /// MXL : ouvert au démarrage s'il est installé (sinon la raison).
@@ -80,6 +82,7 @@ impl AppState {
             previews: Default::default(),
             mxl: Default::default(),
             st2110: Default::default(),
+            streams: Default::default(),
             mtl: Default::default(),
             resources: Default::default(),
             alerts: crate::alerts::Alerts::new(&data_dir),
