@@ -98,7 +98,7 @@ impl Srv {
     fn new() -> Self {
         let dir = std::env::temp_dir().join(format!("strata-sso-{}", strata_core::new_id()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("config.json"), format!(r#"{{"name":"Régie A","dnsName":"{HOST}"}}"#)).unwrap();
+        std::fs::write(dir.join("config.json"), format!(r#"{{"name":"Régie A","dnsName":"{HOST}","https":{{"mode":"proxy"}}}}"#)).unwrap();
         let far: SocketAddr = "10.0.0.50:50000".parse().unwrap();
         let app = strata_core_server::app(AppState::new(dir.clone()), None).layer(MockConnectInfo(far));
         Srv { dir, app }

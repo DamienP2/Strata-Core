@@ -84,7 +84,7 @@ fn sign_in_first(cfg: &ServerConfig, req: &Request) -> Response {
         return (StatusCode::UNAUTHORIZED, "login required").into_response();
     }
     let host = auth::host(req.headers()).unwrap_or_default();
-    let here = format!("{}://{host}{}", cfg.scheme, req.uri().path_and_query().map(|p| p.as_str()).unwrap_or("/"));
+    let here = format!("{}://{host}{}", cfg.scheme(), req.uri().path_and_query().map(|p| p.as_str()).unwrap_or("/"));
     Redirect::to(&format!("{}?next={}", cfg.core_url_at(Some(host)), enc(&here))).into_response()
 }
 

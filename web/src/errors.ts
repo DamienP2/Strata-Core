@@ -24,6 +24,14 @@ const SHAPED: [RegExp, string, string[]][] = [
   [/^(.+) was not installed from GitHub$/, '{app} was not installed from GitHub', ['app']],
   [/^cannot unpack the archive: (.+)$/, 'Cannot unpack the archive: {why}', ['why']],
   [/^the download was cut: (.+)$/, 'The download was cut: {why}', ['why']],
+  // Ce serveur, HTTPS
+  [/^cannot listen on port (\d+): (.+)$/, 'Cannot listen on port {port}: {why}', ['port', 'why']],
+  [/^not a DNS name: (.*)$/, 'Not a DNS name: {name} (words of letters, digits and dashes, separated by dots)', ['name']],
+  [/^not a time zone: (.*)$/, 'Not a time zone: {zone}', ['zone']],
+  [/^port (\d+) is already the HTTP one$/, 'Port {port} is already the HTTP one', ['port']],
+  [/^the certificate does not cover (.+)$/, 'The certificate does not cover {names}', ['names']],
+  [/^the certificate expired on (.+)$/, 'The certificate expired on {date}', ['date']],
+  [/^the certificate is valid only from (.+)$/, 'The certificate is valid only from {date}', ['date']],
 ];
 
 export function friendly(e: unknown): string {

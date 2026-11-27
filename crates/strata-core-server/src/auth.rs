@@ -191,10 +191,33 @@ pub fn new_token() -> String {
     format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple())
 }
 
+/// Une session : son compte, sa fin (secondes Unix). Gardée dans `sessions.json` sous l'empreinte
+/// de son jeton (le fichier ne permet pas de se connecter) : un redémarrage du Core ne déconnecte
+/// personne.
+#[derive(Serialize, Deserialize, Clone)]
 struct Session {
-    user_id: String,
-    expires: Instant,
+    user: String,
+    expires: u64,
 }
+
+fn unix_now() -> u64 {
+    SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+fn token_key(token: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(token.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Les sessions, et quand elles ont été écrites sur le disque.
+struct Sessions {
+    map: HashMap<String, Session>,
+    saved: Instant,
+    dirty: bool,
+}
+
+/// Une session prolongée n'est réécrite qu'à cet intervalle (pas à chaque requête).
+const SESSIONS_SAVE_EVERY: Duration = Duration::from_secs(300);
 
 struct Store {
     list: Vec<User>,
@@ -205,7 +228,8 @@ struct Store {
 pub struct Auth {
     path: PathBuf,
     store: Mutex<Store>,
-    sessions: Mutex<HashMap<String, Session>>,
+    sessions: Mutex<Sessions>,
+    sessions_path: PathBuf,
     verify_slots: Semaphore,
     pub logins: guard::Logins,
 }
@@ -237,10 +261,15 @@ impl Auth {
     pub fn load(data_dir: &Path) -> Self {
         let path = data_dir.join("users.json");
         let list = strata_core::files::read_json(&path).unwrap_or_default();
+        let sessions_path = data_dir.join("sessions.json");
+        let mut map: HashMap<String, Session> = strata_core::files::read_json(&sessions_path).unwrap_or_default();
+        let now = unix_now();
+        map.retain(|_, s| s.expires > now);
         Auth {
             store: Mutex::new(Store { list, stamp: stamp(&path) }),
             path,
-            sessions: Mutex::new(HashMap::new()),
+            sessions: Mutex::new(Sessions { map, saved: Instant::now(), dirty: false }),
+            sessions_path,
             verify_slots: Semaphore::new(4),
             logins: guard::Logins::default(),
         }
@@ -392,39 +421,71 @@ impl Auth {
         tokio::task::spawn_blocking(move || me.check_password(&u, &p)).await.ok().flatten()
     }
 
+    /// Écrit les sessions (privé), maintenant ou, pour une simple prolongation, de temps en temps.
+    fn save_sessions(&self, list: &mut Sessions, now: bool) {
+        list.dirty = true;
+        if !now && list.saved.elapsed() < SESSIONS_SAVE_EVERY {
+            return;
+        }
+        if let Err(e) = strata_core::files::write_json(&self.sessions_path, &list.map, true) {
+            tracing::warn!("cannot save the sessions: {e}");
+            return;
+        }
+        list.saved = Instant::now();
+        list.dirty = false;
+    }
+
     /// Ouvre une session.
     pub fn open_session(&self, user_id: &str) -> String {
         let token = new_token();
-        let now = Instant::now();
-        let mut sessions = self.sessions.lock().unwrap();
-        sessions.retain(|_, s| s.expires > now);
-        sessions.insert(token.clone(), Session { user_id: user_id.to_string(), expires: now + SESSION_TTL });
+        let now = unix_now();
+        let mut list = self.sessions.lock().unwrap();
+        list.map.retain(|_, s| s.expires > now);
+        list.map.insert(token_key(&token), Session { user: user_id.to_string(), expires: now + SESSION_TTL.as_secs() });
+        self.save_sessions(&mut list, true);
         token
     }
 
     pub fn close_session(&self, token: &str) {
-        self.sessions.lock().unwrap().remove(token);
+        let mut list = self.sessions.lock().unwrap();
+        if list.map.remove(&token_key(token)).is_some() {
+            self.save_sessions(&mut list, true);
+        }
     }
 
     fn end_sessions(&self, user_ids: &[String]) {
         if user_ids.is_empty() {
             return;
         }
-        self.sessions.lock().unwrap().retain(|_, s| !user_ids.contains(&s.user_id));
+        let mut list = self.sessions.lock().unwrap();
+        list.map.retain(|_, s| !user_ids.contains(&s.user));
+        self.save_sessions(&mut list, true);
+    }
+
+    /// Écrit les prolongations en attente (à l'arrêt du Core).
+    pub fn flush_sessions(&self) {
+        let mut list = self.sessions.lock().unwrap();
+        if list.dirty {
+            self.save_sessions(&mut list, true);
+        }
     }
 
     /// Le compte d'une session (et la session prolongée).
     pub fn user_for_token(&self, token: &str) -> Option<User> {
-        let now = Instant::now();
+        let now = unix_now();
+        let key = token_key(token);
         let user_id = {
-            let mut sessions = self.sessions.lock().unwrap();
-            let s = sessions.get_mut(token)?;
+            let mut list = self.sessions.lock().unwrap();
+            let s = list.map.get_mut(&key)?;
             if s.expires <= now {
-                sessions.remove(token);
+                list.map.remove(&key);
+                self.save_sessions(&mut list, true);
                 return None;
             }
-            s.expires = now + SESSION_TTL;
-            s.user_id.clone()
+            s.expires = now + SESSION_TTL.as_secs();
+            let user = s.user.clone();
+            self.save_sessions(&mut list, false);
+            user
         };
         self.get(&user_id)
     }
@@ -608,6 +669,23 @@ async fn setup(State(s): State<Shared>, ConnectInfo(peer): ConnectInfo<SocketAdd
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn sessions_outlive_a_restart() {
+        let dir = std::env::temp_dir().join(format!("strata-auth-{}", strata_core::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = Auth::load(&dir);
+        let u = a.add(NewUser { username: "ann".into(), display_name: String::new(), admin: true, password: Some("password1".into()) }).unwrap();
+        let (kept, closed) = (a.open_session(&u.id), a.open_session(&u.id));
+        a.close_session(&closed);
+        let text = std::fs::read_to_string(dir.join("sessions.json")).unwrap();
+        assert!(!text.contains(&kept), "only fingerprints of the tokens are written");
+        let b = Auth::load(&dir);
+        assert_eq!(b.user_for_token(&kept).unwrap().id, u.id);
+        assert!(b.user_for_token(&closed).is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     use super::*;
 
     #[test]

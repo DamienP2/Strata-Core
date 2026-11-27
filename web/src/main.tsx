@@ -124,7 +124,7 @@ function App() {
   // Les réglages : administrateurs seulement ; toute autre adresse revient au cockpit.
   useEffect(() => {
     if (!user || back) return;
-    if (user.admin && path === '/reglages') navigate('/reglages/bibliotheque', true);
+    if (user.admin && path === '/reglages') navigate('/reglages/serveur', true);
     else if (path !== '/' && !(user.admin && path.startsWith('/reglages/'))) navigate('/', true);
   }, [user, path, back]);
 
@@ -164,7 +164,7 @@ function App() {
               <CircleHelp size={17} />
             </button>
             {user.admin && (
-              <button type="button" className={`st-help ${inSettings ? 'on' : ''}`} title={t('Server settings')} onClick={() => navigate(inSettings ? '/' : '/reglages/bibliotheque')}>
+              <button type="button" className={`st-help ${inSettings ? 'on' : ''}`} title={t('Server settings')} onClick={() => navigate(inSettings ? '/' : '/reglages/serveur')}>
                 <SettingsIcon size={17} />
               </button>
             )}
@@ -179,7 +179,7 @@ function App() {
           </>
         }
       />
-      <div className="st-content">{inSettings ? <Settings path={path.slice('/reglages/'.length)} /> : data && <Cockpit data={data} onOpen={open} onServer={user.admin ? () => navigate('/reglages/bibliotheque') : undefined} />}</div>
+      <div className="st-content">{inSettings ? <Settings path={path.slice('/reglages/'.length)} /> : data && <Cockpit data={data} onOpen={open} onServer={user.admin ? () => navigate('/reglages/serveur') : undefined} />}</div>
       <ContextMenuHost />
       <DialogHost />
       <Toasts />

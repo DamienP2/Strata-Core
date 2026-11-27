@@ -14,9 +14,11 @@ pub mod guard;
 pub mod install;
 pub mod prefs;
 pub mod relay;
+pub mod server;
 pub mod sso;
 pub mod state;
 pub mod supervisor;
+pub mod tls;
 pub mod users;
 pub mod web;
 
@@ -41,6 +43,7 @@ pub fn app(s: Shared, web_dir: Option<PathBuf>) -> Router {
         .layer(axum::middleware::from_fn_with_state(s.clone(), guard::csrf))
         .layer(axum::middleware::from_fn(guard::every_answer))
         .layer(axum::middleware::from_fn_with_state(s.clone(), relay::relay))
+        .layer(axum::middleware::from_fn_with_state(s.clone(), tls::redirect))
         .with_state(s)
 }
 
@@ -63,24 +66,20 @@ pub fn cli_data_dir(given: Option<PathBuf>) -> PathBuf {
     })
 }
 
-/// Sert jusqu'à Ctrl-C ou SIGTERM.
-pub async fn serve(bind: Option<SocketAddr>, data_dir: PathBuf, web_dir: Option<PathBuf>) -> anyhow::Result<()> {
+/// Comment le service s'est arrêté.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Ending {
+    Stop,
+    /// Un administrateur a demandé un redémarrage : le programme se relance.
+    Restart,
+}
+
+/// Sert jusqu'à Ctrl-C, SIGTERM ou une demande de redémarrage.
+pub async fn serve(bind: Option<SocketAddr>, data_dir: PathBuf, web_dir: Option<PathBuf>) -> anyhow::Result<Ending> {
     std::fs::create_dir_all(&data_dir)?;
     let s = state::AppState::new(data_dir.clone());
     let bind = bind.or(s.config.load().bind).unwrap_or(DEFAULT_BIND.parse()?);
     let listener = tokio::net::TcpListener::bind(bind).await?;
-    s.set_core_port(listener.local_addr()?.port());
-    // Les applis actives : lancées maintenant, puis tenues en accord avec la Bibliothèque.
-    apps::reconcile(&s).await;
-    let keeper = {
-        let s = s.clone();
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                apps::reconcile(&s).await;
-            }
-        })
-    };
     tracing::info!("Strata Core {} on http://{bind} (data: {})", strata_core::VERSION, data_dir.display());
     if s.auth.needs_setup() {
         tracing::warn!(
@@ -88,14 +87,43 @@ pub async fn serve(bind: Option<SocketAddr>, data_dir: PathBuf, web_dir: Option<
             bind.port()
         );
     }
-    axum::serve(listener, app(s.clone(), web_dir).into_make_service_with_connect_info::<SocketAddr>()).with_graceful_shutdown(stop()).await?;
-    keeper.abort();
-    s.supervisor.stop_all().await;
-    tracing::info!("stopped");
-    Ok(())
+    serve_on(s, listener, web_dir).await
 }
 
-async fn stop() {
+/// Sert sur une écoute HTTP déjà ouverte (et en HTTPS si les réglages le demandent).
+pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Option<PathBuf>) -> anyhow::Result<Ending> {
+    let addr = listener.local_addr()?;
+    s.set_core_port(addr.port());
+    let router = app(s.clone(), web_dir);
+    s.tls.set_router(router.clone(), addr);
+    tls::apply(&s).await;
+    // Les applis actives : lancées maintenant, puis tenues en accord avec la Bibliothèque. Le
+    // certificat fait par Strata : renouvelé quand il le faut.
+    apps::reconcile(&s).await;
+    let keeper = {
+        let s = s.clone();
+        tokio::spawn(async move {
+            let mut tick = 0u64;
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                apps::reconcile(&s).await;
+                tick += 1;
+                if tick % (12 * 3600 / 5) == 0 {
+                    tls::apply(&s).await;
+                }
+            }
+        })
+    };
+    axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).with_graceful_shutdown(stop(s.clone())).await?;
+    keeper.abort();
+    s.supervisor.stop_all().await;
+    s.auth.flush_sessions();
+    let ending = if s.restart_asked() { Ending::Restart } else { Ending::Stop };
+    tracing::info!("{}", if ending == Ending::Restart { "stopped, restarting" } else { "stopped" });
+    Ok(ending)
+}
+
+async fn stop(s: Shared) {
     let ctrl_c = async {
         let _ = tokio::signal::ctrl_c().await;
     };
@@ -110,5 +138,6 @@ async fn stop() {
     tokio::select! {
         _ = ctrl_c => {},
         _ = term => {},
+        _ = s.restart_signal.notified() => {},
     }
 }

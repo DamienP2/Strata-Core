@@ -26,7 +26,7 @@ impl Drop for Srv {
 fn server() -> Srv {
     let dir = std::env::temp_dir().join(format!("strata-api-{}", strata_core::new_id()));
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("config.json"), r#"{"name":"Régie A","dnsName":"strata01.regie.exemple.fr"}"#).unwrap();
+    std::fs::write(dir.join("config.json"), r#"{"name":"Régie A","dnsName":"strata01.regie.exemple.fr","https":{"mode":"proxy"}}"#).unwrap();
     let s = AppState::new(dir.clone());
     let app = strata_core_server::app(s, None);
     let lo: SocketAddr = "127.0.0.1:50000".parse().unwrap();

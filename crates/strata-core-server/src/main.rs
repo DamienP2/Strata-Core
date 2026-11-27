@@ -22,6 +22,9 @@ enum Cmd {
     /// Les applis installées.
     #[command(subcommand)]
     App(cli::AppCmd),
+    /// Le HTTPS du Core.
+    #[command(subcommand)]
+    Https(cli::HttpsCmd),
 }
 
 #[derive(Args, Default)]
@@ -42,6 +45,7 @@ fn main() -> anyhow::Result<()> {
     match cli.cmd {
         Some(Cmd::User(c)) => cli::user(c),
         Some(Cmd::App(c)) => cli::app(c),
+        Some(Cmd::Https(c)) => cli::https(c),
         Some(Cmd::Run(r)) => run(r),
         None => run(cli.run),
     }
@@ -50,5 +54,26 @@ fn main() -> anyhow::Result<()> {
 fn run(a: RunArgs) -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,tower_http=warn".into())).init();
     let data_dir = a.data_dir.unwrap_or_else(strata_core_server::user_data_dir);
-    tokio::runtime::Builder::new_multi_thread().enable_all().build()?.block_on(strata_core_server::serve(a.bind, data_dir, a.web_dir))
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let ending = rt.block_on(strata_core_server::serve(a.bind, data_dir, a.web_dir))?;
+    rt.shutdown_timeout(std::time::Duration::from_secs(2));
+    if ending == strata_core_server::Ending::Restart {
+        restart()?;
+    }
+    Ok(())
+}
+
+/// Redémarre le Core : le même programme, avec les mêmes arguments, à la place de celui-ci
+/// (sous systemd, le service garde son numéro de processus).
+#[cfg(unix)]
+fn restart() -> anyhow::Result<()> {
+    use std::os::unix::process::CommandExt;
+    let exe = std::env::current_exe()?;
+    tracing::info!("restarting");
+    Err(std::process::Command::new(exe).args(std::env::args_os().skip(1)).exec().into())
+}
+
+#[cfg(not(unix))]
+fn restart() -> anyhow::Result<()> {
+    anyhow::bail!("restart is only supported on Linux")
 }

@@ -26,7 +26,7 @@ axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "signal", "net", "process", "io-util"] }
 tower-http = { version = "0.6", features = ["fs", "trace"] }
 # Le relais vers les applis (HTTP/1.1, WebSocket).
-hyper = { version = "1", features = ["client", "http1"] }
+hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
 rust-embed = { version = "8", features = ["mime-guess", "include-exclude"] }
 clap = { version = "4", features = ["derive", "env"] }
@@ -46,6 +46,13 @@ base64 = "0.22"
 tar = "0.4"
 flate2 = "1"
 http-body-util = "0.1"
+# HTTPS : le certificat fait par Strata (rcgen) ou importé (x509-parser), servi par rustls.
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12", "logging"] }
+rcgen = { version = "0.14.7", default-features = false, features = ["ring", "pem", "crypto", "x509-parser"] }
+time = "0.3"
+x509-parser = "0.18.1"
+if-addrs = "0.15.0"
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tower = { version = "0.5", features = ["util"] }
 
 [dev-dependencies]
-tower = { version = "0.5", features = ["util"] }

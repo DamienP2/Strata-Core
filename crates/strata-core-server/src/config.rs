@@ -18,10 +18,47 @@ pub struct ServerConfig {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub trusted_origins: Vec<String>,
     pub timezone: String,
-    /// `https` ou `http` : le début des adresses des applis.
-    pub scheme: String,
+    /// Le HTTPS : aucun, fait par Strata, de l'entreprise, ou fait par un relais devant le Core.
+    pub https: HttpsConfig,
     /// La connexion par l'annuaire de l'entreprise (OpenID Connect).
     pub sso: crate::sso::SsoConfig,
+}
+
+/// D'où vient le HTTPS.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum HttpsMode {
+    /// Aucun : HTTP seulement.
+    #[default]
+    Off,
+    /// Un certificat fait par Strata, signé par l'autorité de ce serveur (à installer une fois sur
+    /// chaque poste).
+    Strata,
+    /// Le certificat de l'entreprise, importé.
+    Company,
+    /// Un relais devant le Core fait le HTTPS ; le Core reste en HTTP, ses adresses en `https://`.
+    Proxy,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct HttpsConfig {
+    pub mode: HttpsMode,
+    /// Le port HTTPS du Core (Strata, entreprise).
+    pub port: u16,
+}
+
+impl Default for HttpsConfig {
+    fn default() -> Self {
+        HttpsConfig { mode: HttpsMode::Off, port: 443 }
+    }
+}
+
+impl HttpsConfig {
+    /// Le Core écoute-t-il lui-même en HTTPS ?
+    pub fn served(&self) -> bool {
+        matches!(self.mode, HttpsMode::Strata | HttpsMode::Company)
+    }
 }
 
 /// Le nom de la machine (« strata01 »).
@@ -38,7 +75,7 @@ impl Default for ServerConfig {
             bind: None,
             trusted_origins: Vec::new(),
             timezone: "Europe/Paris".into(),
-            scheme: "https".into(),
+            https: HttpsConfig::default(),
             sso: crate::sso::SsoConfig::default(),
         }
     }
@@ -65,12 +102,21 @@ impl ServerConfig {
         strata_core::files::write_json(&data_dir.join("config.json"), self, true)
     }
 
-    /// L'adresse de retour à donner au fournisseur d'identité.
-    pub fn sso_redirect_uri(&self) -> String {
-        format!("{}://{}/api/auth/sso/callback", self.scheme, self.dns_name)
+    /// `https` ou `http` : le début des adresses du cockpit et des applis.
+    pub fn scheme(&self) -> &'static str {
+        if self.https.mode == HttpsMode::Off {
+            "http"
+        } else {
+            "https"
+        }
     }
 
-    fn normalized(mut self) -> Self {
+    /// L'adresse de retour à donner au fournisseur d'identité.
+    pub fn sso_redirect_uri(&self) -> String {
+        format!("{}://{}/api/auth/sso/callback", self.scheme(), self.dns_name)
+    }
+
+    pub(crate) fn normalized(mut self) -> Self {
         self.sso.normalize();
         self.name = self.name.trim().to_string();
         self.dns_name = self.dns_name.trim().trim_end_matches('.').to_lowercase();
@@ -80,22 +126,22 @@ impl ServerConfig {
         if self.dns_name.is_empty() {
             self.dns_name = format!("{}.local", hostname());
         }
-        if self.scheme != "http" {
-            self.scheme = "https".into();
+        if self.https.port == 0 {
+            self.https.port = 443;
         }
         self
     }
 
     /// L'adresse d'une appli : `https://livecut.strata01.regie.exemple.fr/`.
     pub fn app_url(&self, id: &str) -> String {
-        format!("{}://{id}.{}/", self.scheme, self.dns_name)
+        format!("{}://{id}.{}/", self.scheme(), self.dns_name)
     }
 
     /// L'adresse d'une appli vue depuis une requête arrivée par `host` : avec son port s'il en a un
     /// (`http://livecut.strata01.local:8080/`), pour un Core qui n'écoute pas sur 80 ou 443.
     pub fn app_url_at(&self, id: &str, host: Option<&str>) -> String {
         match host_port(host) {
-            Some(port) => format!("{}://{id}.{}:{port}/", self.scheme, self.dns_name),
+            Some(port) => format!("{}://{id}.{}:{port}/", self.scheme(), self.dns_name),
             None => self.app_url(id),
         }
     }
@@ -103,8 +149,8 @@ impl ServerConfig {
     /// L'adresse du cockpit vue depuis une requête arrivée par `host`.
     pub fn core_url_at(&self, host: Option<&str>) -> String {
         match host_port(host) {
-            Some(port) => format!("{}://{}:{port}/", self.scheme, self.dns_name),
-            None => format!("{}://{}/", self.scheme, self.dns_name),
+            Some(port) => format!("{}://{}:{port}/", self.scheme(), self.dns_name),
+            None => format!("{}://{}/", self.scheme(), self.dns_name),
         }
     }
 
@@ -150,7 +196,8 @@ mod tests {
 
     #[test]
     fn addresses_and_cookie_domain() {
-        let c = ServerConfig { dns_name: "strata01.regie.exemple.fr".into(), ..ServerConfig::default() };
+        let c =
+            ServerConfig { dns_name: "strata01.regie.exemple.fr".into(), https: HttpsConfig { mode: HttpsMode::Proxy, port: 443 }, ..ServerConfig::default() };
         assert_eq!(c.app_url("livecut"), "https://livecut.strata01.regie.exemple.fr/");
         assert_eq!(c.cookie_domain(Some("strata01.regie.exemple.fr")).as_deref(), Some("strata01.regie.exemple.fr"));
         assert_eq!(c.cookie_domain(Some("livecut.strata01.regie.exemple.fr:443")).as_deref(), Some("strata01.regie.exemple.fr"));
@@ -173,11 +220,12 @@ mod tests {
 
     #[test]
     fn incomplete_file() {
-        let c: ServerConfig = serde_json::from_str(r#"{"name":"  Régie A ","dnsName":"Strata01.Local.","scheme":"ftp"}"#).unwrap();
+        let c: ServerConfig = serde_json::from_str(r#"{"name":"  Régie A ","dnsName":"Strata01.Local.","https":{"mode":"strata"}}"#).unwrap();
         let c = c.normalized();
         assert_eq!(c.name, "Régie A");
         assert_eq!(c.dns_name, "strata01.local");
-        assert_eq!(c.scheme, "https");
+        assert_eq!((c.scheme(), c.https.port), ("https", 443));
+        assert_eq!(ServerConfig::default().scheme(), "http");
         assert_eq!(c.timezone, "Europe/Paris");
     }
 }

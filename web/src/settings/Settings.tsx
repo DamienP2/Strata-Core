@@ -1,8 +1,8 @@
-// Les réglages du serveur (administrateurs), rangés par objet comme dans la maquette C : Applis
-// (la Bibliothèque, puis une page par appli installée) et Personnes (Utilisateurs, Groupes, Annuaire).
-// Les autres sections viendront
-// avec leurs briques (Ce serveur, Matériel, Surveillance).
-import { KeyRound, LayoutGrid, Users as UsersIcon, UsersRound } from 'lucide-react';
+// Les réglages du serveur (administrateurs), rangés par objet comme dans la maquette C : Ce serveur
+// (vue d'ensemble, nom et adresses, HTTPS), Applis (la Bibliothèque, puis une page par appli installée)
+// et Personnes (Utilisateurs, Groupes, Annuaire). Les autres sections viendront avec leurs briques
+// (Mises à jour, Matériel, Surveillance).
+import { Globe, KeyRound, LayoutDashboard, LayoutGrid, Lock, Users as UsersIcon, UsersRound } from 'lucide-react';
 import { NavItem, NavSection, SidePage, t } from '@strata/ui';
 import { appIcon } from '../icons';
 import { navigate } from '../router';
@@ -10,16 +10,20 @@ import { AppPage, Library, serviceTone, useApps } from './Library';
 import { Directory } from './Directory';
 import { Groups } from './Groups';
 import { Users } from './Users';
+import { Addresses, Https, Overview } from './Server';
 
-/** `path` : ce qui suit /reglages/ (« bibliotheque », « applis/livecut », « utilisateurs », « groupes », « annuaire »). */
+/** `path` : ce qui suit /reglages/ (« serveur », « adresses », « https », « bibliotheque », « applis/livecut », « utilisateurs »…). */
 export function Settings({ path }: { path: string }) {
   const { apps, core, jobs, reload, setActive, restart, dismiss } = useApps();
   const appId = path.startsWith('applis/') ? path.slice('applis/'.length) : null;
   const app = appId ? apps?.find((a) => a.id === appId) : undefined;
 
   let page: React.ReactNode = null;
-  const people = ['utilisateurs', 'groupes', 'annuaire'].includes(path);
-  if (path === 'utilisateurs') page = <Users />;
+  const fixed = ['serveur', 'adresses', 'https', 'utilisateurs', 'groupes', 'annuaire'].includes(path);
+  if (path === 'serveur') page = <Overview apps={apps} />;
+  else if (path === 'adresses') page = <Addresses />;
+  else if (path === 'https') page = <Https />;
+  else if (path === 'utilisateurs') page = <Users />;
   else if (path === 'groupes') page = <Groups />;
   else if (path === 'annuaire') page = <Directory />;
   else if (apps && app) page = <AppPage app={app} core={core} job={jobs.find((j) => j.app === app.id)} setActive={setActive} restart={restart} reload={reload} />;
@@ -28,8 +32,14 @@ export function Settings({ path }: { path: string }) {
   const nav = (
     <>
       <div>
+        <NavSection title={t('This server')} />
+        <NavItem icon={LayoutDashboard} label={t('Overview')} on={path === 'serveur'} onClick={() => navigate('/reglages/serveur')} />
+        <NavItem icon={Globe} label={t('Name and addresses')} on={path === 'adresses'} onClick={() => navigate('/reglages/adresses')} />
+        <NavItem icon={Lock} label="HTTPS" on={path === 'https'} onClick={() => navigate('/reglages/https')} />
+      </div>
+      <div>
         <NavSection title={t('Apps')} />
-        <NavItem icon={LayoutGrid} label={t('Library')} on={!appId && !people} onClick={() => navigate('/reglages/bibliotheque')} count={apps?.length} />
+        <NavItem icon={LayoutGrid} label={t('Library')} on={!appId && !fixed} onClick={() => navigate('/reglages/bibliotheque')} count={apps?.length} />
         {apps?.map((a) => (
           <NavItem key={a.id} icon={appIcon(a.icon)} label={a.name} on={a.id === appId} onClick={() => navigate(`/reglages/applis/${a.id}`)} status={serviceTone(a)} />
         ))}

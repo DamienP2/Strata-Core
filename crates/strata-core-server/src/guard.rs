@@ -66,7 +66,7 @@ pub async fn csrf(State(s): State<Shared>, req: Request, next: Next) -> Response
     next.run(req).await
 }
 
-fn local_name(host: &str) -> bool {
+pub fn local_name(host: &str) -> bool {
     let h = host.to_ascii_lowercase();
     // strip the port: "[::1]:8080", "localhost:8080", "127.0.0.1"
     let name = if let Some(rest) = h.strip_prefix('[') {

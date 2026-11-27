@@ -3,13 +3,13 @@ use arc_swap::ArcSwap;
 use std::{
     path::PathBuf,
     sync::{
-        atomic::{AtomicU16, Ordering},
+        atomic::{AtomicBool, AtomicU16, Ordering},
         Arc,
     },
     time::Instant,
 };
 
-use crate::{apps::Apps, auth::Auth, config::ServerConfig, groups::Groups, install::Installer, relay, supervisor::Supervisor};
+use crate::{apps::Apps, auth::Auth, config::ServerConfig, groups::Groups, install::Installer, relay, supervisor::Supervisor, tls::Tls};
 
 pub type Shared = Arc<AppState>;
 
@@ -27,6 +27,11 @@ pub struct AppState {
     pub relay: relay::HttpClient,
     /// Le port où le Core écoute (donné aux applis : `STRATA_CORE_URL`).
     core_port: AtomicU16,
+    /// Le HTTPS : certificat et écoute.
+    pub tls: Tls,
+    /// Un redémarrage est demandé.
+    restart: AtomicBool,
+    pub restart_signal: tokio::sync::Notify,
     pub started_at: Instant,
 }
 
@@ -42,6 +47,9 @@ impl AppState {
             installer: Installer::new(&data_dir),
             relay: relay::client(),
             core_port: AtomicU16::new(8080),
+            tls: Tls::new(&data_dir),
+            restart: AtomicBool::new(false),
+            restart_signal: tokio::sync::Notify::new(),
             started_at: Instant::now(),
             data_dir,
         })
@@ -55,5 +63,15 @@ impl AppState {
 
     pub fn set_core_port(&self, port: u16) {
         self.core_port.store(port, Ordering::Relaxed);
+    }
+
+    /// Demande au service de s'arrêter pour redémarrer.
+    pub fn ask_restart(&self) {
+        self.restart.store(true, Ordering::SeqCst);
+        self.restart_signal.notify_waiters();
+    }
+
+    pub fn restart_asked(&self) -> bool {
+        self.restart.load(Ordering::SeqCst)
     }
 }

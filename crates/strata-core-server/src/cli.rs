@@ -198,3 +198,27 @@ pub fn app(cmd: AppCmd) -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+#[derive(Subcommand)]
+pub enum HttpsCmd {
+    /// Repasse le Core en HTTP seul (si un certificat empêche d'ouvrir les réglages) ; à appliquer
+    /// en redémarrant le service.
+    Off {
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
+    },
+}
+
+pub fn https(cmd: HttpsCmd) -> anyhow::Result<()> {
+    match cmd {
+        HttpsCmd::Off { data_dir: d } => {
+            let dir = data_dir(d)?;
+            let mut cfg = crate::config::ServerConfig::load(&dir);
+            cfg.https.mode = crate::config::HttpsMode::Off;
+            cfg.save(&dir).context("cannot save config.json")?;
+            give_back(&dir, "config.json");
+            println!("HTTPS off in {} ; restart the service: sudo systemctl restart strata-core", dir.display());
+        }
+    }
+    Ok(())
+}

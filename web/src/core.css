@@ -46,3 +46,11 @@
 .core-file .st-muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .core-link { color: var(--accent-2); text-decoration: none; font-size: var(--fs-12); }
 .core-link:hover { text-decoration: underline; }
+.core-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; align-items: start; }
+.core-lines { display: flex; flex-direction: column; }
+.core-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 34px; padding: 4px 0; border-top: 1px solid var(--line); font: inherit; color: inherit; background: none; border-left: 0; border-right: 0; border-bottom: 0; text-align: left; }
+.core-line:first-child { border-top: 0; }
+.core-line > span:first-child { display: inline-flex; align-items: center; gap: 8px; }
+.core-line.click { cursor: pointer; border-radius: 6px; padding: 4px 6px; margin: 0 -6px; }
+.core-line.click:hover { background: var(--panel-2); }
+.core-warn { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--warn); font-size: var(--fs-12); }

@@ -53,6 +53,14 @@ puis faites pointer `strata.test` et `*.strata.test` vers `127.0.0.1` : une lign
 (`address=/strata.test/127.0.0.1`). Le cockpit est alors `http://strata.test:8080/` et LiveCut
 `http://livecut.strata.test:8080/`, avec la même connexion.
 
+## Le HTTPS en local
+
+*Réglages › Ce serveur › HTTPS › Fait par Strata*, avec un port libre (8443) : le Core fait son autorité
+et le certificat de `strata.test` et `*.strata.test`, puis écoute en HTTPS sans redémarrer ; le HTTP
+renvoie vers le HTTPS (sauf `localhost`). Pour que le navigateur ne prévienne plus, installez
+l'autorité (`/api/https/ca.crt`) dans ses autorités de confiance. Pour revenir au HTTP sans
+l'interface : `cargo run -p strata-core-server -- https off --data-dir ./data`, puis relancer.
+
 ## Vérifier avant d'envoyer
 
 ```bash
