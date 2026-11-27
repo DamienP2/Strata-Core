@@ -137,7 +137,7 @@ GET $STRATA_CORE_URL/api/hardware/shared
 
 | Partie | Contenu |
 | --- | --- |
-| `sdi` | les cartes DeckLink : nom, modèle, présente ou non, genlock ; pour chaque connecteur (`number` = SDI n, numéro logiciel), son nom, sa fonction (`input`, `output`, `unused`) et l'appareil Desktop Video à ouvrir (`device`) |
+| `sdi` | les cartes DeckLink : nom, modèle, présente ou non, genlock ; pour chaque connecteur (`number` = SDI n, numéro logiciel), son nom, sa fonction (`input`, `output`, `unused`), l'appareil Desktop Video (`device`) et, pour une entrée captée, le fichier à lire (`share`) |
 | `network` | les interfaces et leur adresse : `management`, `ndi`, `media1`, `media2`, `ptp` ; `mediaMode` : `redundant` (SMPTE 2022-7 : `media1` rouge, `media2` bleu) ou `separate` (deux ports indépendants) |
 | `flows` | les flux ST 2110 : nom, sens, essence, `red` (et `blue` en 2022-7), `port` (1 ou 2, ports indépendants) |
 | `ndi` | le dossier des réglages NDI (`configDir`), le serveur de découverte, le nom de machine |
@@ -146,8 +146,43 @@ GET $STRATA_CORE_URL/api/hardware/shared
 NDI : le Core donne `NDI_CONFIG_DIR` à l'appli qu'il lance ; la bibliothèque NDI y lit l'interface,
 le serveur de découverte et le nom de machine, les mêmes pour toutes les applis.
 
-À venir : les entrées DeckLink captées une seule fois par le Core et partagées entre les applis
-(le pilote n'en laisse qu'un programme à la fois).
+## Lire une entrée SDI
+
+Le pilote DeckLink ne laisse ouvrir une entrée qu'à **un seul programme**. Le Core capte donc
+chaque connecteur réglé sur « Entrée » et publie ses images dans une mémoire partagée ; toutes les
+applis la lisent en même temps, sans la rouvrir. **Une appli n'ouvre jamais une entrée DeckLink
+elle-même.** Les sorties, elles, restent ouvertes par l'appli qui sort (une sortie, un programme).
+
+Le fichier d'une entrée est dans `share` (`/api/hardware/shared`) :
+`/dev/shm/strata-sdi-<carte>-<n>`. On le lit avec le crate `strata-share` du Core :
+
+```rust
+use strata_share::{Next, Reader};
+
+let mut r = Reader::open(share.as_ref(), &std::env::var("STRATA_APP_ID")?)?;
+let mut buf = Vec::new();
+loop {
+    match r.next(&mut buf, Duration::from_secs(1)) {
+        Next::Frame(f) => { /* buf : f.info.width × f.info.height, UYVY, f.info.stride octets par ligne */ }
+        Next::Timeout => { /* pas d'image : r.signal() dit si le signal manque */ }
+        Next::Gone => { /* le Core a fermé ou recréé l'entrée : rouvrir */ }
+    }
+}
+```
+
+- **Les images** : UYVY 8 bits (4:2:2, BT.709), avec leur numéro (un saut = des images manquées),
+  leur cadence (`rate`, 25/1, 30000/1001…), entrelacées ou non, et le **timecode** du signal
+  (RP188/VITC) quand il en porte un. Un exemple complet : `crates/strata-share/examples/read.rs`.
+- **Toujours la plus récente** : le Core garde un anneau de 3 images ; un lecteur en retard saute
+  aux plus récentes plutôt que de prendre du retard. Une image lue est toujours entière.
+- **Sans attente active** : `next` dort jusqu'à l'image suivante (réveil par futex).
+- **L'appli s'inscrit** avec son nom (`STRATA_APP_ID`) : *Réglages › Matériel › Cartes SDI* montre
+  qui lit chaque entrée. `latest_with` lit l'image sur place, sans copie, pour l'envoyer au GPU.
+- **Quand le Core redémarre** ou que l'entrée est retirée des réglages, `next` rend `Gone` : rouvrir
+  le fichier, toutes les secondes, jusqu'à ce qu'il revienne.
+- Le format : une carte qui détecte le format suit le signal d'elle-même ; les autres sont ouvertes
+  en 1080i50.
+- Pas encore d'audio : le pont DeckLink du Core ne capte que la vidéo et le timecode.
 
 ## Ce que l'appli garde pour elle
 
@@ -161,5 +196,5 @@ le serveur de découverte et le nom de machine, les mêmes pour toutes les appli
 
 - L'appli dira au Core si un utilisateur y a accès, pour que le cockpit ne montre que les applis
   permises.
-- Les entrées DeckLink et le reste du matériel partagé passeront par le Core (brief § 5.3).
+- L'audio des entrées SDI dans le partage ; le format de chaque entrée réglable à la main.
 - Une liste des applis Strata dans la Bibliothèque, quand chacune publiera des releases à ce format.

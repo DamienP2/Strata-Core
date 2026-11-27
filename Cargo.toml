@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/strata-core", "crates/strata-core-server", "crates/strata-decklink"]
+members = ["crates/strata-core", "crates/strata-core-server", "crates/strata-decklink", "crates/strata-share"]
 
 [workspace.package]
 version = "0.1.0"
@@ -19,6 +19,7 @@ semver = { version = "1", features = ["serde"] }
 toml = "0.9"
 strata-core = { path = "crates/strata-core" }
 strata-decklink = { path = "crates/strata-decklink" }
+strata-share = { path = "crates/strata-share" }
 
 [profile.release]
 lto = "thin"

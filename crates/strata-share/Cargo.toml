@@ -1,0 +1,10 @@
+[package]
+name = "strata-share"
+description = "Les entrées vidéo du serveur partagées entre le Core et les applis : une mémoire partagée par entrée (Linux)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+libc = "0.2"

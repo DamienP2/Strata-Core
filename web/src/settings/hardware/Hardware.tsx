@@ -5,6 +5,7 @@ import { Clock, MonitorPlay, Network as NetIcon, Pencil, Plus, Radio, RefreshCw,
 import { Badge, Card, Dropdown, Empty, Field, FieldGrid, Modal, NumberField, PageHead, SaveBar, Segmented, Switch, confirmDialog, formatDateTime, t, tn, toast, type DropOption } from '@strata/ui';
 import { api } from '../../api';
 import { friendly } from '../../errors';
+import { InputsCard } from './Inputs';
 import { DeckLink3D, Pcie3D, SDI_COLOR, nicLook, printedOf, type Jack } from './Card3D';
 import { cardOf, discardHw, editCard, editHw, loadHw, saveHw, useHw, useHwDirty, type DetectedCard, type Flow, type Fn, type HwConfig, type Nic, type Port, type Snapshot } from './store';
 
@@ -150,6 +151,7 @@ export function SdiPage() {
       ) : (
         dl.cards.map((d) => <SdiCard key={d.id} d={d} snap={snap} draft={draft} />)
       )}
+      <InputsCard cfg={snap.config} />
       {absent.map((c) => (
         <Card
           key={c.id}

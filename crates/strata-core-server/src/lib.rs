@@ -102,6 +102,7 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
     // Les applis actives : lancées maintenant, puis tenues en accord avec la Bibliothèque. Le
     // certificat fait par Strata : renouvelé quand il le faut.
     apps::reconcile(&s).await;
+    reconcile_inputs(&s).await;
     let keeper = {
         let s = s.clone();
         tokio::spawn(async move {
@@ -109,6 +110,7 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 apps::reconcile(&s).await;
+                reconcile_inputs(&s).await;
                 updates::tick(&s).await;
                 tick += 1;
                 if tick % (12 * 3600 / 5) == 0 {
@@ -120,10 +122,19 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
     axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).with_graceful_shutdown(stop(s.clone())).await?;
     keeper.abort();
     s.supervisor.stop_all().await;
+    // Les entrées après les applis qui les lisent.
+    let s2 = s.clone();
+    let _ = tokio::task::spawn_blocking(move || s2.captures.stop_all()).await;
     s.auth.flush_sessions();
     let ending = if s.restart_asked() { Ending::Restart } else { Ending::Stop };
     tracing::info!("{}", if ending == Ending::Restart { "stopped, restarting" } else { "stopped" });
     Ok(ending)
+}
+
+/// Les entrées SDI captées, en accord avec les réglages et les cartes présentes.
+async fn reconcile_inputs(s: &Shared) {
+    let s = s.clone();
+    let _ = tokio::task::spawn_blocking(move || hardware::reconcile_inputs(&s)).await;
 }
 
 async fn stop(s: Shared) {

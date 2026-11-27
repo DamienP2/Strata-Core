@@ -179,6 +179,8 @@ Le matériel appartient au serveur : le Core le découvre, le règle une fois, e
 
 **Les entrées DeckLink passent par le Core.** Le pilote Blackmagic ne laisse **qu'un seul programme à la fois** capter une entrée : le second se voit refuser l'entrée. Le SDK le prévoit (état `bmdDeviceCaptureBusy`), et CG comme LiveCut le rencontrent déjà (« cannot enable the video input (in use by another program?) » dans leur code DeckLink). Avec un service par appli, deux applis ne peuvent donc pas ouvrir la même entrée SDI chacune de leur côté. Le Core **capte chaque entrée DeckLink une seule fois** et **la redistribue** aux applis sur la machine (mémoire partagée, sans copie réseau ni réencodage). Pour l'utilisateur, rien ne change : une entrée est une entrée pour toutes les applis.
 
+Fait : le crate `strata-share` (un fichier `/dev/shm/strata-sdi-<carte>-<n>` par entrée, anneau de 3 images UYVY gardées par un verrou de séquence, réveil par futex, lecteurs inscrits avec le nom de leur appli) ; le Core ouvre et ferme les captures selon les réglages et les cartes présentes ; *Cartes SDI* montre pour chaque entrée son image, son format, son timecode et les applis qui la lisent. Contrat des applis : docs/APPLIS.md. Reste : l'audio (le pont DeckLink ne le capte pas encore) et la mesure sur une vraie carte (latence, charge).
+
 - **Entrées NDI et 2110** : plusieurs applis peuvent les recevoir directement (réseau, multicast) ; le Core ne fait que les décrire.
 - **Sorties SDI** : une seule appli à la fois les pilote ; le Core montre laquelle.
 
@@ -278,7 +280,8 @@ Une appli s'appuie sur le Core, jamais l'inverse.
 ## 8. Questions ouvertes
 
 
-- **Entrées DeckLink redistribuées par le Core** (§ 5.3) : à prototyper tôt (latence, charge processeur, plusieurs applis sur la même entrée), sur une machine avec une carte.
+- **Entrées DeckLink redistribuées par le Core** (§ 5.3) : en place (mémoire partagée) ; à mesurer sur une machine avec une carte (latence, charge processeur, plusieurs applis sur la même entrée).
+- **Référence de synchronisation** : un leader unique (BB, PTP, TC, WC). Proposé : BB vers la REF des DeckLink ; PTP vers tous les serveurs (carte réseau, puis horloge système) ; timecode maison calculé depuis le PTP (ST 2059) avec le décalage de l'LTC du leader ; WC pour les appareils audio seulement. À ajouter à *Horloge* : cadence maison, heure prise sur le PTP (NTP en secours), timecode maison, bilan.
 - **Configuration minimale** : à **calculer** en mesurant, sur un serveur de référence, le Core seul puis chaque appli à vide et en charge typique. Le README donnera le minimum du Core et ce qu'ajoute chaque appli.
 
 ## 9. Prochaines étapes

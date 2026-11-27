@@ -57,5 +57,7 @@ tower = { version = "0.5", features = ["util"] }
 # Matériel : les cartes DeckLink (pont vers le SDK), la bibliothèque NDI (chargée au lancement).
 strata-decklink.workspace = true
 libloading = "0.8"
+jpeg-encoder = "0.6"
+strata-share.workspace = true
 
 [dev-dependencies]

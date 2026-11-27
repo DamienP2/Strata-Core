@@ -29,7 +29,9 @@ fn server() -> Srv {
     // Ce binaire de test est à lui seul : la variable ne gêne aucun autre test.
     std::env::set_var("STRATA_FAKE_DECKLINK", "quad2,minimonitor");
     let dir = std::env::temp_dir().join(format!("strata-hw-{}", strata_core::new_id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(dir.join("shm")).unwrap();
+    // Les entrées partagées : dans le dossier du test, pas dans /dev/shm.
+    std::env::set_var("STRATA_SHARE_DIR", dir.join("shm"));
     let s = AppState::new(dir.clone());
     let admin = s.auth.add(NewUser { username: "admin".into(), display_name: String::new(), admin: true, password: Some("password1".into()) }).unwrap();
     let cookie = format!("strata_session={}", s.auth.open_session(&admin.id));
@@ -110,7 +112,9 @@ async fn hardware_settings_and_what_apps_read() {
     assert_eq!(st, StatusCode::OK, "{v}");
     let card = &v["sdi"][0];
     assert_eq!((card["name"].as_str(), card["present"].as_bool()), (Some("Plateau"), Some(true)));
-    assert_eq!(card["connectors"][0], json!({"number": 1, "name": "Caméra 1", "function": "input", "device": quad["devices"][0]}));
+    let share = srv.dir.join("shm").join(format!("strata-sdi-{}-1", quad_id.to_ascii_lowercase()));
+    assert_eq!(card["connectors"][0], json!({"number": 1, "name": "Caméra 1", "function": "input", "device": quad["devices"][0], "share": share}));
+    assert_eq!(card["connectors"][1]["share"], Value::Null);
     assert_eq!(card["connectors"][1]["function"], "output");
     assert_eq!(v["network"]["ndi"]["ip"], "127.0.0.1");
     assert_eq!(v["flows"][0]["blue"], "239.20.2.1:5004");
@@ -120,6 +124,36 @@ async fn hardware_settings_and_what_apps_read() {
     assert_eq!(st, StatusCode::FORBIDDEN);
     let (st, _) = call(&srv.remote, "GET", "/api/hardware/shared", host, c, None).await;
     assert_eq!(st, StatusCode::OK, "administrators too");
+
+    // L'entrée est captée (mire simulée) : son état, son aperçu.
+    let (st, v) = call(&srv.remote, "GET", "/api/hardware/inputs", host, c, None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["inputs"].as_array().unwrap().len(), 1);
+    assert_eq!((v["inputs"][0]["connector"].as_u64(), v["inputs"][0]["simulated"].as_bool()), (Some(1), Some(true)));
+    let url = format!("/api/hardware/inputs/{quad_id}/1/preview.jpg");
+    let mut st = StatusCode::NOT_FOUND;
+    for _ in 0..100 {
+        st = call(&srv.remote, "GET", &url, host, c, None).await.0;
+        if st == StatusCode::OK {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    }
+    assert_eq!(st, StatusCode::OK);
+    let (st, _) = call(&srv.remote, "GET", &format!("/api/hardware/inputs/{quad_id}/2/preview.jpg"), host, c, None).await;
+    assert_eq!(st, StatusCode::NOT_FOUND, "an output has no picture");
+    // Plus d'entrée dans les réglages : la capture s'arrête, le partage disparaît.
+    let (st, _) = call(
+        &srv.remote,
+        "PUT",
+        "/api/hardware",
+        host,
+        c,
+        Some(json!({"cards": [], "network": {"ndi": "lo"}, "ndi": {"discovery": "10.0.0.2", "machine": "REGIE-1"}})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(!share.exists());
 
     // L'horloge répond toujours, même sans linuxptp (avec la raison).
     let (st, v) = call(&srv.remote, "GET", "/api/hardware/clock", host, c, None).await;

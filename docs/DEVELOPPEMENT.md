@@ -61,6 +61,14 @@ Des cartes simulées, pour travailler sur *Réglages › Matériel* :
 STRATA_FAKE_DECKLINK=quad2,8kpro,duo2,minimonitor STRATA_FAKE_NICS=connectx,e810,i350 cargo run -p strata-core-server -- --data-dir ./data
 ```
 
+Chaque connecteur simulé réglé en entrée donne une mire animée (720p25, avec timecode), partagée
+dans `/dev/shm` comme une vraie entrée (`STRATA_SHARE_DIR` pour un autre dossier). Pour la lire
+comme une appli :
+
+```bash
+STRATA_APP_ID=livecut cargo run -p strata-share --example read -- /dev/shm/strata-sdi-<carte>-1
+```
+
 Le pont DeckLink (`crates/strata-decklink`) se compile avec g++ ; sans compilateur C++, le Core se
 construit sans lui (avertissement). Le pilote Desktop Video n'est nécessaire qu'à l'exécution.
 

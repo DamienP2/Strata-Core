@@ -50,6 +50,9 @@ const SHAPED: [RegExp, string, string[]][] = [
   [/^cannot replace (.+): (.+)$/, 'Cannot replace {path}: {why}', ['path', 'why']],
   [/^cannot keep the current Core: (.+)$/, 'Cannot keep the current Core: {why}', ['why']],
   [/^release (.+) has no Core archive$/, 'Release {tag} has no Core archive', ['tag']],
+  // Entrées partagées
+  [/^cannot open the input: (.+)$/, 'cannot open the input: {why}', ['why']],
+  [/^cannot share the input \((.+)\): (.+)$/, 'cannot share the input ({path}): {why}', ['path', 'why']],
   [/^the certificate is valid only from (.+)$/, 'The certificate is valid only from {date}', ['date']],
 ];
 

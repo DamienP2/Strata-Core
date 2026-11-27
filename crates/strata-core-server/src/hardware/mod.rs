@@ -11,16 +11,20 @@
 //! - **ST 2110** : les flux (nom, sens, adresses multicast : rouge et bleue en 2022-7, une seule
 //!   et son port sinon).
 //! - **Horloge** : le domaine PTP, le décalage TAI, et l'état de NTP et PTP (`sync.rs`).
+//! - **Entrées** : chaque entrée SDI captée une fois par le Core et partagée avec les applis
+//!   (`capture.rs`, `strata-share`).
 //!
 //! Gardé dans `hardware.json`. Les applis le lisent par `GET /api/hardware/shared` (docs/APPLIS.md).
+pub mod capture;
 pub mod decklink;
 pub mod ndi;
 pub mod net;
 pub mod sync;
 
 use axum::{
-    extract::{ConnectInfo, State},
-    http::{HeaderMap, StatusCode},
+    extract::{ConnectInfo, Path as UrlPath, State},
+    http::{header, HeaderMap, StatusCode},
+    response::IntoResponse,
     routing::get,
     Json, Router,
 };
@@ -337,6 +341,33 @@ pub fn routes() -> Router<Shared> {
         .route("/api/hardware/clock", get(clock))
         .route("/api/hardware/ndi/sources", get(ndi_sources))
         .route("/api/hardware/shared", get(shared))
+        .route("/api/hardware/inputs", get(inputs))
+        .route("/api/hardware/inputs/{card}/{n}/preview.jpg", get(preview))
+}
+
+/// Tient les captures en accord avec les réglages et les cartes présentes (bloquant).
+pub fn reconcile_inputs(s: &crate::state::AppState) {
+    let cfg = HardwareConfig::load(&s.data_dir);
+    let (detected, _, simulated) = decklink::detect();
+    s.captures.reconcile(capture::wanted(&cfg, &detected, simulated));
+}
+
+/// Les entrées captées : signal, format, images par seconde, applis qui les lisent.
+async fn inputs(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
+    require(me.admin)?;
+    let mut list = s.captures.list();
+    for r in list.iter_mut().flat_map(|i| i.readers.iter_mut()) {
+        r.name = s.apps.get(&r.app).map(|a| a.manifest.name);
+    }
+    Ok(Json(json!({ "inputs": list })))
+}
+
+/// L'image la plus récente d'une entrée, en petit (JPEG).
+async fn preview(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath((card, n)): UrlPath<(String, u32)>) -> ApiResult<impl IntoResponse> {
+    require(me.admin)?;
+    let share = s.captures.share_of(&card, n).ok_or((StatusCode::NOT_FOUND, "this input is not captured".to_string()))?;
+    let jpeg = blocking(move || capture::preview(&share, 480)).await?.map_err(|e| (StatusCode::NOT_FOUND, e))?;
+    Ok(([(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "no-store")], jpeg))
 }
 
 async fn read(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
@@ -352,6 +383,7 @@ async fn write(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(mut c
         let (cards, _, _) = decklink::detect();
         cfg.check(&cards)?;
         strata_core::files::write_json(&HardwareConfig::path(&s2.data_dir), &cfg, false).map_err(|e| format!("cannot save the hardware settings: {e}"))?;
+        reconcile_inputs(&s2);
         let ndi_changed = ndi::write_settings(&s2.data_dir, &cfg.ndi, &cfg.network.ndi);
         Ok::<_, String>((snapshot(&s2), ndi_changed))
     })
@@ -407,6 +439,7 @@ async fn shared(State(s): State<Shared>, ConnectInfo(peer): ConnectInfo<SocketAd
                         "name": k.name,
                         "function": k.function,
                         "device": d.and_then(|d| d.devices.get(i)),
+                        "share": s2.captures.share_of(&c.id, i as u32 + 1),
                     })).collect::<Vec<_>>(),
                 })
             })

@@ -456,4 +456,18 @@ export const fr: Record<string, string> = {
   'this group name is already taken': 'Ce nom de groupe est déjà pris.',
   'the group name is too long (64 characters at most)': 'Le nom du groupe est trop long (64 caractères au plus).',
   'no such group': 'Ce groupe n’existe plus.',
+  // Entrées partagées
+  'Shared inputs': 'Entrées partagées',
+  'Captured once by the Core, read by the apps': 'Captées une fois par le Core, lues par les applis',
+  'test pattern': 'mire',
+  Error: 'Erreur',
+  'No signal': 'Pas de signal',
+  'Waiting for a signal': 'En attente du signal',
+  'No picture': 'Pas d’image',
+  fps: 'i/s',
+  'No app reads it': 'Aucune appli ne la lit',
+  'Read by': 'Lue par',
+  'a program': 'un programme',
+  'cannot open the input: {why}': 'Impossible d’ouvrir l’entrée : {why}',
+  'cannot share the input ({path}): {why}': 'Impossible de partager l’entrée ({path}) : {why}',
 };

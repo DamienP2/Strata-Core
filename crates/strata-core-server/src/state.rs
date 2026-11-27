@@ -29,6 +29,8 @@ pub struct AppState {
     core_port: AtomicU16,
     /// L'état de NTP et PTP (Matériel › Horloge).
     pub clock: crate::hardware::sync::Watch,
+    /// Les entrées SDI captées et partagées.
+    pub captures: crate::hardware::capture::Captures,
     /// Les mises à jour du Core et des applis.
     pub updates: Updates,
     /// Le HTTPS : certificat et écoute.
@@ -54,6 +56,7 @@ impl AppState {
             tls: Tls::new(&data_dir),
             updates: Updates::default(),
             clock: Default::default(),
+            captures: Default::default(),
             restart: AtomicBool::new(false),
             restart_signal: tokio::sync::Notify::new(),
             started_at: Instant::now(),
