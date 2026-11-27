@@ -320,36 +320,55 @@ pub struct VideoReader {
 }
 
 impl VideoReader {
-    /// L'image la plus récente, en v210 (`v210_stride(width)` octets par ligne), trames
-    /// entrelacées remises ensemble. None si rien n'a été écrit depuis `fresh`.
-    pub fn latest(&self, fresh: Duration) -> Option<Vec<u8>> {
+    /// L'image la plus récente, lue en place dans MXL (sans copie) : `f(image, None)`, ou en
+    /// entrelacé `f(trame du haut, Some(trame du bas))` (chacune `v210_stride(width)` octets par
+    /// ligne, `grain_lines()` lignes). None si rien n'a été écrit depuis `fresh`.
+    pub fn with_latest<R>(&self, fresh: Duration, f: impl FnOnce(&[u8], Option<&[u8]>) -> R) -> Option<R> {
         let head = self.grains.get_runtime_info().ok()?.headIndex;
         let now = self.inst.get_current_index(&self.rate);
         let age = now.saturating_sub(head) as f64 * self.rate.denominator as f64 / self.rate.numerator.max(1) as f64;
         if age > fresh.as_secs_f64() {
             return None;
         }
-        let stride = v210_stride(self.video.width);
-        let lines = self.video.grain_lines() as usize;
+        let size = v210_stride(self.video.width) * self.video.grain_lines() as usize;
         // Sans attendre : `get_complete_grain` du crate tourne sans fin sur un grain resté partiel
         // (un écrivain arrêté ou remplacé en plein grain) et bloque qui le lit. Les grains jusqu'à
         // la tête sont validés en entier par l'écrivain.
-        let read = |i: u64| -> Option<Vec<u8>> {
-            let g = self.grains.get_grain_non_blocking(i).ok()?;
-            (g.index == i && g.payload.len() >= stride * lines).then(|| g.payload[..stride * lines].to_vec())
-        };
+        let grain = |i: u64| self.grains.get_grain_non_blocking(i).ok().filter(|g| g.index == i && g.payload.len() >= size);
         if !self.video.interlaced {
-            return read(head);
+            let g = grain(head)?;
+            return Some(f(&g.payload[..size], None));
         }
         // Les deux trames d'une même image : la paire (paire, impaire) la plus récente.
         let first = if head % 2 == 1 { head - 1 } else { head.saturating_sub(2) };
-        let (a, b) = (read(first)?, read(first + 1)?);
-        let mut out = vec![0u8; stride * lines * 2];
-        for y in 0..lines {
-            out[(2 * y) * stride..(2 * y + 1) * stride].copy_from_slice(&a[y * stride..(y + 1) * stride]);
-            out[(2 * y + 1) * stride..(2 * y + 2) * stride].copy_from_slice(&b[y * stride..(y + 1) * stride]);
-        }
-        Some(out)
+        let (a, b) = (grain(first)?, grain(first + 1)?);
+        Some(f(&a.payload[..size], Some(&b.payload[..size])))
+    }
+
+    /// L'image la plus récente copiée dans `out` (réutilisé : pas d'allocation à chaque image),
+    /// trames entrelacées remises ensemble. Faux si rien n'a été écrit depuis `fresh`.
+    pub fn latest_into(&self, fresh: Duration, out: &mut Vec<u8>) -> bool {
+        let stride = v210_stride(self.video.width);
+        let lines = self.video.grain_lines() as usize;
+        self.with_latest(fresh, |a, b| {
+            out.resize(stride * self.video.height as usize, 0);
+            match b {
+                None => out[..a.len()].copy_from_slice(a),
+                Some(b) => {
+                    for y in 0..lines {
+                        out[(2 * y) * stride..(2 * y + 1) * stride].copy_from_slice(&a[y * stride..(y + 1) * stride]);
+                        out[(2 * y + 1) * stride..(2 * y + 2) * stride].copy_from_slice(&b[y * stride..(y + 1) * stride]);
+                    }
+                }
+            }
+        })
+        .is_some()
+    }
+
+    /// L'image la plus récente, dans un nouveau tampon (voir [`Self::latest_into`]).
+    pub fn latest(&self, fresh: Duration) -> Option<Vec<u8>> {
+        let mut out = Vec::new();
+        self.latest_into(fresh, &mut out).then_some(out)
     }
 
     /// La dernière lecture d'une appli (ns TAI), d'après MXL : quelqu'un lit-il ce flux ?

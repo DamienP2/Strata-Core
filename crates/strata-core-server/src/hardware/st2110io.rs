@@ -420,12 +420,29 @@ fn send(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: &At
         l
     };
     let mut reader: Option<strata_mxl::VideoReader> = None;
-    let mut frame: Option<Vec<u8>> = None;
-    let mut fresh = Instant::now() - Duration::from_secs(10);
+    // En entrelacé, la trame du bas de l'image en cours, gardée pour le paquet suivant (tampon
+    // réutilisé).
+    let mut bottom: Vec<u8> = Vec::new();
+    let mut live = false;
     let mut frames = 0u64;
     let mut second = false;
     let mut tick = Instant::now();
     let period = Duration::from_secs_f64(v.rate.1 as f64 / v.rate.0.max(1) as f64);
+    let lines = if v.interlaced { v.height as usize / 2 } else { v.height as usize };
+    let black_field = black.repeat(lines);
+    // Des lignes de `stride` octets vers le tampon de MTL (une seule copie, ligne à ligne si
+    // les pas diffèrent).
+    let put = |dst: &mut [u8], ls: usize, src: &[u8]| {
+        if ls == stride {
+            let n = (lines * stride).min(dst.len()).min(src.len());
+            dst[..n].copy_from_slice(&src[..n]);
+        } else {
+            for y in 0..lines {
+                let d = &mut dst[y * ls..y * ls + stride.min(ls)];
+                d.copy_from_slice(&src[y * stride..y * stride + d.len()]);
+            }
+        }
+    };
     while !stop.load(Ordering::Relaxed) {
         // Le flux de l'appli : pris s'il a la taille du flux envoyé (la cadence de l'appli peut
         // différer : on envoie sa dernière image à la cadence du flux).
@@ -444,24 +461,52 @@ fn send(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: &At
         } else {
             reader = None;
         }
-        // Une nouvelle image par image du flux (en entrelacé : avant sa première trame).
-        if !second {
-            if let Some(img) = reader.as_ref().filter(|_| mismatch.is_none()).and_then(|r| r.latest(period * 3)) {
-                frame = Some(img);
-                fresh = Instant::now();
-            } else if fresh.elapsed() > Duration::from_secs(1) {
-                frame = None;
-            }
-        }
         let Some(mut out) = tx.next() else { continue };
-        let rows = out.height as usize;
         let ls = out.linesize;
-        for y in 0..rows {
-            let src_row = if v.interlaced { 2 * y + second as usize } else { y };
-            let dst = &mut out.data[y * ls..y * ls + stride.min(ls)];
-            match &frame {
-                Some(img) => dst.copy_from_slice(&img[src_row * stride..src_row * stride + dst.len()]),
-                None => dst.copy_from_slice(&black[..dst.len()]),
+        if second {
+            // La trame du bas, gardée avec celle du haut.
+            if live {
+                put(out.data, ls, &bottom);
+            } else {
+                put(out.data, ls, &black_field);
+            }
+        } else {
+            // L'image la plus récente, copiée de MXL droit dans le tampon de MTL. Rien de nouveau :
+            // la dernière (toujours dans MXL) pendant une seconde, puis du noir.
+            let src = reader.as_ref().filter(|_| mismatch.is_none());
+            // L'image de l'appli (une image, ou ses deux trames) vers ce flux (progressif, ou une
+            // trame maintenant et l'autre au paquet suivant) : une copie par ligne, pas plus.
+            let mut fill = |a: &[u8], b: Option<&[u8]>| {
+                let data = &mut *out.data;
+                fn row(src: &[u8], y: usize, stride: usize) -> &[u8] {
+                    &src[y * stride..(y + 1) * stride]
+                }
+                match (v.interlaced, b) {
+                    (false, None) => put(data, ls, a),
+                    (false, Some(b)) => {
+                        for y in 0..lines {
+                            let src = if y % 2 == 0 { row(a, y / 2, stride) } else { row(b, y / 2, stride) };
+                            data[y * ls..y * ls + stride.min(ls)].copy_from_slice(&src[..stride.min(ls)]);
+                        }
+                    }
+                    (true, Some(b)) => {
+                        put(data, ls, a);
+                        bottom.clear();
+                        bottom.extend_from_slice(b);
+                    }
+                    (true, None) => {
+                        bottom.resize(lines * stride, 0);
+                        for y in 0..lines {
+                            data[y * ls..y * ls + stride.min(ls)].copy_from_slice(&row(a, 2 * y, stride)[..stride.min(ls)]);
+                            bottom[y * stride..(y + 1) * stride].copy_from_slice(row(a, 2 * y + 1, stride));
+                        }
+                    }
+                }
+            };
+            live = src.and_then(|r| r.with_latest(period * 3, &mut fill)).is_some()
+                || src.and_then(|r| r.with_latest(Duration::from_secs(1), &mut fill)).is_some();
+            if !live {
+                put(out.data, ls, &black_field);
             }
         }
         out.second_field = second;
@@ -472,7 +517,7 @@ fn send(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: &At
         }
         if tick.elapsed() >= Duration::from_secs(1) {
             tick = Instant::now();
-            let on = frame.is_some();
+            let on = live;
             set(&|s| {
                 s.state = if on { IoState::Running } else { IoState::Idle };
                 s.frames = frames;

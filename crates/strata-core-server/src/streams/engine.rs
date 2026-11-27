@@ -877,6 +877,7 @@ fn feed_encoder(
     });
     let period = Duration::from_secs_f64(feed.rate.1.max(1) as f64 / feed.rate.0.max(1) as f64);
     let black = Arc::new(black_v210(feed));
+    let mut pool: Vec<Arc<Vec<u8>>> = (0..4).map(|_| Arc::new(Vec::new())).collect();
     let mut last: Arc<Vec<u8>> = black.clone();
     let mut last_live = Instant::now() - Duration::from_secs(10);
     let mut areader: Option<strata_mxl::AudioReader> = None;
@@ -910,8 +911,16 @@ fn feed_encoder(
         } else {
             areader = None;
         }
-        if let Some(v210) = reader.as_ref().and_then(|r| r.latest(period * 3)) {
-            last = Arc::new(v210);
+        // Un tampon libre (que le fil d'écriture a rendu) reçoit la nouvelle image : pas
+        // d'allocation de 5 Mo à chaque image.
+        let slot = pool.iter_mut().find(|b| Arc::strong_count(b) == 1 && !Arc::ptr_eq(b, &last));
+        let fresh_frame = match (slot, reader.as_ref()) {
+            (Some(b), Some(r)) => r.latest_into(period * 3, Arc::get_mut(b).expect("only owner")).then(|| b.clone()),
+            (None, Some(r)) => r.latest(period * 3).map(Arc::new),
+            _ => None,
+        };
+        if let Some(img) = fresh_frame {
+            last = img;
             last_live = Instant::now();
         } else if last_live.elapsed() > Duration::from_secs(1) {
             last = black.clone();

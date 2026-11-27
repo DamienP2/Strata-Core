@@ -198,6 +198,7 @@ fn run(w: &WantedOut, mxl: &Mxl, stop: &AtomicBool, status: &Mutex<OutStatus>) {
     let mut out: Option<(decklink_out::Out, Video)> = None;
     let mut last_new = Instant::now() - Duration::from_secs(10);
     let mut black_frame: Option<(Video, Vec<u8>)> = None;
+    let mut woven: Vec<u8> = Vec::new();
     let set = |f: &dyn Fn(&mut OutStatus)| f(&mut status.lock().unwrap());
     while !stop.load(Ordering::Relaxed) {
         // Le flux de l'appli : ouvert quand il apparaît, fermé quand il disparaît.
@@ -234,18 +235,28 @@ fn run(w: &WantedOut, mxl: &Mxl, stop: &AtomicBool, status: &Mutex<OutStatus>) {
         // Une image de la carte : la plus récente du flux, sinon (au-delà d'une seconde) du noir.
         o.wait(Duration::from_millis(200), v);
         let period = Duration::from_secs_f64(v.rate.1 as f64 / v.rate.0.max(1) as f64);
-        let frame = reader.as_ref().and_then(|r| r.latest(period * 3));
         let stride = strata_mxl::v210_stride(v.width);
-        match frame {
-            Some(f) => {
+        // Progressif : poussé à la carte droit depuis MXL ; entrelacé : les deux trames remises
+        // ensemble dans un tampon réutilisé (pas d'allocation à chaque image).
+        let got = reader.as_ref().is_some_and(|r| {
+            if r.video.interlaced {
+                r.latest_into(period * 3, &mut woven) && {
+                    o.push(&woven, stride);
+                    true
+                }
+            } else {
+                r.with_latest(period * 3, |a, _| o.push(a, stride)).is_some()
+            }
+        });
+        match got {
+            true => {
                 last_new = Instant::now();
-                o.push(&f, stride);
                 set(&|s| {
                     s.state = OutState::Playing;
                     s.frames += 1;
                 });
             }
-            None if last_new.elapsed() > Duration::from_secs(1) => {
+            false if last_new.elapsed() > Duration::from_secs(1) => {
                 if black_frame.as_ref().is_none_or(|(bv, _)| bv != v) {
                     black_frame = Some((*v, black(v)));
                 }
@@ -253,7 +264,7 @@ fn run(w: &WantedOut, mxl: &Mxl, stop: &AtomicBool, status: &Mutex<OutStatus>) {
                 set(&|s| s.state = OutState::Black);
             }
             // Un raté : la carte répète l'image d'avant.
-            None => {}
+            false => {}
         }
     }
 }
