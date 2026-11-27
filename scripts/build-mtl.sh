@@ -4,7 +4,8 @@
 #
 #   scripts/build-mtl.sh <dossier de travail> [<dossier de sortie>]
 #
-# La sortie reçoit lib/mtl/ (libmtl.so et les bibliothèques DPDK), prête à archiver.
+# La sortie reçoit lib/mtl/lib/ (libmtl.so, les bibliothèques et les pilotes DPDK), prête à
+# archiver : la même disposition que sous /opt/strata/lib/mtl.
 set -euo pipefail
 WORK=$(realpath "$1")
 OUT=$(realpath "${2:-$WORK/out}")
@@ -21,8 +22,9 @@ if [ ! -d dpdk ]; then
   git clone -q --depth 1 --branch "$DPDK_VERSION" https://github.com/DPDK/dpdk.git dpdk
   for p in mtl/patches/dpdk/${DPDK_VERSION#v}/*.patch; do git -C dpdk apply "$(realpath "$p")"; done
 fi
-# Les bibliothèques se trouvent entre elles ($ORIGIN) ; les pilotes au chemin final.
-export LDFLAGS='-Wl,-rpath,$ORIGIN'
+# Les bibliothèques se trouvent entre elles ($ORIGIN, et les pilotes deux crans plus haut) ;
+# DPDK cherche ses pilotes au chemin final (/opt/strata/lib/mtl/lib/dpdk/pmds-*).
+export LDFLAGS='-Wl,-rpath,$ORIGIN:$ORIGIN/../..'
 cd "$WORK/dpdk"
 rm -rf build
 meson setup build --prefix="$PREFIX" --libdir=lib -Dplatform=generic -Dtests=false -Ddisable_apps='*' \
@@ -39,9 +41,9 @@ ninja -C build-strata
 DESTDIR="$WORK/stage" ninja -C build-strata install
 # La sortie : les bibliothèques (sans en-têtes ni pkg-config), les pilotes DPDK, les licences.
 rm -rf "$OUT/lib/mtl"
-mkdir -p "$OUT/lib/mtl"
-cp -a "$WORK/stage$PREFIX/lib/." "$OUT/lib/mtl/"
-rm -rf "$OUT/lib/mtl/pkgconfig"
+mkdir -p "$OUT/lib/mtl/lib"
+cp -a "$WORK/stage$PREFIX/lib/." "$OUT/lib/mtl/lib/"
+rm -rf "$OUT/lib/mtl/lib/pkgconfig"
 find "$OUT/lib/mtl" -name '*.a' -delete
 cp "$WORK/mtl/LICENSE" "$OUT/lib/mtl/LICENSE-MTL.txt"
 cp "$WORK/dpdk/license/bsd-3-clause.txt" "$OUT/lib/mtl/LICENSE-DPDK.txt" 2>/dev/null || true

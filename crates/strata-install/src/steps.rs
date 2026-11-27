@@ -338,6 +338,9 @@ net.core.rmem_default = 1048576\n\
 net.core.wmem_max = 33554432\n\
 net.core.netdev_max_backlog = 16384\n";
 
+/// Ce dont MTL et DPDK (livrés avec le Core, ST 2110) ont besoin sur le système.
+const MTL_PKGS: [&str; 5] = ["libnuma1", "libjson-c5", "libxdp1", "libbpf1", "libelf1t64"];
+
 // ---------- Les étapes ----------
 
 /// Ce que fait une étape : `say` donne l'avancement ; le résultat dit ce qui a été fait.
@@ -674,6 +677,7 @@ pub fn steps(plan: &Plan) -> Vec<Step> {
     match plan.action.clone() {
         Action::Install => {
             let mut pkgs = vec!["chrony", "linuxptp", "ethtool", "polkitd"];
+            pkgs.extend(MTL_PKGS);
             if plan.ndi.is_some() {
                 pkgs.push("avahi-daemon");
             }
@@ -723,6 +727,12 @@ pub fn steps(plan: &Plan) -> Vec<Step> {
             v.push(step("Démarrage du service", false, |ctx, _| start(ctx, false)));
         }
         Action::Update => {
+            v.push(step("Bibliothèques du ST 2110", true, |ctx, say| {
+                let mut args = vec!["install", "-y", "-q"];
+                args.extend(MTL_PKGS);
+                ctx.run_live("apt-get", &args, say)?;
+                Ok(MTL_PKGS.join(", "))
+            }));
             let p = plan.clone();
             v.push(step("Strata Core", false, move |ctx, say| put_core(ctx, &p, say)));
             v.push(step("Fichiers du système", false, |ctx, _| system_files(ctx)));

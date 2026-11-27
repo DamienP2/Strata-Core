@@ -200,6 +200,18 @@ async fn keep(id: String, w: Arc<Watch>, l: Launch, mut stop: watch::Receiver<bo
         // Son propre groupe de processus : l'arrêt atteint aussi ses enfants.
         #[cfg(unix)]
         cmd.process_group(0);
+        // Aucun descripteur du Core ne passe à l'appli (les sockets de MTL ne sont pas fermés à
+        // l'exec : une appli les garderait après l'arrêt du Core, et le port resterait pris).
+        // CLOSE_RANGE_CLOEXEC : marqués, pas fermés, la remontée d'erreur d'exec reste intacte.
+        #[cfg(target_os = "linux")]
+        // SAFETY: only an async-signal-safe syscall between fork and exec.
+        unsafe {
+            cmd.pre_exec(|| {
+                const CLOSE_RANGE_CLOEXEC: libc::c_uint = 1 << 2;
+                let _ = libc::syscall(libc::SYS_close_range, 3 as libc::c_uint, libc::c_uint::MAX, CLOSE_RANGE_CLOEXEC);
+                Ok(())
+            });
+        }
         let started = Instant::now();
         match cmd.spawn() {
             Err(e) => {

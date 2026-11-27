@@ -331,16 +331,26 @@ fn send(f: &FlowPlan, mtl: &Mtl, mxl: &Mxl, stop: &AtomicBool, set: Setter) -> R
     let mut second = false;
     let period = Duration::from_secs_f64(v.rate.1 as f64 / v.rate.0.max(1) as f64);
     while !stop.load(Ordering::Relaxed) {
+        // Le flux de l'appli : pris s'il a la taille du flux envoyé (la cadence de l'appli peut
+        // différer : on envoie sa dernière image à la cadence du flux).
+        let mut mismatch = None;
         if mxl.is_active(id) {
-            if reader.as_ref().is_none_or(|r| r.video != mxl_video(&v)) {
-                reader = mxl.video_reader(id).ok().filter(|r| r.video == mxl_video(&v));
+            if reader.is_none() {
+                reader = mxl.video_reader(id).ok();
+            }
+            if let Some(r) = reader.as_ref().filter(|r| (r.video.width, r.video.height) != (v.width, v.height)) {
+                mismatch = Some(format!(
+                    "the app writes {}, the flow is set to {}",
+                    format_name(&strata_mtl::Video { width: r.video.width, height: r.video.height, rate: r.video.rate, interlaced: r.video.interlaced }),
+                    format_name(&v)
+                ));
             }
         } else {
             reader = None;
         }
         // Une nouvelle image par image du flux (en entrelacé : avant sa première trame).
         if !second {
-            if let Some(img) = reader.as_ref().and_then(|r| r.latest(period * 3)) {
+            if let Some(img) = reader.as_ref().filter(|_| mismatch.is_none()).and_then(|r| r.latest(period * 3)) {
                 frame = Some(img);
                 fresh = Instant::now();
             } else if fresh.elapsed() > Duration::from_secs(1) {
@@ -369,7 +379,7 @@ fn send(f: &FlowPlan, mtl: &Mtl, mxl: &Mxl, stop: &AtomicBool, set: Setter) -> R
             set(&|s| {
                 s.state = if on { IoState::Running } else { IoState::Idle };
                 s.frames = frames;
-                s.error = None;
+                s.error = mismatch.clone();
             });
         }
     }
