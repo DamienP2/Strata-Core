@@ -27,6 +27,8 @@ Une nouvelle appli (Media, Call) démarre directement sur le Core au lieu de rec
 | Forme du code partagé | un **crate Rust** (dépendance git sur une étiquette de version de Strata-Core) + un **paquet web** (React / TypeScript, fichier `strata-ui-<version>.tgz` joint à chaque release de Strata-Core) |
 | Compilation | binaires construits sur **Ubuntu 24.04** par GitHub Actions, publiés en **releases GitHub** ; jamais compilés sur les serveurs. Les paquets des applis sont refaits pour 24.04 |
 | Installateur | **programme Rust** plein terminal (§ 5.7) |
+| Onglets | le cockpit ouvre **chaque appli dans son propre onglet** du navigateur (un onglet par appli, réutilisé) |
+| Plusieurs serveurs | **un seul cockpit** pour tous les serveurs : un serveur **maître** affiche le cockpit et propose les applis des serveurs **membres** ; alertes et ressources restent sur chaque machine (§ 4 bis, proposition à valider) |
 | Cockpit | chaque utilisateur n'y voit **que les applis actives où il a des droits** ; chaque appli répond au Core « cet utilisateur a-t-il accès ? » |
 | Comptes | le Core gère **qui sont les utilisateurs** (comptes, SSO, groupes) ; **chaque appli gère ce qu'ils peuvent y faire** (autorisations des utilisateurs et des groupes dans ses propres réglages) |
 | Matériel | **partagé** : une ressource a **la même fonction pour toutes les applis** (une entrée SDI reste une entrée pour toutes) |
@@ -39,7 +41,7 @@ Une nouvelle appli (Media, Call) démarre directement sur le Core au lieu de rec
 La page qu'on ouvre en tapant le nom du serveur (`serveur.local`).
 
 **Pour tout le monde**, après la connexion :
-- les **applis actives où il a des droits**, en grandes tuiles : icône, nom, état (en marche, en erreur) ; un clic ouvre l'appli à son adresse (`livecut.serveur.local`). Les droits étant gérés dans les applis, chaque appli répond au Core « cet utilisateur a-t-il accès ? » ;
+- les **applis actives où il a des droits**, en grandes tuiles : icône, nom, état (en marche, en erreur) ; un clic ouvre l'appli **dans un nouvel onglet**, à son adresse (`livecut.serveur.local`). Chaque appli a son onglet attitré : recliquer sur la tuile ramène à l'onglet déjà ouvert au lieu d'en créer un autre ; le cockpit reste ouvert dans le sien. Les droits étant gérés dans les applis, chaque appli répond au Core « cet utilisateur a-t-il accès ? » ;
 - la barre du haut commune : marque, pastille de connexion, menu utilisateur (langue, thème, déconnexion).
 
 **Pour les administrateurs**, en plus, l'accès aux **réglages du serveur** :
@@ -72,6 +74,58 @@ Avant d'écrire le code, il faut une **maquette HTML du cockpit et de la barre c
 - **Recommandation** : un **nom DNS de l'entreprise** par serveur, avec **un enregistrement générique** (`*.serveur.domaine` → adresse du serveur). Une seule ligne dans le DNS par serveur, et toutes les applis, présentes et futures, sont joignables.
 - mDNS (`.local`) reste proposé pour les tests et les petits réseaux.
 - **Par adresse IP**, seul le cockpit répond ; ouvrir une appli demande le nom.
+
+## 4 bis. Plusieurs serveurs : un seul cockpit (proposition à valider)
+
+Quand une régie a plusieurs serveurs physiques, on veut **un seul cockpit** qui propose toutes les applis de tous les serveurs.
+
+### Deux rôles
+
+| | **Maître** | **Membre** |
+| --- | --- | --- |
+| Cockpit | affiché : les applis de **tous** les serveurs | éteint : son adresse renvoie vers le cockpit du maître |
+| Connexion des utilisateurs | **c'est lui qui connecte** (comptes, groupes, SSO) | délègue au maître |
+| Applis, matériel, santé, alertes, mises à jour | les siens | les siens, **sur la machine** |
+| Réglages du serveur | les siens + la liste des serveurs | les siens (administrateurs) |
+
+Un serveur seul est un maître sans membre : rien ne change pour lui. **Activer ou non le cockpit**, c'est donc choisir le rôle du serveur (Réglages › Serveur › Cockpit, et une question de l'installateur).
+
+### Rattacher un serveur
+
+1. Sur le maître : *Serveurs › Ajouter un serveur* donne un **code d'invitation** à usage unique (valable quelques minutes).
+2. Sur le nouveau serveur (réglages ou installateur) : *Rejoindre un cockpit*, adresse du maître + code.
+3. Les deux serveurs échangent leurs clés ; ensuite, ils se parlent en HTTPS authentifié dans les deux sens. Le code ne sert plus.
+
+Détacher un membre le rend à nouveau autonome (son cockpit se rallume).
+
+### Ce que le maître sait des membres
+
+- **Seulement ce qu'il faut au cockpit** : nom du serveur, applis actives, leurs adresses, leur état (en marche, injoignable).
+- Le **membre ouvre la connexion vers le maître** (pas l'inverse) et la garde ouverte : un pare-feu entre les deux ne gêne que dans un sens, et le maître voit tout de suite un membre qui disparaît.
+- Pour savoir quelles applis montrer à un utilisateur, le maître demande au membre, qui demande à ses applis « cet utilisateur a-t-il accès ? ».
+- **Alertes, ressources, journaux, matériel, mises à jour restent sur chaque machine.** Dans le cockpit, la liste des serveurs (administrateurs) donne pour chacun : joignable ou non, et un lien vers **ses propres réglages**, qui s'ouvrent dans un nouvel onglet.
+
+### Une seule connexion pour tous les serveurs
+
+Les applis d'un membre ont leur adresse sur ce membre (`livecut.strata02.regie.exemple.fr`). Le cookie de session du maître n'y est pas valable (autre nom de domaine). Le maître joue donc le rôle d'**un fournisseur d'identité, comme Okta** :
+
+1. l'utilisateur ouvre LiveCut sur `strata02` depuis le cockpit ;
+2. LiveCut n'a pas encore de session : il renvoie vers le maître ;
+3. le maître, où l'utilisateur est déjà connecté, renvoie aussitôt vers LiveCut avec un jeton signé (identité + groupes) ;
+4. LiveCut ouvre sa session. L'utilisateur ne voit qu'un aller-retour de quelques millisecondes.
+
+Les comptes, les groupes et la configuration SSO ne sont gérés **que sur le maître**.
+
+### Si le maître tombe
+
+**L'antenne ne dépend jamais du maître.** Les applis des membres continuent de tourner ; les sessions déjà ouvertes continuent. Seuls le cockpit et les nouvelles connexions sont touchés. Pour ne pas bloquer une régie :
+- chaque membre garde un **compte administrateur local de secours** ;
+- si le SSO de l'entreprise est utilisé, le maître transmet sa configuration aux membres, qui peuvent **connecter directement par le SSO** quand le maître ne répond pas.
+
+### Ce qui reste propre à chaque machine
+
+- Le matériel : une entrée SDI de `strata01` n'est utilisable que par les applis de `strata01` (entre serveurs, les images passent par NDI ou ST 2110).
+- Les mises à jour : chaque serveur met à jour son Core et ses applis.
 
 ## 5. Les briques du Core
 
@@ -210,6 +264,10 @@ Sources : `Strata-Cut/scripts/install-ubuntu.sh` (dépendances, pilote Desktop V
 Une appli s'appuie sur le Core, jamais l'inverse.
 
 ## 8. Questions ouvertes
+
+- **Plusieurs serveurs** (§ 4 bis) : valider la proposition ; puis
+  - dans le cockpit, regrouper les tuiles **par serveur** (« strata01 : LiveCut, Graphics ») ou **par appli** (« LiveCut : strata01, strata02 ») ?
+  - le maître affiche-t-il au moins le **nombre d'alertes** de chaque membre, ou rien du tout ?
 
 - **Entrées DeckLink redistribuées par le Core** (§ 5.3) : à prototyper tôt (latence, charge processeur, plusieurs applis sur la même entrée), sur une machine avec une carte.
 - **Configuration minimale** : à **calculer** en mesurant, sur un serveur de référence, le Core seul puis chaque appli à vide et en charge typique. Le README donnera le minimum du Core et ce qu'ajoute chaque appli.
