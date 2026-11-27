@@ -225,16 +225,10 @@ Chaque appli fournit :
 | Couleur des opérateurs | **pervenche** (`--accent-2`, comme Cut) |
 | Jetons `--op-*` | **dans le Core** |
 | Thème et langue | **gardés sur le serveur, par utilisateur**, relus à l'ouverture de chaque appli (indispensable avec un sous-domaine par appli) |
-| Diffusion | crate Rust : dépendance git sur une étiquette de version de Strata-Core. Paquet web : **à valider**, voir ci-dessous |
-
-**Diffusion du paquet web, à valider.** Deux possibilités :
-
-- **Fichier joint aux releases de Strata-Core** (recommandé) : chaque release du Core contient `strata-ui-<version>.tgz`, et l'appli l'indique dans son `package.json` par son adresse (`https://github.com/DamienP2/Strata-Core/releases/download/v1.4.0/strata-ui-1.4.0.tgz`). Pas de service en plus, pas de jeton pour un dépôt public, et ça utilise la chaîne de releases qu'il faut de toute façon.
-- **GitHub Packages** : le registre de paquets de GitHub, l'équivalent de npmjs.com rattaché au dépôt. Les applis installent `@damienp2/strata-ui@1.4.0` comme n'importe quel paquet. Mais il demande un jeton GitHub **même pour un paquet public**, sur chaque poste de développement et dans chaque CI.
+| Diffusion | crate Rust : dépendance git sur une étiquette de version de Strata-Core. Paquet web : **fichier `strata-ui-<version>.tgz` joint à chaque release de Strata-Core**, référencé par son adresse dans le `package.json` des applis |
 
 ## 7. Étapes suivantes
 
-1. Valider la diffusion du paquet web (§ 6).
-2. Maquette HTML du cockpit et de la barre commune (passage d’une appli à l’autre), à valider.
-3. Comparaison fine, composant par composant, pour confirmer les versions de départ marquées « à vérifier ».
-4. Écriture du paquet `@strata/ui`.
+1. Maquette HTML du cockpit et de la barre commune (passage d’une appli à l’autre), à valider.
+2. Comparaison fine, composant par composant, pour confirmer les versions de départ marquées « à vérifier ».
+3. Écriture du paquet `@strata/ui`.

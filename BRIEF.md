@@ -24,9 +24,10 @@ Une nouvelle appli (Media, Call) démarre directement sur le Core au lieu de rec
 | Plateforme | **Ubuntu Server 24.04 LTS**, x86-64, sans bureau. **26.04 LTS** ajoutée une fois validée (pilote Desktop Video de Blackmagic disponible pour son noyau). **Pas de 22.04** : les serveurs existants passent en 24.04 |
 | Architecture | **option A** : le Core est un service à part (`strata-core`) ; chaque appli est son propre service, installé, activé et mis à jour par le Core |
 | Adresses | **un nom par serveur pour le Core, un sous-domaine par appli** : `serveur.local` → cockpit, `livecut.serveur.local` → LiveCut (§ 4) |
-| Forme du code partagé | un **crate Rust** + un **paquet web** (React / TypeScript), consommés par les applis |
+| Forme du code partagé | un **crate Rust** (dépendance git sur une étiquette de version de Strata-Core) + un **paquet web** (React / TypeScript, fichier `strata-ui-<version>.tgz` joint à chaque release de Strata-Core) |
 | Compilation | binaires construits sur **Ubuntu 24.04** par GitHub Actions, publiés en **releases GitHub** ; jamais compilés sur les serveurs. Les paquets des applis sont refaits pour 24.04 |
 | Installateur | **programme Rust** plein terminal (§ 5.7) |
+| Cockpit | chaque utilisateur n'y voit **que les applis actives où il a des droits** ; chaque appli répond au Core « cet utilisateur a-t-il accès ? » |
 | Comptes | le Core gère **qui sont les utilisateurs** (comptes, SSO, groupes) ; **chaque appli gère ce qu'ils peuvent y faire** (autorisations des utilisateurs et des groupes dans ses propres réglages) |
 | Matériel | **partagé** : une ressource a **la même fonction pour toutes les applis** (une entrée SDI reste une entrée pour toutes) |
 | Versions | Core en versions sémantiques ; chaque appli déclare la plage de versions du Core qu'elle accepte (§ 6) |
@@ -38,7 +39,7 @@ Une nouvelle appli (Media, Call) démarre directement sur le Core au lieu de rec
 La page qu'on ouvre en tapant le nom du serveur (`serveur.local`).
 
 **Pour tout le monde**, après la connexion :
-- les **applis actives** du serveur, en grandes tuiles : icône, nom, état (en marche, en erreur) ; un clic ouvre l'appli à son adresse (`livecut.serveur.local`) ;
+- les **applis actives où il a des droits**, en grandes tuiles : icône, nom, état (en marche, en erreur) ; un clic ouvre l'appli à son adresse (`livecut.serveur.local`). Les droits étant gérés dans les applis, chaque appli répond au Core « cet utilisateur a-t-il accès ? » ;
 - la barre du haut commune : marque, pastille de connexion, menu utilisateur (langue, thème, déconnexion).
 
 **Pour les administrateurs**, en plus, l'accès aux **réglages du serveur** :
@@ -51,7 +52,7 @@ La page qu'on ouvre en tapant le nom du serveur (`serveur.local`).
 | Santé | journaux, ressources, alertes, SNMP (§ 5.5) |
 | Serveur | nom, adresses, HTTPS, mises à jour (§ 5.6) |
 
-**Dans chaque appli**, la barre du haut commune garde un accès au cockpit et aux autres applis actives : on passe de LiveCut à Graphics sans repasser par l'accueil.
+**Dans chaque appli**, la barre du haut commune garde un accès au cockpit et aux autres applis actives où l'utilisateur a des droits : on passe de LiveCut à Graphics sans repasser par l'accueil.
 
 Une appli **inactive** n'apparaît pas dans le cockpit ; seuls les administrateurs la voient, dans la Bibliothèque.
 
@@ -112,7 +113,10 @@ Le matériel appartient au serveur : le Core le découvre, le règle une fois, e
 - **DeckLink** : cartes Blackmagic, connecteurs SDI / HDMI, fonction de chaque connecteur (entrée ou sortie), nom, format ; pilote Desktop Video.
 - **NDI** : bibliothèque, sources visibles sur le réseau.
 
-**Point technique à valider sur une machine** : un connecteur DeckLink ne peut en principe être ouvert que **par un seul programme à la fois**. Avec un service par appli, deux applis ne peuvent donc pas lire directement la même entrée SDI. Solution proposée : **le Core capte chaque entrée DeckLink une seule fois et la redistribue** aux applis sur la machine (mémoire partagée). Les entrées NDI et 2110 n'ont pas ce problème : plusieurs applis peuvent les recevoir directement. Une **sortie** SDI, elle, ne peut être pilotée que par une appli à la fois ; le Core montre laquelle.
+**Les entrées DeckLink passent par le Core.** Le pilote Blackmagic ne laisse **qu'un seul programme à la fois** capter une entrée : le second se voit refuser l'entrée. Le SDK le prévoit (état `bmdDeviceCaptureBusy`), et CG comme LiveCut le rencontrent déjà (« cannot enable the video input (in use by another program?) » dans leur code DeckLink). Avec un service par appli, deux applis ne peuvent donc pas ouvrir la même entrée SDI chacune de leur côté. Le Core **capte chaque entrée DeckLink une seule fois** et **la redistribue** aux applis sur la machine (mémoire partagée, sans copie réseau ni réencodage). Pour l'utilisateur, rien ne change : une entrée est une entrée pour toutes les applis.
+
+- **Entrées NDI et 2110** : plusieurs applis peuvent les recevoir directement (réseau, multicast) ; le Core ne fait que les décrire.
+- **Sorties SDI** : une seule appli à la fois les pilote ; le Core montre laquelle.
 
 Sources : `hardware.rs`, `sync.rs`, `decklink.rs`, `ndi.rs` (CG), `settings/Hardware.tsx` et le shim DeckLink (CG et Cut, même SDK).
 
@@ -207,9 +211,7 @@ Une appli s'appuie sur le Core, jamais l'inverse.
 
 ## 8. Questions ouvertes
 
-- **Diffusion du paquet web** : release GitHub de Strata-Core (fichier `.tgz`) ou GitHub Packages ? Voir l'inventaire du design, § 6.
-- **Applis visibles dans le cockpit** : toutes les applis actives pour tout le monde, ou seulement celles où l'utilisateur a des droits ? La seconde demande que chaque appli réponde au Core « cet utilisateur a-t-il accès ? ». Recommandation : la seconde.
-- **Entrées DeckLink partagées** : confirmer sur une machine qu'un connecteur ne s'ouvre qu'une fois, puis valider la redistribution par le Core (§ 5.3).
+- **Entrées DeckLink redistribuées par le Core** (§ 5.3) : à prototyper tôt (latence, charge processeur, plusieurs applis sur la même entrée), sur une machine avec une carte.
 - **Configuration minimale** : à **calculer** en mesurant, sur un serveur de référence, le Core seul puis chaque appli à vide et en charge typique. Le README donnera le minimum du Core et ce qu'ajoute chaque appli.
 
 ## 9. Prochaines étapes
