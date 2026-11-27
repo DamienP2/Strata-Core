@@ -80,6 +80,10 @@ export interface Flow {
   /** La vidéo (« 1080i50 ») ; vide : le format maison. */
   format?: string;
   payloadType?: number;
+  /** Son (ST 2110-30) : canaux, bits par échantillon, durée d'un paquet (µs). */
+  channels?: number;
+  bits?: number;
+  ptimeUs?: number;
 }
 
 export type Role = 'management' | 'ndi' | 'media1' | 'media2' | 'ptp';

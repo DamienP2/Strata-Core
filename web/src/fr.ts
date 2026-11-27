@@ -799,4 +799,12 @@ export const fr: Record<string, string> = {
   'HLS served by the Core': 'HLS servi par le Core',
   'RTMP(S): the key is added to the address. SRT: the key is sent as streamid. UDP, RTP and RIST: an MPEG-TS stream.': "RTMP(S) : la clé s'ajoute à l'adresse. SRT : la clé part en streamid. UDP, RTP et RIST : un flux MPEG-TS.",
   'Saved': 'Enregistré',
+  // Son ST 2110-30
+  Channels: 'Canaux',
+  'Samples and packets': 'Échantillons et paquets',
+  'L24 · 1 ms (AES67)': 'L24 · 1 ms (AES67)',
+  'L24 · 125 µs': 'L24 · 125 µs',
+  'L16 · 1 ms': 'L16 · 1 ms',
+  'In the Core': 'Dans le Core',
+  'silence on the output': 'silence en sortie',
 };

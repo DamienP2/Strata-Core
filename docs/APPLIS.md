@@ -189,8 +189,10 @@ Linux Foundation) : des flux en mémoire partagée, sur le serveur, sans passer 
   elle-même.** Exemple : `crates/strata-mxl/examples/send.rs`.
 - **ST 2110** : quand *Réglages › Matériel › Réseau* confie les flux au Core (noyau, AF_XDP ou
   DPDK, avec Intel Media Transport Library), le Core reçoit les flux entrants (2022-7 compris) et
-  envoie les sortants (cadencés ST 2110-21, du noir quand l'appli n'écrit pas) : l'appli ne
-  touche jamais le réseau, elle lit et écrit `mxlFlow` du flux comme pour le SDI. `io` de
+  envoie les sortants : l'appli ne touche jamais le réseau, elle lit et écrit `mxlFlow` du flux
+  comme pour le SDI. Vidéo (2110-20) : v210, cadencée ST 2110-21, du noir quand l'appli n'écrit
+  pas. Son (2110-30) : un flux audio MXL (float32 48 kHz, `channels` canaux), en L24 ou L16 sur le
+  réseau (`bits`, paquets de `ptimeUs`), du silence quand l'appli n'écrit pas. `io` de
   `/api/hardware/flows` dit ce qui passe (paquets reçus, perdus). Réglé sur « Non », les applis
   reçoivent et envoient elles-mêmes, comme avant.
 - Une appli peut aussi lire le flux qu'une autre écrit (Multiview qui montre le programme de

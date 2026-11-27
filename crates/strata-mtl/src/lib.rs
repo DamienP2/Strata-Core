@@ -1,5 +1,5 @@
-//! ST 2110-20 (vidéo non compressée) par Intel Media Transport Library (MTL), sur les ports média
-//! du serveur (Intel E810 : DPDK, AF_XDP, ou socket du noyau).
+//! ST 2110-20 (vidéo non compressée) et ST 2110-30 (son PCM) par Intel Media Transport Library
+//! (MTL), sur les ports média du serveur (Intel E810 : DPDK, AF_XDP, ou socket du noyau).
 //!
 //! - `libmtl.so` est chargée au lancement ([`load`]) : sans elle, le Core démarre quand même.
 //! - Les images sont en v210 (comme les flux MXL) ; en entrelacé, MTL donne et prend des trames.
@@ -514,6 +514,289 @@ impl Drop for Tx {
     }
 }
 
+// ---------- Le son : ST 2110-30 ----------
+
+/// Un flux audio PCM à 48 kHz : canaux, échantillons de 16 ou 24 bits, paquets de 1 ms (ou
+/// 125 µs). Le Core échange avec MTL des blocs de `frame_ms`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Audio {
+    pub channels: u16,
+    /// 16 (L16) ou 24 (L24).
+    pub bits: u8,
+    /// La durée d'un paquet, en µs : 1000 (le cas courant, AES67) ou 125.
+    pub ptime_us: u32,
+    pub frame_ms: u32,
+}
+
+impl Audio {
+    /// Les octets d'un échantillon d'un canal.
+    pub fn sample_bytes(&self) -> usize {
+        self.bits as usize / 8
+    }
+
+    fn fmt(&self) -> Option<c_int> {
+        match self.bits {
+            16 => Some(1),
+            24 => Some(2),
+            _ => None,
+        }
+    }
+
+    fn ptime(&self) -> Option<c_int> {
+        match self.ptime_us {
+            1000 => Some(0),
+            125 => Some(1),
+            250 => Some(2),
+            4000 => Some(4),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(mtl_shim)]
+mod affi {
+    use super::*;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Audio {
+        pub channels: u16,
+        pub fmt: c_int,
+        pub ptime: c_int,
+        pub frame_ms: u32,
+    }
+
+    #[repr(C)]
+    pub struct AFrame {
+        pub frame: *mut c_void,
+        pub data: *mut u8,
+        pub size: u64,
+        pub timestamp: u64,
+        pub complete: c_int,
+    }
+
+    extern "C" {
+        pub fn smtl_arx_open(
+            h: *mut c_void,
+            name: *const c_char,
+            n: c_int,
+            port_index: *const c_int,
+            ip: *const [u8; 4],
+            udp: *const u16,
+            pt: u8,
+            a: Audio,
+            err: *mut c_char,
+            errlen: c_int,
+        ) -> *mut c_void;
+        pub fn smtl_arx_get(rx: *mut c_void, out: *mut AFrame) -> c_int;
+        pub fn smtl_arx_put(rx: *mut c_void, frame: *mut c_void);
+        pub fn smtl_arx_stats(rx: *mut c_void, received: *mut u64, lost: *mut u64);
+        pub fn smtl_arx_close(rx: *mut c_void);
+        pub fn smtl_atx_open(
+            h: *mut c_void,
+            name: *const c_char,
+            n: c_int,
+            port_index: *const c_int,
+            ip: *const [u8; 4],
+            udp: *const u16,
+            pt: u8,
+            a: Audio,
+            err: *mut c_char,
+            errlen: c_int,
+        ) -> *mut c_void;
+        pub fn smtl_atx_get(tx: *mut c_void, out: *mut AFrame) -> c_int;
+        pub fn smtl_atx_put(tx: *mut c_void, frame: *mut c_void) -> c_int;
+        pub fn smtl_atx_close(tx: *mut c_void);
+    }
+
+    pub fn empty() -> AFrame {
+        AFrame { frame: std::ptr::null_mut(), data: std::ptr::null_mut(), size: 0, timestamp: 0, complete: 0 }
+    }
+}
+
+impl Mtl {
+    #[cfg(mtl_shim)]
+    fn audio_open(&self, tx: bool, name: &str, legs: &[Leg], payload_type: u8, a: &Audio) -> Result<(*mut c_void, CString), String> {
+        let fmt = a.fmt().ok_or("ST 2110-30: 16 or 24-bit samples")?;
+        let ptime = a.ptime().ok_or("ST 2110-30: 1 ms or 125 µs packets")?;
+        let (idx, ips, udps) = legs_of(legs);
+        let n = CString::new(name).unwrap_or_default();
+        let mut err = [0 as c_char; 256];
+        let aa = affi::Audio { channels: a.channels, fmt, ptime, frame_ms: a.frame_ms.max(1) };
+        let open = if tx { affi::smtl_atx_open } else { affi::smtl_arx_open };
+        // SAFETY: arrays of `legs.len()` entries; `err` sized as passed.
+        let h = unsafe {
+            open(self.h, n.as_ptr(), legs.len() as c_int, idx.as_ptr(), ips.as_ptr(), udps.as_ptr(), payload_type, aa, err.as_mut_ptr(), err.len() as c_int)
+        };
+        if h.is_null() {
+            Err(ffi::text(&err))
+        } else {
+            Ok((h, n))
+        }
+    }
+
+    /// Reçoit un flux audio.
+    pub fn arx(&self, name: &str, legs: &[Leg], payload_type: u8, a: &Audio) -> Result<ARx, String> {
+        #[cfg(mtl_shim)]
+        {
+            self.audio_open(false, name, legs, payload_type, a).map(|(h, n)| ARx { h, _name: n, audio: *a })
+        }
+        #[cfg(not(mtl_shim))]
+        {
+            let _ = (name, legs, payload_type, a);
+            Err(NOT_BUILT.into())
+        }
+    }
+
+    /// Envoie un flux audio.
+    pub fn atx(&self, name: &str, legs: &[Leg], payload_type: u8, a: &Audio) -> Result<ATx, String> {
+        #[cfg(mtl_shim)]
+        {
+            self.audio_open(true, name, legs, payload_type, a).map(|(h, n)| ATx { h, _name: n, audio: *a })
+        }
+        #[cfg(not(mtl_shim))]
+        {
+            let _ = (name, legs, payload_type, a);
+            Err(NOT_BUILT.into())
+        }
+    }
+}
+
+/// Un flux audio reçu.
+pub struct ARx {
+    #[cfg(mtl_shim)]
+    h: *mut c_void,
+    #[cfg(mtl_shim)]
+    _name: CString,
+    pub audio: Audio,
+}
+
+unsafe impl Send for ARx {}
+
+impl ARx {
+    /// Le prochain bloc (200 ms au plus), en float entrelacés.
+    pub fn next(&self) -> Option<Vec<f32>> {
+        #[cfg(mtl_shim)]
+        {
+            let mut f = affi::empty();
+            // SAFETY: open session; `f` is a valid out pointer.
+            if unsafe { affi::smtl_arx_get(self.h, &mut f) } != 1 {
+                return None;
+            }
+            // SAFETY: MTL hands `size` bytes, ours until put back just below.
+            let data = unsafe { std::slice::from_raw_parts(f.data, f.size as usize) };
+            let pcm = from_pcm(data, self.audio.bits);
+            // SAFETY: a frame taken from this session, given back once.
+            unsafe { affi::smtl_arx_put(self.h, f.frame) };
+            Some(pcm)
+        }
+        #[cfg(not(mtl_shim))]
+        None
+    }
+
+    /// Paquets reçus, perdus.
+    pub fn stats(&self) -> (u64, u64) {
+        #[cfg(mtl_shim)]
+        {
+            let (mut r, mut l) = (0u64, 0u64);
+            // SAFETY: open session; valid out pointers.
+            unsafe { affi::smtl_arx_stats(self.h, &mut r, &mut l) };
+            (r, l)
+        }
+        #[cfg(not(mtl_shim))]
+        (0, 0)
+    }
+}
+
+impl Drop for ARx {
+    fn drop(&mut self) {
+        #[cfg(mtl_shim)]
+        // SAFETY: opened by `arx`, freed once.
+        unsafe {
+            affi::smtl_arx_close(self.h)
+        };
+    }
+}
+
+/// Un flux audio envoyé.
+pub struct ATx {
+    #[cfg(mtl_shim)]
+    h: *mut c_void,
+    #[cfg(mtl_shim)]
+    _name: CString,
+    pub audio: Audio,
+}
+
+unsafe impl Send for ATx {}
+
+impl ATx {
+    /// Les échantillons (par canal) d'un bloc à envoyer.
+    pub fn frame_samples(&self) -> usize {
+        48 * self.audio.frame_ms as usize
+    }
+
+    /// Attend un bloc libre (200 ms au plus) et l'envoie, rempli de `pcm` (float entrelacés,
+    /// complété de silence) : vrai s'il est parti. MTL cadence l'envoi : appelé en boucle, il
+    /// donne le rythme.
+    pub fn send(&self, pcm: &[f32]) -> bool {
+        #[cfg(mtl_shim)]
+        {
+            let mut f = affi::empty();
+            // SAFETY: open session; `f` is a valid out pointer.
+            if unsafe { affi::smtl_atx_get(self.h, &mut f) } != 1 {
+                return false;
+            }
+            // SAFETY: MTL hands `size` bytes, ours until put back just below.
+            let data = unsafe { std::slice::from_raw_parts_mut(f.data, f.size as usize) };
+            to_pcm(pcm, data, self.audio.bits);
+            // SAFETY: a frame taken from this session, given back once.
+            unsafe { affi::smtl_atx_put(self.h, f.frame) == 0 }
+        }
+        #[cfg(not(mtl_shim))]
+        {
+            let _ = pcm;
+            false
+        }
+    }
+}
+
+impl Drop for ATx {
+    fn drop(&mut self) {
+        #[cfg(mtl_shim)]
+        // SAFETY: opened by `atx`, freed once.
+        unsafe {
+            affi::smtl_atx_close(self.h)
+        };
+    }
+}
+
+/// PCM du réseau (gros-boutien, signé, entrelacé) → float.
+pub fn from_pcm(data: &[u8], bits: u8) -> Vec<f32> {
+    match bits {
+        16 => data.as_chunks::<2>().0.iter().map(|b| i16::from_be_bytes(*b) as f32 / 32768.0).collect(),
+        _ => data.as_chunks::<3>().0.iter().map(|b| (i32::from_be_bytes([b[0], b[1], b[2], 0]) >> 8) as f32 / 8_388_608.0).collect(),
+    }
+}
+
+/// float → PCM du réseau ; `out` complété de silence.
+pub fn to_pcm(pcm: &[f32], out: &mut [u8], bits: u8) {
+    out.fill(0);
+    match bits {
+        16 => {
+            for (d, x) in out.as_chunks_mut::<2>().0.iter_mut().zip(pcm) {
+                *d = ((x.clamp(-1.0, 1.0) * 32767.0).round() as i16).to_be_bytes();
+            }
+        }
+        _ => {
+            for (d, x) in out.as_chunks_mut::<3>().0.iter_mut().zip(pcm) {
+                let v = (x.clamp(-1.0, 1.0) * 8_388_607.0).round() as i32;
+                let b = v.to_be_bytes();
+                *d = [b[1], b[2], b[3]];
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -526,5 +809,22 @@ mod tests {
         assert_eq!(st_fps(&v(1920, 1080, 30000, 1001, true)), Some(0));
         assert_eq!(st_fps(&v(3840, 2160, 25, 1, false)), Some(3));
         assert_eq!(st_fps(&v(1920, 1080, 48, 1, false)), None);
+    }
+
+    #[test]
+    fn pcm_both_ways() {
+        let x = [0.5f32, -0.5, 0.0, 0.999, -1.0];
+        for bits in [16u8, 24] {
+            let mut b = vec![0u8; x.len() * bits as usize / 8 + 3];
+            to_pcm(&x, &mut b, bits);
+            let y = from_pcm(&b, bits);
+            for (a, c) in x.iter().zip(&y) {
+                assert!((a - c).abs() < 1e-4, "{bits} bits: {a} → {c}");
+            }
+            // Le reste : du silence.
+            assert_eq!(*y.last().unwrap(), 0.0);
+        }
+        // L24 : 0x400000 = 0,5 ; gros-boutien.
+        assert_eq!(from_pcm(&[0x40, 0, 0, 0xC0, 0, 0], 24), vec![0.5, -0.5]);
     }
 }

@@ -1,0 +1,384 @@
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2024 Intel Corporation
+ */
+
+/**
+ * @file st30_pipeline_api.h
+ *
+ * Interfaces for st2110-30 pipeline transport.
+ *
+ */
+
+#include "st30_api.h"
+#include "st_pipeline_api.h"
+
+#ifndef _ST30_PIPELINE_API_HEAD_H_
+#define _ST30_PIPELINE_API_HEAD_H_
+
+#if defined(__cplusplus)
+extern "C" {
+#endif
+
+/** Handle to tx st2110-30 pipeline session of lib */
+typedef struct st30p_tx_ctx* st30p_tx_handle;
+/** Handle to rx st2110-30 pipeline session of lib */
+typedef struct st30p_rx_ctx* st30p_rx_handle;
+
+/** Bit define for flags of struct st20p_tx_ops. */
+enum st30p_tx_flag {
+  /**
+   * Flag bit in flags of struct st30p_tx_ops.
+   * P TX destination mac assigned by user
+   */
+  ST30P_TX_FLAG_USER_P_MAC = (MTL_BIT32(0)),
+  /**
+   * Flag bit in flags of struct st30p_tx_ops.
+   * R TX destination mac assigned by user
+   */
+  ST30P_TX_FLAG_USER_R_MAC = (MTL_BIT32(1)),
+  /**
+   * User control the frame pacing by pass a timestamp in st30_tx_frame_meta,
+   * lib will wait until timestamp is reached for each frame.
+   */
+  ST30P_TX_FLAG_USER_PACING = (MTL_BIT32(3)),
+  /**
+   * Flag bit in flags of struct st30p_tx_ops.
+   * If use dedicated queue for TX.
+   */
+  ST30P_TX_FLAG_DEDICATE_QUEUE = (MTL_BIT32(7)),
+  /** Force the numa of the created session, both CPU and memory */
+  ST30P_TX_FLAG_FORCE_NUMA = (MTL_BIT32(8)),
+
+  /** Enable the st30p_tx_get_frame block behavior to wait until a frame becomes
+   available or timeout(default: 1s, use st30p_tx_set_block_timeout to customize)*/
+  ST30P_TX_FLAG_BLOCK_GET = (MTL_BIT32(15)),
+
+  /**
+   * Drop a ready frame instead of sending it when it is already late. Only effective
+   * together with ST30P_TX_FLAG_USER_PACING and a frame timestamp in
+   * ST10_TIMESTAMP_FMT_TAI, otherwise the flag is ignored. Checked when the transport
+   * asks for its next frame: a frame counts as late once PTP time reaches its timestamp
+   * plus one frame period. A dropped frame gets notify_frame_done with
+   * ST_FRAME_STATUS_DROPPED, then notify_frame_late with epoch_skipped 0.
+   */
+  ST30P_TX_FLAG_DROP_WHEN_LATE = (MTL_BIT32(16)),
+};
+
+/** The structure info for st30 frame meta. */
+struct st30_frame {
+  /** frame buffer address */
+  void* addr;
+  /** frame format */
+  enum st30_fmt fmt;
+  /** channels number */
+  uint16_t channel;
+  /** sampling rate */
+  enum st30_sampling sampling;
+  /** packet time */
+  enum st30_ptime ptime;
+  /** frame buffer size */
+  size_t buffer_size;
+  /** frame valid data size, may <= buffer_size */
+  size_t data_size;
+  /** frame timestamp format */
+  enum st10_timestamp_fmt tfmt;
+  /** frame timestamp value */
+  uint64_t timestamp;
+  /** epoch info for the done frame */
+  uint64_t epoch;
+  /** Timestamp value in the rtp header */
+  uint32_t rtp_timestamp;
+  /** the total packets received, not include the redundant packets */
+  uint32_t pkts_total;
+  /** the valid packets received on each session port. For each session port, the validity
+   * of received packets can be assessed by comparing 'pkts_recv[s_port]' with
+   * 'pkts_total,' which serves as an indicator of signal quality.  */
+  uint32_t pkts_recv[MTL_SESSION_PORT_MAX];
+
+  /** TAI timestamp measured right after the first packet of the frame was received */
+  uint64_t receive_timestamp;
+
+  /** frame status, set by lib before notify_frame_done: complete or dropped */
+  enum st_frame_status status;
+
+  /** priv pointer for lib, do not touch this */
+  void* priv;
+};
+
+/**
+ * The structure describing how to create a tx st2110-30(audio) pipeline session.
+ * Include the PCIE port and other required info
+ */
+struct st30p_tx_ops {
+  /** Mandatory. tx port info */
+  struct st_tx_port port;
+
+  /** Mandatory. Session payload format */
+  enum st30_fmt fmt;
+  /** Mandatory. Session channel number */
+  uint16_t channel;
+  /** Mandatory. Session sampling rate */
+  enum st30_sampling sampling;
+  /** Mandatory. Session packet time */
+  enum st30_ptime ptime;
+  /** Optional. The pacing engine */
+  enum st30_tx_pacing_way pacing_way;
+  /** Mandatory. the frame buffer count. */
+  uint16_t framebuff_cnt;
+  /** size for each frame buffer, must be multiple of packet size(st30_get_packet_size) */
+  uint32_t framebuff_size;
+
+  /** Optional. name */
+  const char* name;
+  /** Optional. private data to the callback function */
+  void* priv;
+  /** Optional. see ST30P_TX_FLAG_* for possible flags */
+  uint32_t flags;
+
+  /**
+   * Optional. Callback when frame available.
+   * And only non-block method can be used within this callback as it run from lcore
+   * tasklet routine.
+   */
+  int (*notify_frame_available)(void* priv);
+  /**
+   * Optional. Callback when frame done.
+   * If both ST30P_TX_FLAG_DROP_WHEN_LATE and ST30P_TX_FLAG_USER_PACING are enabled,
+   * it is also called for a frame dropped for being late, with frame->status set to
+   * ST_FRAME_STATUS_DROPPED. notify_frame_late fires for that same frame, the two
+   * callbacks are not mutually exclusive.
+   */
+  int (*notify_frame_done)(void* priv, struct st30_frame* frame);
+  /**
+   * Optional. Callback when frame timing issues occur.
+   * If ST30P_TX_FLAG_DROP_WHEN_LATE is enabled: triggered when a frame is dropped
+   * from the pipeline due to late transmission.
+   * If ST30P_TX_FLAG_DROP_WHEN_LATE is disabled: triggered when the transport
+   * layer reports late frame delivery.
+   */
+  int (*notify_frame_late)(void* priv, uint64_t epoch_skipped);
+
+  /**
+   * Optional. The rtp timestamp delta(us) to the start time of frame.
+   * Zero means the rtp timestamp at the start of the frame.
+   */
+  int32_t rtp_timestamp_delta_us;
+
+  /*
+   * Optional. The size of fifo ring which used between the packet builder and pacing.
+   * Leave to zero to use default value: the packet number within
+   * ST30_TX_FIFO_DEFAULT_TIME_MS.
+   */
+  uint16_t fifo_size;
+  /**
+   * Optional. tx destination mac address.
+   * Valid if ST30P_TX_FLAG_USER_P(R)_MAC is enabled
+   */
+  uint8_t tx_dst_mac[MTL_SESSION_PORT_MAX][MTL_MAC_ADDR_LEN];
+
+  /** Optional for ST30_TX_PACING_WAY_RL, the required accuracy for warmup check point */
+  uint32_t rl_accuracy_ns;
+  /** Optional for ST30_TX_PACING_WAY_RL, the offset time(us) for warmup check point */
+  int32_t rl_offset_ns;
+  /**  Use this socket if ST30P_TX_FLAG_FORCE_NUMA is on, default use the NIC numa */
+  int socket_id;
+};
+
+/**
+ * Retrieve the general statistics(I/O) for one tx st2110-30(pipeline) session.
+ *
+ * @note Thread-safe. Briefly acquires the per-session spinlock. Do not call it from
+ * this session's callbacks: they may run with that spinlock held, so it deadlocks.
+ * @param handle
+ *   The handle to the tx st2110-30(pipeline) session.
+ * @param stats
+ *   A pointer to stats structure.
+ * @return
+ *   - >=0 succ.
+ *   - <0: Error code.
+ */
+int st30p_tx_get_session_stats(st30p_tx_handle handle, struct st30_tx_user_stats* stats);
+
+/**
+ * Reset the general statistics(I/O) for one tx st2110-30(pipeline) session.
+ *
+ * @note Thread-safe. Briefly acquires the per-session spinlock. Do not call it from
+ * this session's callbacks: they may run with that spinlock held, so it deadlocks.
+ * @param handle
+ *   The handle to the tx st2110-30(pipeline) session.
+ * @return
+ *   - >=0 succ.
+ *   - <0: Error code.
+ */
+int st30p_tx_reset_session_stats(st30p_tx_handle handle);
+
+/**
+ * Get one tx frame from the tx st2110-30 pipeline session.
+ * Call st30p_tx_put_frame to return the frame to session.
+ */
+struct st30_frame* st30p_tx_get_frame(st30p_tx_handle handle);
+/** Put back the frame which get by st30p_tx_get_frame. */
+int st30p_tx_put_frame(st30p_tx_handle handle, struct st30_frame* frame);
+/** Abort and release a frame obtained by st30p_tx_get_frame. Returns frame to free pool
+ * immediately. */
+int st30p_tx_put_frame_abort(st30p_tx_handle handle, struct st30_frame* frame);
+/** Free the tx st2110-30 pipeline session. */
+int st30p_tx_free(st30p_tx_handle handle);
+/** Create one tx st2110-30 pipeline session */
+st30p_tx_handle st30p_tx_create(mtl_handle mt, struct st30p_tx_ops* ops);
+/** Online update the destination info for the tx st2110-30(pipeline) session. */
+int st30p_tx_update_destination(st30p_tx_handle handle, struct st_tx_dest_info* dst);
+/** Wake up the block wait on st30p_tx_get_frame if ST30P_TX_FLAG_BLOCK_GET is enabled.*/
+int st30p_tx_wake_block(st30p_tx_handle handle);
+/* get framebuff size */
+size_t st30p_tx_frame_size(st30p_tx_handle handle);
+/* get framebuff pointer */
+void* st30p_tx_get_fb_addr(st30p_tx_handle handle, uint16_t idx);
+/** Set the block timeout time on st30p_tx_get_frame if ST30P_TX_FLAG_BLOCK_GET is
+ * enabled. */
+int st30p_tx_set_block_timeout(st30p_tx_handle handle, uint64_t timedwait_ns);
+
+/** Bit define for flags of struct st20p_rx_ops. */
+enum st30p_rx_flag {
+  /**
+   * Flag bit in flags of struct st30p_rx_ops, for non MTL_PMD_DPDK_USER.
+   * If set, it's application duty to set the rx flow(queue) and multicast join/drop.
+   * There is no st30p_rx_get_queue_meta, so the queue meta(queue number etc) info
+   * can not be retrieved through the st30p API.
+   */
+  ST30P_RX_FLAG_DATA_PATH_ONLY = (MTL_BIT32(0)),
+  /** Force the numa of the created session, both CPU and memory */
+  ST30P_RX_FLAG_FORCE_NUMA = (MTL_BIT32(2)),
+
+  /**
+   * Flag bit in flags of struct st30p_rx_ops.
+   * If enabled, simulate random packet loss, test usage only.
+   */
+  ST30P_RX_FLAG_SIMULATE_PKT_LOSS = (MTL_BIT32(3)),
+
+  /**
+   * Flag bit in flags of struct st30p_rx_ops.
+   * If set, lib will pass the incomplete frame to app also. User can check
+   * st30_frame status for the frame integrity. The packets that never arrived
+   * read as zero(silence).
+   */
+  ST30P_RX_FLAG_RECEIVE_INCOMPLETE_FRAME = (MTL_BIT32(4)),
+
+  /** Enable the st30p_rx_get_frame block behavior to wait until a frame becomes
+   available or timeout(default: 1s, use st30p_rx_set_block_timeout to customize) */
+  ST30P_RX_FLAG_BLOCK_GET = (MTL_BIT32(15)),
+};
+
+/**
+ * The structure describing how to create a rx st2110-30(audio) pipeline session.
+ * Include the PCIE port and other required info
+ */
+struct st30p_rx_ops {
+  /** Mandatory. rx port info */
+  struct st_rx_port port;
+
+  /** Mandatory. Session payload format */
+  enum st30_fmt fmt;
+  /** Mandatory. Session channel number */
+  uint16_t channel;
+  /** Mandatory. Session sampling rate */
+  enum st30_sampling sampling;
+  /** Mandatory. Session packet time */
+  enum st30_ptime ptime;
+  /** Mandatory. the frame buffer count. */
+  uint16_t framebuff_cnt;
+  /** size for each frame buffer, must be multiple of packet size(st30_get_packet_size) */
+  uint32_t framebuff_size;
+
+  /** Optional. name */
+  const char* name;
+  /** Optional. private data to the callback function */
+  void* priv;
+  /** Optional. see ST30P_RX_FLAG_* for possible flags */
+  uint32_t flags;
+
+  /**
+   * Optional. Callback when frame available in the lib.
+   * And only non-block method can be used within this callback as it run from lcore
+   * tasklet routine.
+   */
+  int (*notify_frame_available)(void* priv);
+  /**  Use this socket if ST30P_RX_FLAG_FORCE_NUMA is on, default use the NIC numa */
+  int socket_id;
+};
+
+/**
+ * Retrieve the general statistics(I/O) for one rx st2110-30(pipeline) session.
+ *
+ * @note Thread-safe. Briefly acquires the per-session spinlock. Do not call it from
+ * this session's callbacks: they may run with that spinlock held, so it deadlocks.
+ * @param handle
+ *   The handle to the rx st2110-30(pipeline) session.
+ * @param stats
+ *   A pointer to stats structure.
+ * @return
+ *   - >=0 succ.
+ *   - <0: Error code.
+ */
+int st30p_rx_get_session_stats(st30p_rx_handle handle, struct st30_rx_user_stats* stats);
+
+/**
+ * Reset the general statistics(I/O) for one rx st2110-30(pipeline) session.
+ *
+ * @note Thread-safe. Briefly acquires the per-session spinlock. Do not call it from
+ * this session's callbacks: they may run with that spinlock held, so it deadlocks.
+ * @param handle
+ *   The handle to the rx st2110-30(pipeline) session.
+ * @return
+ *   - >=0 succ.
+ *   - <0: Error code.
+ */
+int st30p_rx_reset_session_stats(st30p_rx_handle handle);
+
+/**
+ * Get one rx frame from the rx st2110-30 pipeline session.
+ * Call st30p_rx_put_frame to return the frame to session.
+ */
+struct st30_frame* st30p_rx_get_frame(st30p_rx_handle handle);
+/** Put back the frame which get by st30p_rx_get_frame. */
+int st30p_rx_put_frame(st30p_rx_handle handle, struct st30_frame* frame);
+/** Abort and release a frame obtained by st30p_rx_get_frame. Returns frame to free pool
+ * immediately. */
+int st30p_rx_put_frame_abort(st30p_rx_handle handle, struct st30_frame* frame);
+/** Free the rx st2110-30 pipeline session. */
+int st30p_rx_free(st30p_rx_handle handle);
+/** Create one rx st2110-30 pipeline session */
+st30p_rx_handle st30p_rx_create(mtl_handle mt, struct st30p_rx_ops* ops);
+/** Update the source for the rx st2110-30 pipeline session. */
+int st30p_rx_update_source(st30p_rx_handle handle, struct st_rx_source_info* src);
+/** Wake up the block wait on st30p_rx_get_frame if ST30P_RX_FLAG_BLOCK_GET is enabled.*/
+int st30p_rx_wake_block(st30p_rx_handle handle);
+/** Set the block timeout time on st30p_rx_get_frame if ST30P_RX_FLAG_BLOCK_GET is
+ * enabled. */
+int st30p_rx_set_block_timeout(st30p_rx_handle handle, uint64_t timedwait_ns);
+/* get framebuff size */
+size_t st30p_rx_frame_size(st30p_rx_handle handle);
+
+/**
+ * Check if a frame is late by comparing its TAI timestamp against the current
+ * MTL PTP time.
+ *
+ * @param mt
+ *   The MTL transport handle.
+ * @param frame
+ *   The frame pointer.
+ * @return
+ *   true if the frame is late (frame timestamp < current PTP time), false otherwise.
+ *   Always returns false if the frame timestamp format is not TAI.
+ */
+static inline bool st30_frame_is_late(mtl_handle mt, struct st30_frame* frame) {
+  if (frame->tfmt != ST10_TIMESTAMP_FMT_TAI) return false;
+  uint64_t ptp_now = mtl_ptp_read_time(mt);
+  return (int64_t)(frame->timestamp - ptp_now) < 0;
+}
+
+#if defined(__cplusplus)
+}
+#endif
+
+#endif

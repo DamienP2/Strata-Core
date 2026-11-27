@@ -6,7 +6,7 @@ import { Badge, Card, Dropdown, Empty, Field, FieldGrid, Modal, NumberField, Pag
 import { api } from '../../api';
 import { friendly } from '../../errors';
 import { HwSaveBar, useHardware } from './common';
-import { FlowsCard, InputsCard, OutputsCard } from './Inputs';
+import { FlowsCard, InputsCard, OutputsCard, usePoll } from './Inputs';
 import { DeckLink3D, Pcie3D, SDI_COLOR, nicLook, printedOf, type Jack } from './Card3D';
 import { cardOf, editCard, editHw, loadHw, type DetectedCard, type Flow, type Fn, type HwConfig, type Nic, type Port, type Snapshot } from './store';
 
@@ -437,6 +437,27 @@ function FlowEditor({ flow, redundant, onClose, onSave }: { flow: Flow; redundan
           />
         </Field>
       )}
+      {f.essence === 'audio' && (
+        <FieldGrid two>
+          <Field label={t('Channels')} group>
+            <Dropdown value={String(f.channels ?? 2)} options={['1', '2', '4', '6', '8', '16'].map((x) => ({ value: x, label: x }))} onChange={(v) => set('channels', Number(v))} />
+          </Field>
+          <Field label={t('Samples and packets')} group>
+            <Dropdown
+              value={`${f.bits ?? 24}/${f.ptimeUs ?? 1000}`}
+              options={[
+                { value: '24/1000', label: t('L24 · 1 ms (AES67)') },
+                { value: '24/125', label: t('L24 · 125 µs') },
+                { value: '16/1000', label: t('L16 · 1 ms') },
+              ]}
+              onChange={(v) => {
+                const [b, p] = v.split('/').map(Number);
+                setF({ ...f, bits: b, ptimeUs: p });
+              }}
+            />
+          </Field>
+        </FieldGrid>
+      )}
       {redundant ? (
         <FieldGrid two>
           <Field label={t('Red address (port 1)')}>
@@ -463,6 +484,9 @@ function FlowEditor({ flow, redundant, onClose, onSave }: { flow: Flow; redundan
 export function St2110Page() {
   const hw = useHardware();
   const [editing, setEditing] = useState<{ flow: Flow; index: number } | null>(null);
+  // Le Core tient les flux (MTL) : ce qui passe vraiment, flux par flux.
+  const io = usePoll<{ flows: { id: string; io?: { state: string; format?: string | null; lost: number; error?: string | null } | null }[]; io?: { active: boolean } }>('/api/hardware/flows');
+  const ioOf = (id: string) => (io?.io?.active ? io.flows.find((x) => x.id === id)?.io : undefined);
   if (!hw) return null;
   const [snap, draft] = hw;
   const redundant = draft.network.mediaMode !== 'separate';
@@ -502,6 +526,7 @@ export function St2110Page() {
                   <th>{t('Port')}</th>
                 </>
               )}
+              {io?.io?.active && <th>{t('In the Core')}</th>}
               <th className="r" />
             </tr>
           </thead>
@@ -523,6 +548,24 @@ export function St2110Page() {
                     <td className="st-mono">{f.red}</td>
                     <td>{f.port ?? 1}</td>
                   </>
+                )}
+                {io?.io?.active && (
+                  <td>
+                    {(() => {
+                      const x = ioOf(f.id);
+                      if (f.essence === 'data') return <span className="st-muted">—</span>;
+                      if (!x) return <Badge>{t('Opening…')}</Badge>;
+                      if (x.state === 'error') return <span title={x.error ? friendly(x.error) : undefined}><Badge tone="bad">{t('Error')}</Badge></span>;
+                      if (x.state === 'running')
+                        return (
+                          <span title={x.format ?? undefined}>
+                            <Badge tone="ok">{f.direction === 'input' ? t('Receiving') : t('Sending')}</Badge>
+                            {f.direction === 'input' && x.lost > 0 ? <span className="st-muted"> {tn(x.lost, '{n} packet lost', '{n} packets lost')}</span> : null}
+                          </span>
+                        );
+                      return <Badge tone="warn">{f.direction === 'input' ? t('Nothing received') : f.essence === 'audio' ? t('silence on the output') : t('black on the output')}</Badge>;
+                    })()}
+                  </td>
                 )}
                 <td className="r">
                   <button type="button" className="st-icon-btn ghost" title={t('Edit')} onClick={() => setEditing({ flow: f, index: i })}>

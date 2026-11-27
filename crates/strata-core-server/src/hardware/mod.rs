@@ -203,13 +203,43 @@ pub struct Flow {
     /// La vidéo (« 1080i50 », « 2160p50 ») ; vide : le format maison en 1080.
     #[serde(default)]
     pub format: String,
-    /// Le type de charge RTP (96 en vidéo par usage).
-    #[serde(default = "video_pt")]
+    /// Le type de charge RTP ; 0 : selon l'essence (96 vidéo, 97 son, 100 données).
+    #[serde(default)]
     pub payload_type: u8,
+    /// Son (ST 2110-30) : les canaux (2 par défaut).
+    #[serde(default = "two")]
+    pub channels: u16,
+    /// Son : 24 (L24, par défaut) ou 16 bits par échantillon.
+    #[serde(default = "l24")]
+    pub bits: u8,
+    /// Son : la durée d'un paquet en µs (1000 par défaut, AES67 ; 125 pour le niveau B/C).
+    #[serde(default = "one_ms")]
+    pub ptime_us: u32,
 }
 
-fn video_pt() -> u8 {
-    96
+fn two() -> u16 {
+    2
+}
+
+fn l24() -> u8 {
+    24
+}
+
+fn one_ms() -> u32 {
+    1000
+}
+
+impl Flow {
+    /// Le type de charge RTP envoyé. 96 sur un flux de son ou de données vient de l'ancien
+    /// défaut (vidéo) : pris comme « selon l'essence ».
+    pub fn pt(&self) -> u8 {
+        match (self.essence, self.payload_type) {
+            (Essence::Video, 0) => 96,
+            (Essence::Audio, 0 | 96) => 97,
+            (Essence::Data, 0 | 96) => 100,
+            (_, p) => p,
+        }
+    }
 }
 
 /// Une vidéo d'après son nom : « 1080i50 », « 720p59.94 », « 2160p25 ».
@@ -647,7 +677,7 @@ async fn flows(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResu
             .map(|f| {
                 let mut v = match f.direction {
                     // Tenu par le Core (MTL) : ce qui arrive ou part vraiment.
-                    _ if s2.st2110.active() && f.essence == Essence::Video => json!({ "io": s2.st2110.status_of(&f.id) }),
+                    _ if s2.st2110.active() && f.essence != Essence::Data => json!({ "io": s2.st2110.status_of(&f.id) }),
                     Direction::Output => match mxl_of(&s2) {
                         Some(m) => published_mxl(&m, out_flow(&format!("2110/{}", f.id))),
                         None => published(&strata_share::flow_path(&f.id), &s2),
@@ -861,6 +891,9 @@ mod tests {
             port: 1,
             format: String::new(),
             payload_type: 96,
+            channels: 2,
+            bits: 24,
+            ptime_us: 1000,
         }
     }
 

@@ -1,5 +1,5 @@
-//! Les flux ST 2110 vidéo reçus et envoyés par le Core, avec Intel Media Transport Library
-//! (MTL) sur les ports média, et MXL pour les applis :
+//! Les flux ST 2110 reçus et envoyés par le Core, vidéo (2110-20) et son (2110-30), avec Intel
+//! Media Transport Library (MTL) sur les ports média, et MXL pour les applis :
 //!
 //! - **Reçu** : MTL reçoit le flux (une ou deux pattes, 2022-7) et le Core l'écrit en flux MXL
 //!   `2110/<flux>` ; les applis le lisent comme une entrée SDI.
@@ -7,6 +7,8 @@
 //!   ST 2110-21) ; du noir quand rien n'arrive.
 //! - Le mode des ports (Réglages › Réseau) : socket du noyau, AF_XDP ou DPDK. « Off » : les flux
 //!   sont seulement réglés (et regardés dans l'aperçu), comme avant.
+//! - **Son** : reçu en blocs de 10 ms (L24 ou L16), écrit en flux audio MXL `2110/<flux>` (float32
+//!   48 kHz) ; envoyé depuis le flux audio MXL que l'appli écrit, du silence sans lui.
 //! - Tout est rouvert quand les réglages des ports ou des flux changent.
 use serde::Serialize;
 use std::{
@@ -64,7 +66,13 @@ struct FlowPlan {
     input: bool,
     legs: Vec<(usize, Ipv4Addr, u16)>,
     payload_type: u8,
-    video: strata_mtl::Video,
+    kind: Kind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum Kind {
+    Video(strata_mtl::Video),
+    Audio(strata_mtl::Audio),
 }
 
 struct Running {
@@ -111,13 +119,13 @@ fn port_of(io: MediaIo, iface: &str, address: &str) -> Result<(String, Pmd, Ipv4
     }
 }
 
-/// Ce qu'il faut ouvrir d'après les réglages ; None : rien (mode « Off », aucun flux vidéo).
+/// Ce qu'il faut ouvrir d'après les réglages ; None : rien (mode « Off », aucun flux vidéo ou son).
 fn plan(cfg: &HardwareConfig) -> Result<Option<Plan>, String> {
     let r = &cfg.network;
     if r.media_io == MediaIo::Off {
         return Ok(None);
     }
-    let video: Vec<_> = cfg.flows.iter().filter(|f| f.essence == Essence::Video).collect();
+    let video: Vec<_> = cfg.flows.iter().filter(|f| matches!(f.essence, Essence::Video | Essence::Audio)).collect();
     if video.is_empty() {
         return Ok(None);
     }
@@ -133,21 +141,19 @@ fn plan(cfg: &HardwareConfig) -> Result<Option<Plan>, String> {
     };
     let mut flows = Vec::new();
     for f in video {
-        let (width, height, rate, interlaced) =
-            if f.format.trim().is_empty() { house } else { parse_format(&f.format).ok_or(format!("{}: unknown format {}", f.name, f.format))? };
+        let kind = if f.essence == Essence::Audio {
+            Kind::Audio(strata_mtl::Audio { channels: f.channels.clamp(1, 64), bits: f.bits, ptime_us: f.ptime_us, frame_ms: 10 })
+        } else {
+            let (width, height, rate, interlaced) =
+                if f.format.trim().is_empty() { house } else { parse_format(&f.format).ok_or(format!("{}: unknown format {}", f.name, f.format))? };
+            Kind::Video(strata_mtl::Video { width, height, rate, interlaced })
+        };
         let legs = match (r.media_mode, f.blue) {
             (MediaMode::Redundant, Some(b)) => vec![(0, *f.red.ip(), f.red.port()), (1, *b.ip(), b.port())],
             (MediaMode::Separate, _) if f.port == 2 => vec![(1.min(ports.len() - 1), *f.red.ip(), f.red.port())],
             _ => vec![(0, *f.red.ip(), f.red.port())],
         };
-        flows.push(FlowPlan {
-            id: f.id.clone(),
-            name: f.name.clone(),
-            input: f.direction == Direction::Input,
-            legs,
-            payload_type: f.payload_type,
-            video: strata_mtl::Video { width, height, rate, interlaced },
-        });
+        flows.push(FlowPlan { id: f.id.clone(), name: f.name.clone(), input: f.direction == Direction::Input, legs, payload_type: f.pt(), kind });
     }
     Ok(Some(Plan { ports, flows, tai_offset: cfg.ptp.tai_offset }))
 }
@@ -208,7 +214,12 @@ impl Engine {
             let name = format!("2110-{}", f.id);
             if let Ok(t) = std::thread::Builder::new().name(name).spawn(move || {
                 let set = |s: &dyn Fn(&mut IoStatus)| s(status.lock().unwrap().entry(f.id.clone()).or_default());
-                let r = if f.input { receive(&f, &mtl, &mxl, &stop, &set) } else { send(&f, &mtl, &mxl, &stop, &set) };
+                let r = match (&f.kind, f.input) {
+                    (Kind::Video(v), true) => receive(&f, v, &mtl, &mxl, &stop, &set),
+                    (Kind::Video(v), false) => send(&f, v, &mtl, &mxl, &stop, &set),
+                    (Kind::Audio(a), true) => receive_audio(&f, a, &mtl, &mxl, &stop, &set),
+                    (Kind::Audio(a), false) => send_audio(&f, a, &mtl, &mxl, &stop, &set),
+                };
                 if let Err(e) = r {
                     tracing::warn!("ST 2110 flow {}: {e}", f.name);
                     set(&|s| {
@@ -249,6 +260,87 @@ impl Engine {
     }
 }
 
+/// Le nom d'un son (« 2 can. L24 »).
+fn audio_name(a: &strata_mtl::Audio) -> String {
+    format!("{} ch · L{}", a.channels, a.bits)
+}
+
+/// Son reçu : MTL → flux audio MXL `2110/<flux>`.
+fn receive_audio(f: &FlowPlan, a: &strata_mtl::Audio, mtl: &Mtl, mxl: &Mxl, stop: &AtomicBool, set: Setter) -> Result<(), String> {
+    // À la réception, tout type de charge est accepté : l'adresse et le port suffisent.
+    let rx = mtl.arx(&f.name, &legs(f), 0, a)?;
+    let id = strata_mxl::flow_id(&format!("2110/{}", f.id));
+    let mut w = mxl.audio_writer(id, &f.name, a.channels as u32)?;
+    set(&|s| s.format = Some(audio_name(a)));
+    let mut last = Instant::now();
+    let mut blocks = 0u64;
+    while !stop.load(Ordering::Relaxed) {
+        let got = match rx.next() {
+            Some(pcm) => {
+                w.write_interleaved(&pcm)?;
+                blocks += 1;
+                true
+            }
+            None => false,
+        };
+        if last.elapsed() >= Duration::from_secs(1) || !got {
+            let (packets, lost) = rx.stats();
+            set(&|s| {
+                s.state = if got { IoState::Running } else { IoState::Idle };
+                s.frames = blocks;
+                s.packets = packets;
+                s.lost = lost;
+                s.error = None;
+            });
+            last = Instant::now();
+        }
+    }
+    Ok(())
+}
+
+/// Son envoyé : flux audio MXL `2110/<flux>` (écrit par l'appli) → MTL ; du silence sans lui.
+/// MTL cadence l'envoi (un bloc de 10 ms libre à la fois).
+fn send_audio(f: &FlowPlan, a: &strata_mtl::Audio, mtl: &Mtl, mxl: &Mxl, stop: &AtomicBool, set: Setter) -> Result<(), String> {
+    let tx = mtl.atx(&f.name, &legs(f), f.payload_type, a)?;
+    let id = strata_mxl::flow_id(&format!("2110/{}", f.id));
+    set(&|s| s.format = Some(audio_name(a)));
+    let n = tx.frame_samples();
+    let ch = a.channels as usize;
+    let mut reader: Option<strata_mxl::AudioReader> = None;
+    let (mut blocks, mut heard) = (0u64, 0u64);
+    while !stop.load(Ordering::Relaxed) {
+        if mxl.is_active(id) {
+            if reader.is_none() {
+                reader = mxl.audio_reader(id).ok();
+            }
+        } else {
+            reader = None;
+        }
+        // Les canaux de l'appli rangés dans ceux du flux (en trop : ignorés ; en moins : silence).
+        let pcm = reader.as_mut().and_then(|r| {
+            let rc = r.channels.max(1);
+            r.next_interleaved(n).map(|s| if rc == ch { s } else { (0..n * ch).map(|k| if k % ch < rc { s[(k / ch) * rc + k % ch] } else { 0.0 }).collect() })
+        });
+        if pcm.is_some() {
+            heard += 1;
+        }
+        let pcm = pcm.unwrap_or_else(|| vec![0.0; n * ch]);
+        if tx.send(&pcm) {
+            blocks += 1;
+        }
+        if blocks.is_multiple_of(100) {
+            let on = heard > 0;
+            set(&|s| {
+                s.state = if on { IoState::Running } else { IoState::Idle };
+                s.frames = blocks;
+                s.error = None;
+            });
+            heard = 0;
+        }
+    }
+    Ok(())
+}
+
 fn halt(r: Running) {
     r.stop.store(true, Ordering::Relaxed);
     for t in r.threads {
@@ -274,18 +366,18 @@ fn mxl_video(v: &strata_mtl::Video) -> strata_mxl::Video {
 }
 
 /// Reçu : MTL → flux MXL `2110/<flux>`.
-fn receive(f: &FlowPlan, mtl: &Mtl, mxl: &Mxl, stop: &AtomicBool, set: Setter) -> Result<(), String> {
-    let rx = mtl.rx(&f.name, &legs(f), f.payload_type, &f.video)?;
+fn receive(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: &AtomicBool, set: Setter) -> Result<(), String> {
+    let rx = mtl.rx(&f.name, &legs(f), f.payload_type, video)?;
     let id = strata_mxl::flow_id(&format!("2110/{}", f.id));
-    let mut w = mxl.video_writer(id, &f.name, &mxl_video(&f.video))?;
-    set(&|s| s.format = Some(format_name(&f.video)));
+    let mut w = mxl.video_writer(id, &f.name, &mxl_video(video))?;
+    set(&|s| s.format = Some(format_name(video)));
     let mut last = Instant::now();
     let mut frames = 0u64;
     while !stop.load(Ordering::Relaxed) {
         let got = match rx.next() {
             Some(fr) => {
                 if fr.complete {
-                    if f.video.interlaced {
+                    if video.interlaced {
                         w.write_field_v210(fr.data, fr.linesize, fr.second_field)?;
                     } else {
                         w.write_v210(fr.data, fr.linesize)?;
@@ -312,10 +404,10 @@ fn receive(f: &FlowPlan, mtl: &Mtl, mxl: &Mxl, stop: &AtomicBool, set: Setter) -
 }
 
 /// Envoyé : flux MXL `2110/<flux>` (écrit par l'appli) → MTL ; du noir quand rien n'arrive.
-fn send(f: &FlowPlan, mtl: &Mtl, mxl: &Mxl, stop: &AtomicBool, set: Setter) -> Result<(), String> {
-    let tx = mtl.tx(&f.name, &legs(f), f.payload_type, &f.video)?;
+fn send(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: &AtomicBool, set: Setter) -> Result<(), String> {
+    let tx = mtl.tx(&f.name, &legs(f), f.payload_type, video)?;
     let id = strata_mxl::flow_id(&format!("2110/{}", f.id));
-    let v = f.video;
+    let v = *video;
     set(&|s| s.format = Some(format_name(&v)));
     let stride = strata_mxl::v210_stride(v.width);
     let black: Vec<u8> = {

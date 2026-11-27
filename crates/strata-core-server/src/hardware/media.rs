@@ -65,10 +65,11 @@ fn outcome_path() -> PathBuf {
 pub fn wanted(cfg: &HardwareConfig) -> Wanted {
     let r = &cfg.network;
     let video: Vec<_> = cfg.flows.iter().filter(|f| f.essence == Essence::Video).collect();
-    if r.media_io == MediaIo::Off || video.is_empty() {
+    let audio = cfg.flows.iter().any(|f| f.essence == Essence::Audio);
+    if r.media_io == MediaIo::Off || (video.is_empty() && !audio) {
         return Wanted::default();
     }
-    // 2 Go de base, et par flux : 512 Mo en HD, 2 Go en UHD.
+    // 2 Go de base (le son y tient), et par flux vidéo : 512 Mo en HD, 2 Go en UHD.
     let mut pages = 1024;
     for f in &video {
         let h = parse_format(&f.format).map_or(1080, |v| v.1);

@@ -1,6 +1,6 @@
 // Le pont du Core vers Intel Media Transport Library (MTL) : ST 2110-20 (vidéo
-// non compressée) reçue et envoyée, en v210, sur les ports média (E810 en
-// DPDK, AF_XDP ou socket du noyau).
+// non compressée, en v210) et ST 2110-30 (son PCM) reçus et envoyés sur les
+// ports média (E810 en DPDK, AF_XDP ou socket du noyau).
 //
 // libmtl.so est chargée au lancement (dlopen) : le Core démarre sans elle. Les
 // en-têtes de MTL (vendored, include/) donnent les types ; seules les
@@ -11,6 +11,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "st30_pipeline_api.h"
 #include "st_pipeline_api.h"
 
 static void *lib;
@@ -29,6 +30,18 @@ F(st20p_tx_get_frame);
 F(st20p_tx_put_frame);
 F(st20p_tx_free);
 F(st20p_tx_set_block_timeout);
+F(st30p_rx_create);
+F(st30p_rx_get_frame);
+F(st30p_rx_put_frame);
+F(st30p_rx_free);
+F(st30p_rx_get_session_stats);
+F(st30p_rx_set_block_timeout);
+F(st30p_tx_create);
+F(st30p_tx_get_frame);
+F(st30p_tx_put_frame);
+F(st30p_tx_free);
+F(st30p_tx_set_block_timeout);
+F(st30_calculate_framebuff_size);
 #undef F
 
 static void set_err(char *err, int len, const char *msg) {
@@ -71,6 +84,18 @@ int smtl_load(const char *path, char *err, int errlen) {
     SYM(st20p_tx_put_frame);
     SYM(st20p_tx_free);
     SYM(st20p_tx_set_block_timeout);
+    SYM(st30p_rx_create);
+    SYM(st30p_rx_get_frame);
+    SYM(st30p_rx_put_frame);
+    SYM(st30p_rx_free);
+    SYM(st30p_rx_get_session_stats);
+    SYM(st30p_rx_set_block_timeout);
+    SYM(st30p_tx_create);
+    SYM(st30p_tx_get_frame);
+    SYM(st30p_tx_put_frame);
+    SYM(st30p_tx_free);
+    SYM(st30p_tx_set_block_timeout);
+    SYM(st30_calculate_framebuff_size);
     return 0;
 }
 
@@ -294,4 +319,154 @@ int smtl_tx_put(void *tx, void *frame, int second_field) {
 
 void smtl_tx_close(void *tx) {
     p_st20p_tx_free((st20p_tx_handle)tx);
+}
+
+// ---------- Le son : ST 2110-30 ----------
+
+// Un flux audio : canaux, format (enum st30_fmt : 1 L16, 2 L24), durée des
+// paquets (enum st30_ptime : 0 pour 1 ms), 48 kHz ; `frame_ms` : la durée d'un
+// bloc échangé avec le Core.
+typedef struct {
+    uint16_t channels;
+    int fmt;
+    int ptime;
+    uint32_t frame_ms;
+} smtl_audio;
+
+// Un bloc de son : les échantillons tels que sur le réseau (gros-boutiens,
+// entrelacés).
+typedef struct {
+    void *frame;
+    uint8_t *data;
+    uint64_t size;
+    uint64_t timestamp;
+    int complete;
+} smtl_aframe;
+
+static int audio_frame_size(smtl_audio a) {
+    return p_st30_calculate_framebuff_size((enum st30_fmt)a.fmt, (enum st30_ptime)a.ptime, ST30_SAMPLING_48K,
+                                           a.channels, (uint64_t)a.frame_ms * 1000000ull, NULL);
+}
+
+// Reçoit un flux audio : `n` pattes (2022-7 comme la vidéo).
+void *smtl_arx_open(void *h, const char *name, int n, const int *port_index, const uint8_t (*ip)[4],
+                    const uint16_t *udp, uint8_t pt, smtl_audio a, char *err, int errlen) {
+    smtl *s = (smtl *)h;
+    int size = audio_frame_size(a);
+    if (size <= 0) {
+        set_err(err, errlen, "unsupported audio format (channels, sample size, packet time)");
+        return NULL;
+    }
+    struct st30p_rx_ops ops;
+    memset(&ops, 0, sizeof(ops));
+    ops.name = name;
+    ops.port.num_port = (uint8_t)n;
+    for (int i = 0; i < n; i++) {
+        snprintf(ops.port.port[i], sizeof(ops.port.port[i]), "%s", s->ports[port_index[i]]);
+        memcpy(ops.port.ip_addr[i], ip[i], 4);
+        ops.port.udp_port[i] = udp[i];
+    }
+    ops.port.payload_type = pt;
+    ops.fmt = (enum st30_fmt)a.fmt;
+    ops.channel = a.channels;
+    ops.sampling = ST30_SAMPLING_48K;
+    ops.ptime = (enum st30_ptime)a.ptime;
+    ops.framebuff_cnt = 4;
+    ops.framebuff_size = (uint32_t)size;
+    ops.flags = ST30P_RX_FLAG_BLOCK_GET;
+    st30p_rx_handle rx = p_st30p_rx_create(s->mt, &ops);
+    if (!rx) {
+        set_err(err, errlen, "cannot receive this ST 2110-30 flow (address, format?)");
+        return NULL;
+    }
+    p_st30p_rx_set_block_timeout(rx, 200ull * 1000000ull);
+    return rx;
+}
+
+// Le prochain bloc reçu (attend 200 ms au plus) : 1, ou 0.
+int smtl_arx_get(void *rx, smtl_aframe *out) {
+    struct st30_frame *f = p_st30p_rx_get_frame((st30p_rx_handle)rx);
+    if (!f) {
+        return 0;
+    }
+    out->frame = f;
+    out->data = (uint8_t *)f->addr;
+    out->size = f->data_size ? f->data_size : f->buffer_size;
+    out->timestamp = f->timestamp;
+    out->complete = 1;
+    return 1;
+}
+
+void smtl_arx_put(void *rx, void *frame) {
+    p_st30p_rx_put_frame((st30p_rx_handle)rx, (struct st30_frame *)frame);
+}
+
+void smtl_arx_stats(void *rx, uint64_t *received, uint64_t *lost) {
+    struct st30_rx_user_stats st;
+    memset(&st, 0, sizeof(st));
+    if (p_st30p_rx_get_session_stats((st30p_rx_handle)rx, &st) == 0) {
+        *received = st.common.stat_pkts_received;
+        *lost = st.common.stat_lost_packets;
+    }
+}
+
+void smtl_arx_close(void *rx) {
+    p_st30p_rx_free((st30p_rx_handle)rx);
+}
+
+// Envoie un flux audio : `n` pattes, vers `ip` / `udp`.
+void *smtl_atx_open(void *h, const char *name, int n, const int *port_index, const uint8_t (*ip)[4],
+                    const uint16_t *udp, uint8_t pt, smtl_audio a, char *err, int errlen) {
+    smtl *s = (smtl *)h;
+    int size = audio_frame_size(a);
+    if (size <= 0) {
+        set_err(err, errlen, "unsupported audio format (channels, sample size, packet time)");
+        return NULL;
+    }
+    struct st30p_tx_ops ops;
+    memset(&ops, 0, sizeof(ops));
+    ops.name = name;
+    ops.port.num_port = (uint8_t)n;
+    for (int i = 0; i < n; i++) {
+        snprintf(ops.port.port[i], sizeof(ops.port.port[i]), "%s", s->ports[port_index[i]]);
+        memcpy(ops.port.dip_addr[i], ip[i], 4);
+        ops.port.udp_port[i] = udp[i];
+    }
+    ops.port.payload_type = pt;
+    ops.fmt = (enum st30_fmt)a.fmt;
+    ops.channel = a.channels;
+    ops.sampling = ST30_SAMPLING_48K;
+    ops.ptime = (enum st30_ptime)a.ptime;
+    ops.framebuff_cnt = 4;
+    ops.framebuff_size = (uint32_t)size;
+    ops.flags = ST30P_TX_FLAG_BLOCK_GET;
+    st30p_tx_handle tx = p_st30p_tx_create(s->mt, &ops);
+    if (!tx) {
+        set_err(err, errlen, "cannot send this ST 2110-30 flow (address, format?)");
+        return NULL;
+    }
+    p_st30p_tx_set_block_timeout(tx, 200ull * 1000000ull);
+    return tx;
+}
+
+// Un bloc libre à remplir (attend 200 ms au plus) : 1, ou 0.
+int smtl_atx_get(void *tx, smtl_aframe *out) {
+    struct st30_frame *f = p_st30p_tx_get_frame((st30p_tx_handle)tx);
+    if (!f) {
+        return 0;
+    }
+    out->frame = f;
+    out->data = (uint8_t *)f->addr;
+    out->size = f->buffer_size;
+    out->timestamp = 0;
+    out->complete = 1;
+    return 1;
+}
+
+int smtl_atx_put(void *tx, void *frame) {
+    return p_st30p_tx_put_frame((st30p_tx_handle)tx, (struct st30_frame *)frame);
+}
+
+void smtl_atx_close(void *tx) {
+    p_st30p_tx_free((st30p_tx_handle)tx);
 }
