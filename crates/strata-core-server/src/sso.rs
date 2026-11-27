@@ -209,6 +209,11 @@ fn discover(issuer: &str, fresh: bool) -> Result<Discovery, String> {
     }
     let url = format!("{}/.well-known/openid-configuration", issuer.trim_end_matches('/'));
     let d: Discovery = serde_json::from_value(get_json(&url)?).map_err(|e| format!("{url}: {e}"))?;
+    // L'émetteur annoncé est celui réglé (OpenID Connect Discovery § 4.3) ; les jetons sont
+    // vérifiés contre lui.
+    if d.issuer.trim_end_matches('/') != issuer.trim_end_matches('/') {
+        return Err(format!("{url} announces another issuer ({})", d.issuer));
+    }
     cache.lock().unwrap().insert(issuer.to_string(), (Instant::now(), d.clone()));
     Ok(d)
 }
@@ -610,8 +615,13 @@ async fn write(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(mut b
     if b.enabled && (b.issuer.is_empty() || b.client_id.is_empty()) {
         return Err(bad("the issuer and the client id are needed"));
     }
-    if b.enabled && !(b.issuer.starts_with("https://") || b.issuer.starts_with("http://")) {
-        return Err(bad("the issuer is an address (https://…)"));
+    // En clair, n'importe qui sur le chemin fournirait ses propres clés : https, sauf sur cette
+    // machine.
+    let local = ["http://localhost", "http://127.0.0.1", "http://[::1]"]
+        .iter()
+        .any(|p| b.issuer == *p || b.issuer.starts_with(&format!("{p}:")) || b.issuer.starts_with(&format!("{p}/")));
+    if b.enabled && !(b.issuer.starts_with("https://") || local) {
+        return Err(bad("the issuer is an https:// address"));
     }
     let mut cfg = (**s.config.load()).clone();
     if b.client_secret == MASK {

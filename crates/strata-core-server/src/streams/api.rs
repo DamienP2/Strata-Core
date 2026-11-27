@@ -247,6 +247,9 @@ fn app_allowed(s: &Shared, peer: SocketAddr, headers: &HeaderMap, admin: bool, a
     if !s.apps.get(app).is_some_and(|a| a.active) {
         return Err(bad(format!("no active app: {app}")));
     }
+    if !admin && crate::apps::app_token_ok(&s.data_dir, headers, app) == Some(false) {
+        return Err((StatusCode::FORBIDDEN, format!("this is not the token of {app}")));
+    }
     Ok(())
 }
 

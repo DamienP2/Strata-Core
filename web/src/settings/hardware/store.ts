@@ -3,7 +3,7 @@
 // enregistrement pour tout).
 import { create } from 'zustand';
 import { t, toast } from '@strata/ui';
-import { api } from '../../api';
+import { api, ApiError } from '../../api';
 import { friendly } from '../../errors';
 
 export type Port = 'in' | 'out' | 'both';
@@ -135,6 +135,8 @@ export interface ClockSettings {
 
 export interface Snapshot {
   config: HwConfig;
+  /** La révision de hardware.json lue : renvoyée en enregistrant (409 si un autre a écrit). */
+  revision?: string;
   decklink: { built: boolean; driver: boolean; driverPath?: string | null; version?: string | null; fake: boolean; cards: DetectedCard[] };
   models: Model[];
   nics: Nic[];
@@ -178,20 +180,39 @@ export function useHwDirty() {
 }
 
 export async function saveHw() {
-  const draft = useHw.getState().draft;
-  if (!draft) return;
+  const { draft, snap } = useHw.getState();
+  if (!draft || !snap) return;
   useHw.setState({ saving: true });
+  const put = (body: HwConfig, rev?: string) =>
+    api<Snapshot & { ndiChanged?: boolean; clockApplied?: ApplyStep[] | null }>('PUT', `/api/hardware${rev ? `?rev=${encodeURIComponent(rev)}` : ''}`, body);
   try {
-    const snap = await api<Snapshot & { ndiChanged?: boolean; clockApplied?: ApplyStep[] | null }>('PUT', '/api/hardware', draft);
-    useHw.setState({ snap, draft: structuredClone(snap.config) });
+    let saved;
+    try {
+      saved = await put(draft, snap.revision);
+    } catch (e) {
+      if (!(e instanceof ApiError) || e.status !== 409) throw e;
+      // Écrits entre-temps (NMOS a branché un récepteur, un autre admin) : relus. Si les flux n'ont
+      // pas été touchés ici, ceux du serveur sont gardés et l'enregistrement repart ; sinon on
+      // laisse choisir.
+      const fresh = await api<Snapshot>('GET', '/api/hardware');
+      if (!same(draft.flows, snap.config.flows)) {
+        useHw.setState({ snap: fresh });
+        toast(t('The ST 2110 flows changed meanwhile (NMOS or another administrator): check them, then save again.'), 'error');
+        return;
+      }
+      const merged = { ...structuredClone(draft), flows: structuredClone(fresh.config.flows) };
+      saved = await put(merged, fresh.revision);
+    }
+    useHw.setState({ snap: saved, draft: structuredClone(saved.config) });
     toast(t('Settings saved'));
-    const failed = snap.clockApplied?.find((s) => !s.ok);
+    const failed = saved.clockApplied?.find((s) => !s.ok);
     if (failed) toast(t('The server time could not be set up: {why}', { why: friendly(failed.message ?? '') }), 'error');
-    if (snap.ndiChanged) toast(t('Restart the apps that use NDI: they read these settings when they start.'), 'info');
+    if (saved.ndiChanged) toast(t('Restart the apps that use NDI: they read these settings when they start.'), 'info');
   } catch (e) {
     toast(friendly(e), 'error');
+  } finally {
+    useHw.setState({ saving: false });
   }
-  useHw.setState({ saving: false });
 }
 
 export function discardHw() {

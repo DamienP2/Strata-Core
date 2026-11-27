@@ -195,7 +195,7 @@ impl Engine {
                 let stop = Arc::new(AtomicBool::new(false));
                 let status = self.in_status.clone();
                 let (c, s) = (w.0.clone(), stop.clone());
-                tracing::info!("network input {} ({})", c.name, c.url);
+                tracing::info!("network input {} ({})", c.name, super::redacted(&c.url));
                 let thread = std::thread::Builder::new().name(format!("in-{}", c.id)).spawn(move || run_input(&c, &env, &s, &status)).ok();
                 run.insert(w.0.id.clone(), Running { key: w, stop, thread });
             }

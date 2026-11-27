@@ -48,11 +48,16 @@ pub struct NmosSettings {
     pub port: u16,
     /// L'interface où le Core s'annonce et répond ; vide : celle de gestion.
     pub interface: String,
+    /// Les contrôleurs autorisés (adresses ou réseaux, `10.0.0.0/24`) ; vide : tous.
+    pub allowed: Vec<String>,
+    /// Les pages web autorisées à brancher (contrôleur dans un navigateur,
+    /// `http://10.0.0.5:8080`) ; une page d'une autre origine ne peut que lire.
+    pub origins: Vec<String>,
 }
 
 impl Default for NmosSettings {
     fn default() -> Self {
-        NmosSettings { enabled: false, port: 3212, interface: String::new() }
+        NmosSettings { enabled: false, port: 3212, interface: String::new(), allowed: Vec::new(), origins: Vec::new() }
     }
 }
 
@@ -105,8 +110,8 @@ impl Saved {
 #[derive(Default)]
 pub struct Nmos {
     inner: Mutex<Inner>,
-    /// Une seule écriture des réglages à la fois (activations IS-05).
-    pub(crate) write: Mutex<()>,
+    /// Un `apply` à la fois (le gardien et l'enregistrement du matériel).
+    applying: tokio::sync::Mutex<()>,
 }
 
 #[derive(Default)]
@@ -117,7 +122,8 @@ pub(crate) struct Inner {
     /// Par sorte de ressource (`ver_src`…) : l'empreinte de l'ensemble et le compteur annoncé.
     counters: HashMap<&'static str, (u64, u8)>,
     pub(crate) staged: HashMap<Uuid, Value>,
-    pub(crate) pending: HashMap<Uuid, tokio::task::JoinHandle<()>>,
+    /// Les activations programmées (None : réservée, sa tâche pas encore lancée).
+    pub(crate) pending: HashMap<Uuid, Option<tokio::task::JoinHandle<()>>>,
     /// La dernière activation de chaque émetteur ou récepteur (pour `active`).
     pub(crate) activations: HashMap<Uuid, Value>,
     error: Option<String>,
@@ -125,6 +131,9 @@ pub(crate) struct Inner {
 
 struct Run {
     key: Key,
+    /// Qui peut appeler, et quelles pages web peuvent brancher.
+    allowed: Vec<(std::net::IpAddr, u8)>,
+    origins: Vec<String>,
     server: tokio::task::JoinHandle<()>,
     mdns: Option<mdns_sd::ServiceDaemon>,
     fullname: String,
@@ -482,6 +491,7 @@ impl Nmos {
 
 /// Tient l'API et l'annonce en accord avec les réglages ; remet à jour les compteurs annoncés.
 pub async fn apply(s: &Shared) {
+    let _one = s.nmos.applying.lock().await;
     let s2 = s.clone();
     let Ok((cfg, (iface, ip))) = tokio::task::spawn_blocking(move || {
         let cfg = HardwareConfig::load(&s2.data_dir);
@@ -493,17 +503,26 @@ pub async fn apply(s: &Shared) {
         return;
     };
     let want = cfg.nmos.enabled.then(|| Key { port: cfg.nmos.port, iface, ip, host: host_name() });
+    let allowed: Vec<_> = cfg.nmos.allowed.iter().filter_map(|a| crate::snmp::net_of(a)).collect();
+    let origins: Vec<String> = cfg.nmos.origins.iter().map(|o| o.trim().trim_end_matches('/').to_ascii_lowercase()).filter(|o| !o.is_empty()).collect();
     let same = s.nmos.lock().run.as_ref().map(|r| r.key.clone()) == want;
     if !same {
-        stop(s);
+        // L'API repart (adresse ou port changés) : les activations programmées restent ; NMOS
+        // coupé : elles tombent.
+        let old = s.nmos.lock().run.take();
+        if let Some(run) = old {
+            end_run(run).await;
+        }
         let Some(key) = want else {
+            cancel_pending(s);
             s.nmos.lock().error = None;
             return;
         };
-        let listener = match tokio::net::TcpListener::bind(("0.0.0.0", key.port)).await {
+        // Seulement sur l'interface choisie : l'API n'a pas de mot de passe.
+        let listener = match tokio::net::TcpListener::bind((key.ip, key.port)).await {
             Ok(l) => l,
             Err(e) => {
-                let why = format!("cannot listen on port {}: {e}", key.port);
+                let why = format!("cannot listen on {}:{}: {e}", key.ip, key.port);
                 tracing::warn!("NMOS: {why}");
                 s.nmos.lock().error = Some(why);
                 return;
@@ -511,26 +530,32 @@ pub async fn apply(s: &Shared) {
         };
         let router = Router::new().fallback(handle).with_state(s.clone());
         let server = tokio::spawn(async move {
-            let _ = axum::serve(listener, router).await;
+            let _ = axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await;
         });
-        let mdns = match mdns_sd::ServiceDaemon::new() {
-            Ok(d) => {
-                if !key.iface.is_empty() && net::interface_ip(&key.iface).is_some() {
-                    let _ = d.disable_interface(mdns_sd::IfKind::All);
-                    let _ = d.enable_interface(mdns_sd::IfKind::Name(key.iface.clone()));
-                }
-                Some(d)
+        let iface = key.iface.clone();
+        let mdns = tokio::task::spawn_blocking(move || {
+            let d = mdns_sd::ServiceDaemon::new()?;
+            if !iface.is_empty() && net::interface_ip(&iface).is_some() {
+                let _ = d.disable_interface(mdns_sd::IfKind::All);
+                let _ = d.enable_interface(mdns_sd::IfKind::Name(iface));
             }
-            Err(e) => {
-                s.nmos.lock().error = Some(format!("mDNS: {e}"));
-                None
-            }
+            Ok::<_, mdns_sd::Error>(d)
+        })
+        .await;
+        let (mdns, error) = match mdns {
+            Ok(Ok(d)) => (Some(d), None),
+            Ok(Err(e)) => (None, Some(format!("mDNS: {e}"))),
+            Err(e) => (None, Some(format!("mDNS: {e}"))),
         };
         let fullname = format!("strata-{}-{}._nmos-node._tcp.local.", key.host, key.port);
         tracing::info!("NMOS node on http://{}:{} ({})", key.ip, key.port, if key.iface.is_empty() { "all interfaces" } else { &key.iface });
         let mut inner = s.nmos.lock();
-        inner.error = None;
-        inner.run = Some(Run { key, server, mdns, fullname, announced: Vec::new() });
+        inner.error = error;
+        inner.run = Some(Run { key, allowed: allowed.clone(), origins: origins.clone(), server, mdns, fullname, announced: Vec::new() });
+    }
+    if let Some(run) = s.nmos.lock().run.as_mut() {
+        run.allowed = allowed;
+        run.origins = origins;
     }
     // Les versions et les compteurs, puis l'annonce si elle a changé.
     let s2 = s.clone();
@@ -539,6 +564,37 @@ pub async fn apply(s: &Shared) {
         announce(&s2);
     })
     .await;
+}
+
+/// Arrête une API : le serveur fini (son port libéré) avant de rendre la main, l'annonce retirée.
+async fn end_run(run: Run) {
+    run.server.abort();
+    let _ = run.server.await;
+    if let Some(d) = run.mdns {
+        let name = run.fullname;
+        let _ = tokio::task::spawn_blocking(move || unannounce(d, &name)).await;
+    }
+}
+
+fn unannounce(d: mdns_sd::ServiceDaemon, fullname: &str) {
+    if let Ok(rx) = d.unregister(fullname) {
+        let _ = rx.recv_timeout(Duration::from_millis(500));
+    }
+    let _ = d.shutdown();
+}
+
+fn cancel_pending(s: &AppState) {
+    let mut inner = s.nmos.lock();
+    let ids: Vec<Uuid> = inner.pending.keys().copied().collect();
+    for id in ids {
+        if let Some(Some(t)) = inner.pending.remove(&id) {
+            t.abort();
+        }
+        if let Some(st) = inner.staged.get_mut(&id) {
+            st["activation"] = json!({ "mode": null, "requested_time": null, "activation_time": null });
+        }
+        tracing::warn!("NMOS: the scheduled activation of {id} is cancelled (NMOS turned off)");
+    }
 }
 
 /// (Re)fait l'annonce mDNS quand ses compteurs ont changé.
@@ -563,19 +619,21 @@ pub(crate) fn announce(s: &AppState) {
 }
 
 /// Arrête l'API et retire l'annonce (le contrôleur voit le nœud partir).
+/// À l'arrêt du Core (bloquant) : l'API arrêtée, l'annonce retirée (le contrôleur voit le nœud
+/// partir).
 pub fn stop(s: &AppState) {
-    let mut inner = s.nmos.lock();
-    if let Some(run) = inner.run.take() {
+    let run = s.nmos.lock().run.take();
+    if let Some(run) = run {
         run.server.abort();
         if let Some(d) = run.mdns {
-            if let Ok(rx) = d.unregister(&run.fullname) {
-                let _ = rx.recv_timeout(Duration::from_millis(500));
-            }
-            let _ = d.shutdown();
+            unannounce(d, &run.fullname);
         }
     }
+    let mut inner = s.nmos.lock();
     for (_, t) in inner.pending.drain() {
-        t.abort();
+        if let Some(t) = t {
+            t.abort();
+        }
     }
 }
 
@@ -594,22 +652,52 @@ fn ok(v: Value) -> Reply {
     Reply::Json(StatusCode::OK, v)
 }
 
-fn cors(mut r: Response) -> Response {
+/// CORS : tout le monde peut lire ; seules les pages des origines autorisées peuvent brancher.
+fn cors(mut r: Response, write: bool) -> Response {
     let h = r.headers_mut();
     h.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, header::HeaderValue::from_static("*"));
-    h.insert(header::ACCESS_CONTROL_ALLOW_METHODS, header::HeaderValue::from_static("GET, PUT, POST, PATCH, HEAD, OPTIONS, DELETE"));
+    let methods = if write { "GET, PUT, POST, PATCH, HEAD, OPTIONS, DELETE" } else { "GET, HEAD, OPTIONS" };
+    h.insert(header::ACCESS_CONTROL_ALLOW_METHODS, header::HeaderValue::from_static(methods));
     h.insert(header::ACCESS_CONTROL_ALLOW_HEADERS, header::HeaderValue::from_static("Content-Type, Accept"));
     h.insert(header::ACCESS_CONTROL_MAX_AGE, header::HeaderValue::from_static("3600"));
     r
 }
 
-async fn handle(State(s): State<Shared>, method: Method, uri: Uri, body: Bytes) -> Response {
+fn plain(code: StatusCode, why: &str) -> Response {
+    let Reply::Json(code, v) = error(code, why) else { unreachable!() };
+    (code, [(header::CONTENT_TYPE, "application/json")], v.to_string()).into_response()
+}
+
+async fn handle(
+    State(s): State<Shared>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    method: Method,
+    uri: Uri,
+    headers: axum::http::HeaderMap,
+    body: Bytes,
+) -> Response {
+    let (allowed, origins) = s.nmos.lock().run.as_ref().map(|r| (r.allowed.clone(), r.origins.clone())).unwrap_or_default();
+    if !allowed.is_empty() && !allowed.iter().any(|n| crate::snmp::in_net(peer.ip(), *n)) {
+        return plain(StatusCode::FORBIDDEN, "this address may not use the NMOS API");
+    }
+    // Une page web ne branche que si son origine est autorisée (sinon n'importe quelle page
+    // ouverte sur un poste de la régie pourrait couper un émetteur).
+    let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()).map(|o| o.trim_end_matches('/').to_ascii_lowercase());
+    let may_write = origin.as_ref().is_none_or(|o| origins.contains(o));
     if method == Method::OPTIONS {
-        return cors(StatusCode::OK.into_response());
+        return cors(StatusCode::OK.into_response(), may_write);
     }
     let segs: Vec<String> = uri.path().split('/').filter(|x| !x.is_empty()).map(str::to_string).collect();
     let head = method == Method::HEAD;
     let reply = if segs.get(1).map(String::as_str) == Some("connection") && method != Method::GET && !head {
+        let json =
+            headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|c| c.trim().to_ascii_lowercase().starts_with("application/json"));
+        if !may_write {
+            return cors(plain(StatusCode::FORBIDDEN, "this web page may not change connections"), false);
+        }
+        if !json {
+            return cors(plain(StatusCode::UNSUPPORTED_MEDIA_TYPE, "the body must be application/json"), may_write);
+        }
         is05::write(&s, &method, &segs, &body).await
     } else if method == Method::GET || head {
         let s2 = s.clone();
@@ -621,7 +709,7 @@ async fn handle(State(s): State<Shared>, method: Method, uri: Uri, body: Bytes) 
         Reply::Json(code, v) => (code, [(header::CONTENT_TYPE, "application/json")], v.to_string()).into_response(),
         Reply::Sdp(text) => (StatusCode::OK, [(header::CONTENT_TYPE, "application/sdp")], text).into_response(),
     };
-    cors(r)
+    cors(r, may_write)
 }
 
 fn names(list: &[&str]) -> Reply {

@@ -715,7 +715,8 @@ fn email(a: &AlertSettings, server: &str, text: &str) -> Result<(), String> {
         s.cmd(&format!("RCPT TO:<{r}>"), &[250, 251])?;
     }
     s.cmd("DATA", &[354])?;
-    let subject = format!("[{server}] {text}");
+    // Une seule ligne : un retour à la ligne ouvrirait d'autres en-têtes (ou commandes SMTP).
+    let subject: String = format!("[{server}] {text}").chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
     let date = jiff::fmt::rfc2822::to_string(&jiff::ZonedDateTime::now()).unwrap_or_default();
     let id = format!("<{}.{}@{me}>", now_ms(), std::process::id());
     let body =
@@ -813,9 +814,17 @@ async fn declare(
     if !s.apps.get(&d.app).is_some_and(|a| a.active) {
         return Err(bad(format!("no active app: {}", d.app)));
     }
+    if crate::apps::app_token_ok(&s.data_dir, &headers, &d.app) == Some(false) {
+        return Err((axum::http::StatusCode::FORBIDDEN, format!("this is not the token of {}", d.app)));
+    }
     let key = d.key.trim();
     if key.is_empty() || key.len() > 64 || d.text.len() > 500 || d.over.len() > 500 {
         return Err(bad("an alert has a key (64 characters at most) and a text (500 at most)"));
+    }
+    // Le texte part dans un e-mail (objet, corps) et un webhook : une ligne, sans caractère de
+    // contrôle.
+    if [key, d.text.as_str(), d.over.as_str()].iter().any(|t| t.chars().any(char::is_control)) {
+        return Err(bad("an alert is one line of text, without control characters"));
     }
     let mut declared = s.alerts.declared.lock().unwrap();
     let k = (d.app.clone(), key.to_string());

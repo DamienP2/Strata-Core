@@ -259,6 +259,21 @@ pub fn audio_of(flow: &str) -> String {
     format!("{flow}/audio")
 }
 
+/// Une adresse de flux pour le journal : sans identifiants ni paramètres (mot de passe RTSP,
+/// `passphrase` SRT, clé de diffusion).
+pub fn redacted(url: &str) -> String {
+    let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
+    let rest = rest.rsplit_once('@').map_or(rest, |(_, host)| host);
+    let (host, has_query) = match rest.split_once('?') {
+        Some((h, _)) => (h, true),
+        None => (rest, false),
+    };
+    // Le chemin d'une adresse RTMP porte la clé : seul le premier segment reste.
+    let host = if scheme.starts_with("rtmp") { host.split('/').take(2).collect::<Vec<_>>().join("/") } else { host.to_string() };
+    let sep = if scheme.is_empty() { "" } else { "://" };
+    format!("{scheme}{sep}{host}{}", if has_query { "?…" } else { "" })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

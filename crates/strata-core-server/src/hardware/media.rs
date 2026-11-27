@@ -166,7 +166,7 @@ After=systemd-modules-load.service\n\
 [Service]\n\
 Type=oneshot\n\
 RemainAfterExit=yes\n\
-ExecStart=/opt/strata/bin/strata-core media-setup\n\
+ExecStart=/usr/lib/strata/strata-media-setup media-setup\n\
 \n\
 [Install]\n\
 WantedBy=multi-user.target\n";

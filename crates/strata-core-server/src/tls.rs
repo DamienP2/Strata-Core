@@ -358,7 +358,13 @@ async fn accept(listener: tokio::net::TcpListener, router: Router, certs: Arc<Ar
                 ext.insert(ConnectInfo(peer));
                 ext.insert(OverTls);
                 req.headers_mut().insert("x-forwarded-proto", HeaderValue::from_static("https"));
-                async move { router.oneshot(req.map(Body::new)).await }
+                async move {
+                    let mut res = router.oneshot(req.map(Body::new)).await?;
+                    // Servi en HTTPS : le navigateur ne repassera plus en clair (un an). Le
+                    // certificat est celui de Strata ou de l'entreprise, jamais un essai.
+                    res.headers_mut().insert("strict-transport-security", HeaderValue::from_static("max-age=31536000"));
+                    Ok::<_, std::convert::Infallible>(res)
+                }
             });
             let _ = hyper::server::conn::http1::Builder::new().serve_connection(TokioIo::new(tls), svc).with_upgrades().await;
         });

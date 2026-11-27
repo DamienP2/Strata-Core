@@ -78,8 +78,24 @@ pub struct Relay {
 
 impl Relay {
     /// Ce chemin est-il public ?
+    /// Un chemin ambigu (`..`, `.`, `//`, `\`, ou ces signes encodés en %) n'est jamais public :
+    /// l'appli pourrait le ramener à une adresse privée (`/output/../api`).
     pub fn is_public(&self, path: &str) -> bool {
-        self.public.iter().any(|p| path.starts_with(p.as_str()) || (p.ends_with('/') && path == p.trim_end_matches('/')))
+        let lower = path.to_ascii_lowercase();
+        let ambiguous = path.contains("//")
+            || path.contains('\\')
+            || lower.contains("%2e")
+            || lower.contains("%2f")
+            || lower.contains("%5c")
+            || path.split('/').any(|seg| seg == "." || seg == "..");
+        if ambiguous {
+            return false;
+        }
+        self.public.iter().any(|p| {
+            // Sur une frontière de segment : `/health` couvre `/health` et `/health/…`, pas `/healthX`.
+            let base = p.trim_end_matches('/');
+            path == base || path.strip_prefix(base).is_some_and(|rest| rest.starts_with('/')) || (base.is_empty() && path.starts_with('/'))
+        })
     }
 }
 
@@ -188,6 +204,12 @@ core = ">=0.1, <1"
         assert!(m.relay.is_public("/output"));
         assert!(m.relay.is_public("/health"));
         assert!(!m.relay.is_public("/api/state"));
+        // Ni détour, ni préfixe sans frontière.
+        assert!(!m.relay.is_public("/output/../api/state"));
+        assert!(!m.relay.is_public("/output/%2e%2e/api/state"));
+        assert!(!m.relay.is_public("/output//x"));
+        assert!(!m.relay.is_public("/healthX"));
+        assert!(m.relay.is_public("/health/live"));
         assert!(AppManifest::parse(&text.replace("\"/health\"", "\"/\""), "t").is_err(), "/ alone would open everything");
         assert!(AppManifest::parse(&text.replace("bin/livecut", " "), "t").is_err());
     }

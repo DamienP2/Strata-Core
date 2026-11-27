@@ -464,7 +464,7 @@ export const fr: Record<string, string> = {
   '{n} key': '{n} clé',
   '{n} keys': '{n} clés',
   'the issuer and the client id are needed': 'L’émetteur et l’identifiant client sont nécessaires.',
-  'the issuer is an address (https://…)': 'L’émetteur est une adresse (https://…).',
+  'the issuer is an https:// address': 'L’émetteur est une adresse https://.',
   'the issuer is empty': 'L’émetteur est vide.',
   'the group needs a name': 'Le groupe a besoin d’un nom.',
   'this group name is already taken': 'Ce nom de groupe est déjà pris.',
@@ -832,4 +832,5 @@ export const fr: Record<string, string> = {
   'Rate': 'Débit',
   'Still room to receive': 'Encore en réception',
   'Still room to send': 'Encore en envoi',
+  'The ST 2110 flows changed meanwhile (NMOS or another administrator): check them, then save again.': 'Les flux ST 2110 ont changé entre-temps (NMOS ou un autre administrateur) : vérifiez-les, puis enregistrez de nouveau.',
 };

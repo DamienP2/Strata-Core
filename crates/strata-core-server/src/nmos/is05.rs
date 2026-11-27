@@ -77,8 +77,16 @@ fn active(s: &AppState, e: &End, saved: &Saved) -> Value {
 }
 
 fn staged(s: &AppState, e: &End, saved: &Saved) -> Value {
-    if let Some(v) = s.nmos.lock().staged.get(&e.id) {
-        return v.clone();
+    {
+        let mut inner = s.nmos.lock();
+        match inner.staged.get(&e.id) {
+            // Préparé avant que les pattes changent (2022-7 réglé, port ajouté) : refait.
+            Some(v) if v["transport_params"].as_array().map(Vec::len) != Some(e.ifaces.len()) => {
+                inner.staged.remove(&e.id);
+            }
+            Some(v) => return v.clone(),
+            None => {}
+        }
     }
     let mut v = active(s, e, saved);
     v["activation"] = nulls();
@@ -237,6 +245,8 @@ fn stage(s: &AppState, sender: bool, id: &str, body: &Value) -> Result<(Uuid, Va
     if s.nmos.lock().pending.contains_key(&e.id) && !cancel {
         return Err(error(StatusCode::LOCKED, "an activation is scheduled: cancel it first"));
     }
+    // `staged` a une patte par interface : les index ci-dessous sont dans les bornes.
+    debug_assert_eq!(st["transport_params"].as_array().map(Vec::len), Some(e.ifaces.len()));
     if let Some(v) = obj.get(peer_key) {
         if !(v.is_null() || v.as_str().is_some_and(|x| x.parse::<Uuid>().is_ok())) {
             return Err(bad(format!("{peer_key} is a UUID or null")));
@@ -306,7 +316,7 @@ fn stage(s: &AppState, sender: bool, id: &str, body: &Value) -> Result<(Uuid, Va
             let req = a.get("requested_time").cloned().unwrap_or(Value::Null);
             match mode.as_str() {
                 None if mode.is_null() => {
-                    if let Some(t) = s.nmos.lock().pending.remove(&e.id) {
+                    if let Some(Some(t)) = s.nmos.lock().pending.remove(&e.id) {
                         t.abort();
                     }
                     st["activation"] = nulls();
@@ -315,7 +325,12 @@ fn stage(s: &AppState, sender: bool, id: &str, body: &Value) -> Result<(Uuid, Va
                 Some("activate_immediate") => Act::Immediate,
                 Some(m @ ("activate_scheduled_absolute" | "activate_scheduled_relative")) => {
                     let Some(t) = req.as_str().and_then(parse_ts) else { return Err(bad("requested_time is \"seconds:nanoseconds\"".into())) };
-                    let at = if m == "activate_scheduled_relative" { tai_now(tai) + t } else { t };
+                    let now = tai_now(tai);
+                    let at = if m == "activate_scheduled_relative" { now.checked_add(t) } else { Some(t) };
+                    // Au plus une semaine d'avance (au-delà : une erreur de saisie, et un minuteur qui déborde).
+                    let Some(at) = at.filter(|at| at.saturating_sub(now) <= Duration::from_secs(7 * 86400)) else {
+                        return Err(bad("requested_time is too far ahead (a week at most)".into()));
+                    };
                     st["activation"] = json!({ "mode": m, "requested_time": req, "activation_time": ts(at) });
                     Act::Scheduled(m.to_string(), req.as_str().unwrap_or_default().to_string(), at)
                 }
@@ -323,7 +338,17 @@ fn stage(s: &AppState, sender: bool, id: &str, body: &Value) -> Result<(Uuid, Va
             }
         }
     };
-    s.nmos.lock().staged.insert(e.id, st.clone());
+    // Vérifié et réservé sous le même verrou : deux activations programmées à la fois, l'une
+    // reçoit 423.
+    let mut inner = s.nmos.lock();
+    if inner.pending.contains_key(&e.id) && !cancel {
+        return Err(error(StatusCode::LOCKED, "an activation is scheduled: cancel it first"));
+    }
+    if matches!(act, Act::Scheduled(..)) {
+        inner.pending.insert(e.id, None);
+    }
+    inner.staged.insert(e.id, st.clone());
+    drop(inner);
     Ok((e.id, st, act, tai))
 }
 
@@ -365,7 +390,11 @@ async fn patch(s: &Shared, sender: bool, id: &str, body: Value) -> Reply {
                 }
                 s2.nmos.lock().pending.remove(&uid);
             });
-            inner.pending.insert(uid, task);
+            // Annulée entre-temps : la tâche ne part pas.
+            match inner.pending.get_mut(&uid) {
+                Some(slot) => *slot = Some(task),
+                None => task.abort(),
+            }
             Reply::Json(StatusCode::ACCEPTED, st)
         }
     }
@@ -389,7 +418,7 @@ fn finish(s: &AppState, id: Uuid, activation: Value) -> Result<(), String> {
 
 /// Écrit le branchement dans les réglages, puis relance le flux.
 fn activate(s: &AppState, id: Uuid) -> Result<(), String> {
-    let _w = s.nmos.write.lock().unwrap();
+    let _w = crate::hardware::write_lock();
     let st = s.nmos.lock().staged.get(&id).cloned().ok_or("nothing staged")?;
     let mut cfg = HardwareConfig::load(&s.data_dir);
     let mut saved = Saved::load(&s.data_dir);

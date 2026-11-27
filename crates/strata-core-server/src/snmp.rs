@@ -58,7 +58,7 @@ impl Default for SnmpSettings {
 }
 
 /// Une adresse ou un réseau : (adresse, longueur du préfixe).
-fn net_of(s: &str) -> Option<(IpAddr, u8)> {
+pub(crate) fn net_of(s: &str) -> Option<(IpAddr, u8)> {
     let (ip, len) = s.split_once('/').map_or((s, None), |(a, b)| (a, Some(b)));
     let ip: IpAddr = ip.trim().parse().ok()?;
     let max = if ip.is_ipv4() { 32 } else { 128 };
@@ -69,7 +69,7 @@ fn net_of(s: &str) -> Option<(IpAddr, u8)> {
     Some((ip, len))
 }
 
-fn in_net(ip: IpAddr, (net, len): (IpAddr, u8)) -> bool {
+pub(crate) fn in_net(ip: IpAddr, (net, len): (IpAddr, u8)) -> bool {
     match (ip, net) {
         (IpAddr::V4(a), IpAddr::V4(b)) => len == 0 || (u32::from(a) >> (32 - len as u32)) == (u32::from(b) >> (32 - len as u32)),
         (IpAddr::V6(a), IpAddr::V6(b)) => len == 0 || (u128::from(a) >> (128 - len as u32)) == (u128::from(b) >> (128 - len as u32)),
@@ -523,6 +523,8 @@ pub fn send_trap(s: &AppState, level: &str, key: &str, text: &str) -> bool {
 #[derive(Default)]
 pub struct Agent {
     task: Mutex<Option<(JoinHandle<()>, SocketAddr)>>,
+    /// Un `apply` à la fois.
+    applying: tokio::sync::Mutex<()>,
     pub error: Mutex<Option<String>>,
 }
 
@@ -534,8 +536,12 @@ impl Agent {
 
 /// (Re)lance l'agent selon les réglages.
 pub async fn apply(s: &Shared) {
-    if let Some((t, _)) = s.snmp.task.lock().unwrap().take() {
+    let _one = s.snmp.applying.lock().await;
+    let old = s.snmp.task.lock().unwrap().take();
+    if let Some((t, _)) = old {
+        // Fini avant de rouvrir le port : sa socket est alors fermée.
         t.abort();
+        let _ = t.await;
     }
     *s.snmp.error.lock().unwrap() = None;
     let set = s.snmp_settings.lock().unwrap().clone();

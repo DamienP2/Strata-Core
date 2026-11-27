@@ -191,7 +191,13 @@ impl Ctx {
 
     /// Une commande du Core qui ne touche pas aux données (`strata-core ptp4l-unit`).
     pub fn core_plain(&self, args: &[&str]) -> Result<String, String> {
-        exec(self, &self.p(paths::BIN).display().to_string(), args, None)
+        if self.dry() {
+            return exec(self, &self.p(paths::BIN).display().to_string(), args, None);
+        }
+        // Le programme est au compte du service : root ne le lance pas lui-même.
+        let mut with_user = vec!["-u", paths::USER, "--", paths::BIN];
+        with_user.extend(args);
+        exec(self, "runuser", &with_user, None)
     }
 
     /// Écrit un fichier (ses dossiers créés), avec ses droits.
@@ -303,6 +309,8 @@ fn core_unit() -> String {
          ExecStart={bin} run --bind 0.0.0.0:{port} --data-dir {data}\n\
          Restart=always\n\
          RestartSec=2\n\
+         # Ses fichiers (journaux, réglages, applis) : à lui seul.\n\
+         UMask=0077\n\
          # Les ports 80 et 443 (cockpit), 161 (SNMP) ; le ST 2110 par MTL : sockets brutes et\n\
          # AF_XDP (NET_RAW, NET_ADMIN, BPF), mémoire verrouillée (IPC_LOCK), priorités (SYS_NICE).\n\
          AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_NET_ADMIN CAP_BPF CAP_IPC_LOCK CAP_SYS_NICE\n\
@@ -327,7 +335,9 @@ const POLKIT_RULE: &str = "// Strata Core : le compte du service relance chrony 
 polkit.addRule(function (action, subject) {\n\
   if (action.id == \"org.freedesktop.systemd1.manage-units\" && subject.user == \"strata\") {\n\
     var unit = action.lookup(\"unit\");\n\
-    if (unit == \"chrony.service\" || unit == \"strata-ptp4l.service\" || unit == \"strata-media.service\") return polkit.Result.YES;\n\
+    var verb = action.lookup(\"verb\");\n\
+    var ok = verb == \"start\" || verb == \"stop\" || verb == \"restart\";\n\
+    if (ok && (unit == \"chrony.service\" || unit == \"strata-ptp4l.service\" || unit == \"strata-media.service\")) return polkit.Result.YES;\n\
   }\n\
 });\n";
 
@@ -370,8 +380,7 @@ fn mb(n: u64) -> String {
 
 /// Pose le Core : depuis l'archive donnée, sinon la release ; l'ancien gardé (`.previous`).
 fn put_core(ctx: &Ctx, plan: &Plan, say: &dyn Fn(String)) -> Result<String, String> {
-    let tmp = std::env::temp_dir().join(format!("strata-install-{}", std::process::id()));
-    std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    let tmp = crate::checks::private_tmp("strata-install")?;
     let (version, archive) = match &plan.package {
         Some(p) => ("".to_string(), p.clone()),
         None => release::fetch_core(&plan.repo, plan.version.as_deref(), &tmp, &|done, total| {
@@ -406,10 +415,29 @@ fn put_core(ctx: &Ctx, plan: &Plan, say: &dyn Fn(String)) -> Result<String, Stri
     let _ = std::fs::remove_file(&link);
     let _ = std::os::unix::fs::symlink(paths::BIN, &link);
     ctx.chown(paths::BIN_DIR, true)?;
+    put_media_helper(ctx, &bin)?;
     let _ = std::fs::remove_dir_all(&tmp);
     ctx.log(&format!("Strata Core {shown} → {}", bin.display()));
     let _ = version;
     Ok(format!("Strata Core {shown}"))
+}
+
+/// La copie du Core que lance `strata-media` (root) : à root, 0755, dans un dossier à root.
+fn put_media_helper(ctx: &Ctx, bin: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = ctx.p(paths::HELPER_DIR);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755));
+    let dst = ctx.p(paths::MEDIA_HELPER);
+    let tmp = dst.with_extension("new");
+    let _ = std::fs::remove_file(&tmp);
+    std::fs::copy(bin, &tmp).map_err(|e| format!("cannot copy the Core to {}: {e}", tmp.display()))?;
+    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
+    if !ctx.dry() {
+        ctx.run("chown", &["root:root", &tmp.display().to_string()])?;
+    }
+    std::fs::rename(&tmp, &dst).map_err(|e| format!("cannot replace {}: {e}", dst.display()))?;
+    Ok(())
 }
 
 fn service_user(ctx: &Ctx) -> Result<String, String> {
@@ -429,6 +457,11 @@ fn system_files(ctx: &Ctx) -> Result<String, String> {
         std::fs::create_dir_all(ctx.p(d)).map_err(|e| format!("cannot create {d}: {e}"))?;
         ctx.chown(d, d != paths::ETC)?;
     }
+    // Les données (secrets, journaux avec les adresses des flux) : au seul compte du service.
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(ctx.p(paths::DATA), std::fs::Permissions::from_mode(0o700));
+    }
     ctx.write(paths::UNIT, &core_unit(), 0o644)?;
     let ptp = ctx.core_plain(&["ptp4l-unit"])?;
     if !ptp.trim().is_empty() {
@@ -439,7 +472,12 @@ fn system_files(ctx: &Ctx) -> Result<String, String> {
     let media = ctx.core_plain(&["media-unit"]).unwrap_or_default();
     if !media.trim().is_empty() {
         ctx.write(paths::MEDIA_UNIT, &media, 0o644)?;
-        let _ = ctx.run("systemctl", &["enable", "strata-media"]);
+        if ctx.dry() || ctx.p(paths::MEDIA_HELPER).exists() {
+            let _ = ctx.run("systemctl", &["enable", "strata-media"]);
+        } else {
+            // Une installation d'avant la copie à root : la mise à jour la pose.
+            ctx.log(&format!("{} is missing: run the update to set up ST 2110 (DPDK, hugepages)", paths::MEDIA_HELPER));
+        }
     }
     // Le Core réécrit ce fichier ; il doit le pouvoir.
     if !ctx.p(paths::CHRONY).exists() {
@@ -482,8 +520,9 @@ fn desktop_video(ctx: &Ctx, src: &Path, say: &dyn Fn(String)) -> Result<String, 
     } else if let Some(sh) = pick_installer(&files) {
         // L'installateur de Blackmagic : lancé dans son dossier, chaque question acceptée.
         let cwd = sh.parent().unwrap_or(Path::new("/"));
-        let cmd = format!("cd '{}' && yes | sh '{}'", cwd.display(), sh.display());
-        ctx.run("sh", &["-c", &cmd])?;
+        // Les chemins passés en paramètres ($1, $2), jamais collés dans la commande.
+        let (cwd, sh) = (cwd.display().to_string(), sh.display().to_string());
+        ctx.run("sh", &["-c", "cd \"$1\" && yes | sh \"$2\"", "sh", &cwd, &sh])?;
     } else {
         let mut names: Vec<String> = files.iter().map(|f| f.strip_prefix(&dir).unwrap_or(f).display().to_string()).collect();
         names.sort();
@@ -640,7 +679,9 @@ fn firewall(ctx: &Ctx) -> Result<String, String> {
     // NMOS : l'API du nœud (IS-04, IS-05) et son annonce mDNS, pour le contrôleur de la régie.
     ctx.run("ufw", &["allow", "3212/tcp", "comment", "Strata Core NMOS"])?;
     ctx.run("ufw", &["allow", "5353/udp", "comment", "Strata Core NMOS (mDNS)"])?;
-    Ok("80/tcp, 443/tcp, 3212/tcp (NMOS) et 5353/udp (mDNS) ouverts".into())
+    // SNMP (Santé › SNMP), s'il est activé.
+    ctx.run("ufw", &["allow", "161/udp", "comment", "Strata Core SNMP"])?;
+    Ok("80/tcp, 443/tcp, 3212/tcp (NMOS), 5353/udp (mDNS) et 161/udp (SNMP) ouverts".into())
 }
 
 fn admin(ctx: &Ctx, name: &str, password: &str) -> Result<String, String> {
@@ -778,7 +819,9 @@ pub fn steps(plan: &Plan) -> Vec<Step> {
                 // Les ports DPDK rendus au noyau, les hugepages rendues.
                 if ctx.p(paths::MEDIA_UNIT).exists() {
                     let _ = ctx.write("/etc/strata/media.json", "{\"hugepages\": 0, \"dpdk\": []}\n", 0o644);
-                    let _ = ctx.run(paths::BIN, &["media-setup"]);
+                    if ctx.p(paths::MEDIA_HELPER).exists() {
+                        let _ = ctx.run(paths::MEDIA_HELPER, &["media-setup"]);
+                    }
                     let _ = ctx.run("systemctl", &["disable", "strata-media"]);
                 }
                 Ok("arrêté".into())
@@ -789,6 +832,7 @@ pub fn steps(plan: &Plan) -> Vec<Step> {
                 }
                 let _ = std::fs::remove_dir_all(ctx.p(paths::ETC));
                 let _ = std::fs::remove_dir_all(ctx.p("/opt/strata"));
+                let _ = std::fs::remove_dir_all(ctx.p(paths::HELPER_DIR));
                 let _ = ctx.run("systemctl", &["daemon-reload"]);
                 let _ = ctx.run("systemctl", &["restart", "chrony"]);
                 Ok("programme et fichiers du système retirés".into())

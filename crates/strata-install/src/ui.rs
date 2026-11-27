@@ -554,7 +554,7 @@ impl App {
                         self.ndi_error = None;
                         let tx = self.tx.clone();
                         std::thread::spawn(move || {
-                            let _ = tx.send(Msg::Ndi(ndi::get(&std::env::temp_dir().join("strata-install-ndi"))));
+                            let _ = tx.send(Msg::Ndi(crate::checks::private_tmp("strata-install-ndi").and_then(|dir| ndi::get(&dir))));
                         });
                     } else {
                         self.plan.ndi = None;
@@ -968,12 +968,12 @@ fn draw(f: &mut Frame, app: &App) {
                 f,
                 body,
                 "Le pare-feu",
-                "Si ufw est actif, le cockpit a besoin des ports 80 (HTTP) et 443 (HTTPS) ; NMOS, de 3212 et de mDNS (5353/udp).",
+                "Si ufw est actif, le cockpit a besoin des ports 80 (HTTP) et 443 (HTTPS) ; NMOS, de 3212 et de mDNS (5353/udp) ; SNMP, de 161/udp.",
             );
             choices(
                 f,
                 r,
-                &[("Ouvrir les ports 80, 443, 3212 et 5353".into(), "recommandé".into()), ("Ne pas toucher au pare-feu".into(), String::new())],
+                &[("Ouvrir les ports 80, 443, 3212, 5353 et 161".into(), "recommandé".into()), ("Ne pas toucher au pare-feu".into(), String::new())],
                 app.sel,
             );
         }
@@ -1093,7 +1093,7 @@ fn draw_summary(f: &mut Frame, body: Rect, app: &App) {
                 .flatten()
                 .collect::<Vec<_>>();
             lines.push(row("GPU", if gpu.is_empty() { "—".into() } else { gpu.join(", ") }));
-            lines.push(row("Pare-feu", if p.firewall { "80, 443, 3212 et 5353 ouverts (ufw)".into() } else { "inchangé".into() }));
+            lines.push(row("Pare-feu", if p.firewall { "80, 443, 3212, 5353 et 161 ouverts (ufw)".into() } else { "inchangé".into() }));
             lines.push(row("Administrateur", p.admin.as_ref().map_or("—".into(), |a| a.0.clone())));
             ("Tout est prêt", "Installer Strata")
         }

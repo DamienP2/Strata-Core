@@ -126,6 +126,8 @@ pub struct Cluster {
     master_error: Mutex<Option<String>>,
     /// Les jetons de connexion déjà servis (une fois chacun).
     used: Mutex<HashMap<String, i64>>,
+    /// Les signatures de requêtes déjà reçues (pas de rejeu pendant leur minute de validité).
+    seen: Mutex<HashMap<String, i64>>,
 }
 
 fn hex(b: &[u8]) -> String {
@@ -198,6 +200,7 @@ impl Cluster {
             master_ok: Mutex::default(),
             master_error: Mutex::default(),
             used: Mutex::default(),
+            seen: Mutex::default(),
         }
     }
 
@@ -250,6 +253,12 @@ impl Cluster {
         };
         if !verify(&m.key, &request_msg(method, path, date, body), &sig) {
             return Err((StatusCode::UNAUTHORIZED, "bad signature".into()));
+        }
+        let mut seen = self.seen.lock().unwrap();
+        let now = now_ms();
+        seen.retain(|_, at| now - *at <= 2 * SKEW_MS);
+        if seen.insert(sig, now).is_some() {
+            return Err((StatusCode::UNAUTHORIZED, "this request was already received".into()));
         }
         Ok(m)
     }
@@ -471,6 +480,10 @@ async fn enrol(State(s): State<Shared>, headers: HeaderMap, body: Bytes) -> Resp
     let Ok(e) = serde_json::from_slice::<Enrol>(&body) else { return (StatusCode::BAD_REQUEST, "unreadable").into_response() };
     if e.id == s.cluster.id {
         return (StatusCode::BAD_REQUEST, "a server cannot join itself").into_response();
+    }
+    // Son identifiant vient de sa clé : un code ne permet pas de prendre la place d'un autre membre.
+    if B64.decode(&e.key).map(|k| sha256(&k)[..12].to_string()).ok().as_deref() != Some(e.id.as_str()) {
+        return (StatusCode::BAD_REQUEST, "the server id does not match its key").into_response();
     }
     let member = Member { id: e.id.clone(), name: e.name.trim().chars().take(80).collect(), url: e.url.clone(), key: e.key.clone(), joined: now_ms() };
     {

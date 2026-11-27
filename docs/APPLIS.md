@@ -83,6 +83,19 @@ ces variables :
 | `STRATA_CORE_URL` | `http://127.0.0.1:8080` | l'API du Core, sur la machine |
 | `STRATA_CORE_VERSION` | `0.3.0` | |
 | `STRATA_SERVER_NAME` | `Régie A` | le nom d'usage du serveur |
+| `STRATA_APP_TOKEN` | `3f9c…` (40 caractères) | **son jeton** : voir ci-dessous |
+
+**Le jeton de l'appli.** Tout programme de la machine peut joindre `127.0.0.1:<port>` ; seul le Core
+connaît le jeton. Il est envoyé :
+
+- **par le Core à l'appli**, sur chaque requête relayée (`X-Strata-App-Token`) : l'appli **doit
+  refuser** une requête qui ne le porte pas (ou en porte un autre) avant de croire les en-têtes
+  `X-Strata-User*` et `X-Strata-Admin` ;
+- **par l'appli au Core**, sur ses appels locaux (`/api/streams/app/…`, `/api/health/alerts/app`),
+  dans le même en-tête : un appel qui porte le jeton d'une autre appli est refusé (`403`). Sans
+  jeton, l'appel est encore accepté pour les applis d'avant le jeton ; ce ne sera plus le cas.
+
+Il ne change pas d'un lancement à l'autre ; il ne doit jamais être affiché ni journalisé.
 
 - **Arrêt** : `SIGTERM` à son groupe de processus, `SIGKILL` 10 s plus tard. L'appli doit finir
   proprement sur `SIGTERM` (fermer ses fichiers, ses entrées).
@@ -114,10 +127,13 @@ L'appli reçoit les requêtes **telles que le navigateur les a envoyées** (chem
 | `X-Strata-Group-Names` | leurs noms, chacun encodé en pourcentage, séparés par des virgules |
 | `X-Strata-Lang` / `X-Strata-Theme` | ses choix (`fr`, `dark`…), vides s'il n'en a pas fait |
 | `X-Forwarded-For` / `-Proto` / `-Host` | l'adresse du navigateur, `http`/`https`, le nom demandé |
+| `X-Strata-App-Token` | le jeton de l'appli (`STRATA_APP_TOKEN`) : la requête vient bien du Core |
 
 Garanties du Core :
 
-- Sans session, l'appli **ne reçoit rien** : une page demandée renvoie à la connexion du cockpit, qui
+- Sans session, l'appli **ne reçoit rien** (sauf ses chemins publics `[relay] public`, sur une
+  frontière de segment : `/health` couvre `/health/…`, pas `/healthX` ; un chemin avec `..`, `//` ou
+  `%2e` n'est jamais public) : une page demandée renvoie à la connexion du cockpit, qui
   ramène ensuite à la même adresse ; une requête de son code (API, WebSocket) reçoit `401`.
 - Les en-têtes `X-Strata-*` envoyés par le navigateur sont **retirés** : ceux que l'appli reçoit
   viennent du Core.

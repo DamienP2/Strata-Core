@@ -400,6 +400,16 @@ pub fn unpack(archive: &Path, apps_dir: &Path) -> Result<Staged, String> {
         if total > MAX_UNPACKED {
             return Err("the archive is too big".into());
         }
+        // Un lien ne pointe que dans l'archive (pas de chemin absolu, pas de `..`).
+        if kind.is_symlink() {
+            let target = e.link_name().ok().flatten().map(|t| t.into_owned()).unwrap_or_default();
+            let inside = target.is_relative() && !target.components().any(|c| matches!(c, std::path::Component::ParentDir));
+            if !inside {
+                return Err(format!("the archive holds a link outside of it: {}", target.display()));
+            }
+        }
+        // Ni setuid/setgid, ni fichier modifiable par d'autres comptes.
+        e.set_mask(0o6022);
         // `unpack_in` refuse les chemins qui sortiraient du dossier.
         e.unpack_in(&st.staging).map_err(|err| format!("cannot unpack the archive: {err}"))?;
     }

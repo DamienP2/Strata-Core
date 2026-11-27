@@ -153,6 +153,40 @@ impl Apps {
     }
 }
 
+/// Le jeton d'une appli (`STRATA_APP_TOKEN`) : il prouve à l'appli qu'une requête vient du relais
+/// du Core (en-tête `X-Strata-App-Token`), et au Core qu'un appel local vient bien de cette appli
+/// (même en-tête). Stable (il ne relance pas l'appli), tiré d'un secret du Core que les autres
+/// comptes ne lisent pas.
+pub fn app_token(data_dir: &Path, id: &str) -> String {
+    static SECRET: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    let secret = SECRET.get_or_init(|| {
+        let path = data_dir.join("app-secret");
+        if let Ok(b) = std::fs::read(&path) {
+            if b.len() >= 32 {
+                return b;
+            }
+        }
+        let mut b = vec![0u8; 32];
+        let _ = ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut b);
+        if let Err(e) = strata_core::files::write_atomic(&path, &b, true) {
+            tracing::warn!("cannot keep the app secret: {e}");
+        }
+        b
+    });
+    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret);
+    ring::hmac::sign(&key, id.as_bytes()).as_ref()[..20].iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Un appel local qui se dit venir de l'appli `app` : vrai s'il porte son jeton, faux s'il en
+/// porte un autre, None s'il n'en porte pas (appli d'avant les jetons : acceptée, signalée).
+pub fn app_token_ok(data_dir: &Path, headers: &axum::http::HeaderMap, app: &str) -> Option<bool> {
+    let given = headers.get("x-strata-app-token").and_then(|v| v.to_str().ok())?;
+    let want = app_token(data_dir, app);
+    let (a, b) = (given.trim().as_bytes(), want.as_bytes());
+    // Comparé en temps constant.
+    Some(a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0)
+}
+
 /// Comment le Core lance une appli : sa commande `[run]`, dans son dossier, avec les variables
 /// `STRATA_*` (docs/APPLIS.md). Aucune sans `[run]` : elle est lancée à part.
 pub fn launch_of(a: &Installed, data_dir: &Path, cfg: &ServerConfig, core_port: u16) -> Option<Launch> {
@@ -173,6 +207,7 @@ pub fn launch_of(a: &Installed, data_dir: &Path, cfg: &ServerConfig, core_port: 
         ("STRATA_CORE_URL", format!("http://127.0.0.1:{core_port}")),
         ("STRATA_CORE_VERSION", strata_core::VERSION.to_string()),
         ("STRATA_SERVER_NAME", cfg.name.clone()),
+        ("STRATA_APP_TOKEN", app_token(data_dir, &m.id)),
         // Les réglages réseau de NDI, les mêmes pour toutes les applis (Matériel › NDI).
         ("NDI_CONFIG_DIR", crate::hardware::ndi::config_dir(data_dir).display().to_string()),
     ];

@@ -8,12 +8,12 @@
 //! - **les incidents** du dernier jour, une même ligne comptée une fois ;
 //! - **l'export** pour le support : tout cela, et les réglages sans leurs secrets.
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     fs,
     io::Write as _,
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use axum::{
@@ -167,6 +167,24 @@ pub fn app_line(app: &str, text: &str) {
 
 fn crashes_dir() -> Option<PathBuf> {
     DIR.get().map(|d| d.join("crashes"))
+}
+
+/// Garde-fou des rapports de plantage : (endroit → dernier rapport), et les rapports de l'heure.
+type CrashSeen = (HashMap<String, Instant>, Vec<Instant>);
+
+fn crash_allowed(place: &str) -> bool {
+    static SEEN: Mutex<Option<CrashSeen>> = Mutex::new(None);
+    // Dans le crochet de panique : jamais bloquer (une panique sous ce verrou).
+    let Ok(mut g) = SEEN.try_lock() else { return false };
+    let (by_place, hour) = g.get_or_insert_with(Default::default);
+    let now = Instant::now();
+    hour.retain(|t| now.duration_since(*t) < Duration::from_secs(3600));
+    if hour.len() >= 20 || by_place.get(place).is_some_and(|t| now.duration_since(*t) < Duration::from_secs(60)) {
+        return false;
+    }
+    hour.push(now);
+    by_place.insert(place.to_string(), now);
+    true
 }
 
 fn crash_file(c: &Crash) -> String {
@@ -326,6 +344,13 @@ pub fn start(data_dir: &Path) {
     }
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        // Au plus un rapport par endroit et par minute, et 20 par heure : une panique répétée
+        // (requête en boucle) ne remplit pas le disque.
+        let place = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default();
+        if !crash_allowed(&place) {
+            prev(info);
+            return;
+        }
         let message = info
             .payload()
             .downcast_ref::<&str>()
@@ -560,7 +585,9 @@ pub fn redact(v: &mut Value) {
         Value::Object(o) => {
             for (k, x) in o.iter_mut() {
                 let k = k.to_ascii_lowercase();
-                if ["password", "secret", "token", "apikey", "api_key", "key", "pass", "hash"].iter().any(|s| k == *s || k.ends_with(s)) && x.is_string() {
+                if ["password", "secret", "token", "apikey", "api_key", "key", "pass", "hash", "webhook", "url"].iter().any(|s| k == *s || k.ends_with(s))
+                    && x.is_string()
+                {
                     *x = Value::String("•••".into());
                 } else {
                     redact(x);

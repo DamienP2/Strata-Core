@@ -209,6 +209,11 @@ async fn keep(id: String, w: Arc<Watch>, l: Launch, mut stop: watch::Receiver<bo
             cmd.pre_exec(|| {
                 const CLOSE_RANGE_CLOEXEC: libc::c_uint = 1 << 2;
                 let _ = libc::syscall(libc::SYS_close_range, 3 as libc::c_uint, libc::c_uint::MAX, CLOSE_RANGE_CLOEXEC);
+                // Les droits réseau du Core (MTL : sockets brutes, AF_XDP, BPF ; ports bas) ne
+                // passent pas aux applis ; la mémoire verrouillée et les priorités, si.
+                for cap in [CAP_NET_BIND_SERVICE, CAP_NET_ADMIN, CAP_NET_RAW, CAP_BPF] {
+                    libc::prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_LOWER, cap, 0, 0);
+                }
                 Ok(())
             });
         }
@@ -391,3 +396,12 @@ mod tests {
         s.stop("ghost").await;
     }
 }
+
+// Les capacités Linux (linux/capability.h, linux/prctl.h).
+pub(crate) const PR_CAP_AMBIENT: libc::c_int = 47;
+pub(crate) const PR_CAP_AMBIENT_LOWER: libc::c_ulong = 3;
+pub(crate) const PR_CAP_AMBIENT_CLEAR_ALL: libc::c_ulong = 4;
+const CAP_NET_BIND_SERVICE: libc::c_ulong = 10;
+const CAP_NET_ADMIN: libc::c_ulong = 12;
+const CAP_NET_RAW: libc::c_ulong = 13;
+const CAP_BPF: libc::c_ulong = 39;

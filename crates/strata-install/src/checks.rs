@@ -190,6 +190,25 @@ pub fn is_desktop_video(name: &str, dir: bool) -> bool {
     dir || [".tar.gz", ".tgz", ".tar", ".deb", ".sh", ".run"].iter().any(|x| n.ends_with(x))
 }
 
+/// Un fichier que root peut lancer ou installer : à root ou à l'administrateur qui a lancé
+/// l'installateur (`sudo`), et que personne d'autre ne peut modifier (ni lui, ni son dossier).
+/// Un fichier déposé par un autre compte (une appli, un utilisateur, dans /tmp) est ignoré.
+pub fn trusted(p: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let me = std::env::var("SUDO_UID").ok().and_then(|u| u.parse::<u32>().ok());
+    let ok = |m: &std::fs::Metadata| (m.uid() == 0 || Some(m.uid()) == me) && m.mode() & 0o022 == 0;
+    let Ok(m) = std::fs::symlink_metadata(p) else { return false };
+    if m.file_type().is_symlink() || !ok(&m) {
+        return false;
+    }
+    // Son dossier : pas modifiable par d'autres, sauf collant (/tmp) — le fichier y reste alors à
+    // son propriétaire.
+    match p.parent().and_then(|d| std::fs::metadata(d).ok()) {
+        Some(d) => d.mode() & 0o1000 != 0 || ok(&d),
+        None => false,
+    }
+}
+
 pub fn find_desktop_video() -> Option<PathBuf> {
     let mut dirs: Vec<PathBuf> = vec![std::env::current_dir().unwrap_or_default(), "/root".into(), "/tmp".into()];
     if let Ok(home) = std::fs::read_dir("/home") {
@@ -202,7 +221,7 @@ pub fn find_desktop_video() -> Option<PathBuf> {
             // depuis 5 s.
             let settled =
                 e.metadata().ok().and_then(|m| m.modified().ok()).and_then(|t| t.elapsed().ok()).is_some_and(|d| d > std::time::Duration::from_secs(5));
-            if is_desktop_video(&e.file_name().to_string_lossy(), e.path().is_dir()) && (settled || e.path().is_dir()) {
+            if is_desktop_video(&e.file_name().to_string_lossy(), e.path().is_dir()) && (settled || e.path().is_dir()) && trusted(&e.path()) {
                 found.push(e.path());
             }
         }
@@ -266,7 +285,7 @@ pub fn find_ndi_sdk() -> Option<PathBuf> {
             let n = e.file_name().to_string_lossy().to_lowercase();
             let settled =
                 e.metadata().ok().and_then(|m| m.modified().ok()).and_then(|t| t.elapsed().ok()).is_some_and(|d| d > std::time::Duration::from_secs(5));
-            if n.starts_with("install_ndi_sdk") && n.contains("linux") && (n.ends_with(".tar.gz") || n.ends_with(".sh")) && settled {
+            if n.starts_with("install_ndi_sdk") && n.contains("linux") && (n.ends_with(".tar.gz") || n.ends_with(".sh")) && settled && trusted(&e.path()) {
                 found.push(e.path());
             }
         }
@@ -287,9 +306,26 @@ pub fn installed_core(root: &Path) -> Option<String> {
         return None;
     }
     let bin = paths::under(root, paths::BIN);
-    let out = Command::new(&bin).arg("--version").output().ok()?;
+    // Le programme est au compte du service : root ne le lance pas lui-même.
+    let out = if root == Path::new("/") && unsafe { libc::geteuid() } == 0 {
+        Command::new("runuser").args(["-u", paths::USER, "--"]).arg(&bin).arg("--version").output().ok()?
+    } else {
+        Command::new(&bin).arg("--version").output().ok()?
+    };
     let v = String::from_utf8_lossy(&out.stdout).split_whitespace().last().unwrap_or_default().to_string();
     (out.status.success() && !v.is_empty()).then_some(v)
+}
+
+/// Un dossier temporaire à soi : nom imprévisible, créé neuf (pas un dossier posé d'avance par un
+/// autre compte), 0700.
+pub fn private_tmp(prefix: &str) -> Result<PathBuf, String> {
+    use std::io::Read;
+    use std::os::unix::fs::DirBuilderExt;
+    let mut r = [0u8; 8];
+    std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut r)).map_err(|e| e.to_string())?;
+    let dir = std::env::temp_dir().join(format!("{prefix}-{}", r.iter().map(|b| format!("{b:02x}")).collect::<String>()));
+    std::fs::DirBuilder::new().mode(0o700).create(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    Ok(dir)
 }
 
 #[cfg(test)]

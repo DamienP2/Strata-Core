@@ -140,10 +140,14 @@ pub fn spawn(args: &[String], stdin: bool, stdout: bool, fd3: Fd3) -> Result<Pro
             // Tué avec le Core.
             libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
             if let Some(fd) = theirs_raw {
-                if libc::dup2(fd, 3) < 0 {
+                // Déjà le 3 : dup2 ne fait rien, mais il faut retirer O_CLOEXEC.
+                let r = if fd == 3 { libc::fcntl(3, libc::F_SETFD, 0) } else { libc::dup2(fd, 3) };
+                if r < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
             }
+            // Aucun droit du Core pour ffmpeg (il lit des flux venus du réseau).
+            libc::prctl(crate::supervisor::PR_CAP_AMBIENT, crate::supervisor::PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0);
             // Rien d'autre du Core.
             const CLOSE_RANGE_CLOEXEC: libc::c_uint = 1 << 2;
             let _ = libc::syscall(libc::SYS_close_range, 4 as libc::c_uint, libc::c_uint::MAX, CLOSE_RANGE_CLOEXEC);

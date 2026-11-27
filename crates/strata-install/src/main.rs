@@ -137,8 +137,7 @@ fn plan_of(a: &Args) -> Plan {
         if !a.accept_ndi_license {
             fail("NDI: read its license (https://ndi.video/legal/), then add --accept-ndi-license");
         }
-        let dir = std::env::temp_dir().join("strata-install-ndi");
-        match ndi::get(&dir) {
+        match checks::private_tmp("strata-install-ndi").and_then(|dir| ndi::get(&dir)) {
             Ok(sdk) => p.ndi = Some(sdk.lib),
             Err(e) => eprintln!("! NDI skipped: {e}"),
         }

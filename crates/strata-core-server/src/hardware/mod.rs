@@ -252,6 +252,26 @@ impl Flow {
     }
 }
 
+/// Une seule écriture de `hardware.json` à la fois (la page Matériel, NMOS, le mode des cartes).
+static WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Prend le droit d'écrire `hardware.json` (le relire, le changer, l'écrire).
+pub fn write_lock() -> std::sync::MutexGuard<'static, ()> {
+    WRITE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// La révision de `hardware.json` : change à chaque écriture. La page Matériel la renvoie en
+/// enregistrant, pour ne pas écraser ce qu'un autre (NMOS, un autre admin) a écrit entre-temps.
+pub fn revision(data_dir: &Path) -> String {
+    match std::fs::metadata(HardwareConfig::path(data_dir)) {
+        Ok(m) => {
+            let t = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).unwrap_or_default();
+            format!("{}.{}-{}", t.as_secs(), t.subsec_nanos(), m.len())
+        }
+        Err(_) => "0".into(),
+    }
+}
+
 impl HardwareConfig {
     /// La vidéo d'un flux : son format, ou sinon le format maison en 1080.
     pub fn video_of(&self, f: &Flow) -> Option<(u32, u32, (u32, u32), bool)> {
@@ -391,6 +411,14 @@ impl HardwareConfig {
             }
         }
         let r = &self.network;
+        // Des noms d'interface Linux : ils partent dans les fichiers de chrony et de ptp4l (root).
+        for (role, name) in
+            [("management", &r.management), ("NDI", &r.ndi), ("media 1", &r.media1), ("media 2", &r.media2), ("PTP", &r.ptp), ("NMOS", &self.nmos.interface)]
+        {
+            if name.len() > 15 || !name.chars().all(|c| c.is_ascii_alphanumeric() || "_.-".contains(c)) {
+                return Err(format!("the {role} interface is not an interface name: {name}"));
+            }
+        }
         if !r.media1.is_empty() && r.media1 == r.media2 {
             return Err("the two media ports need two different interfaces".into());
         }
@@ -479,6 +507,7 @@ fn snapshot(s: &Shared) -> Value {
     };
     json!({
         "config": cfg,
+        "revision": revision(&s.data_dir),
         "decklink": {
             "built": strata_decklink::BUILT,
             "driver": path.is_some() || fake,
@@ -598,9 +627,13 @@ async fn decklink_profile(State(s): State<Shared>, CurrentUser(me): CurrentUser,
         s2.captures.stop_all();
         let r = decklink::set_card_profile(card, &b.profile, simulated);
         let (cards, _, _) = decklink::detect();
-        let mut cfg = HardwareConfig::load(&s2.data_dir);
-        if fit_to_cards(&mut cfg, &cards) {
-            strata_core::files::write_json(&HardwareConfig::path(&s2.data_dir), &cfg, false).map_err(|e| format!("cannot save the hardware settings: {e}"))?;
+        {
+            let _w = write_lock();
+            let mut cfg = HardwareConfig::load(&s2.data_dir);
+            if fit_to_cards(&mut cfg, &cards) {
+                strata_core::files::write_json(&HardwareConfig::path(&s2.data_dir), &cfg, false)
+                    .map_err(|e| format!("cannot save the hardware settings: {e}"))?;
+            }
         }
         reconcile_inputs(&s2);
         r?;
@@ -788,23 +821,41 @@ async fn read(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResul
     Ok(Json(blocking(move || snapshot(&s2)).await?))
 }
 
-async fn write(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(mut cfg): Json<HardwareConfig>) -> ApiResult<Json<Value>> {
+#[derive(Deserialize)]
+struct WriteQuery {
+    /// La révision lue par la page ; absente : écrase sans vérifier.
+    rev: Option<String>,
+}
+
+async fn write(
+    State(s): State<Shared>,
+    CurrentUser(me): CurrentUser,
+    axum::extract::Query(q): axum::extract::Query<WriteQuery>,
+    Json(mut cfg): Json<HardwareConfig>,
+) -> ApiResult<Json<Value>> {
     require(me.admin)?;
     let s2 = s.clone();
     let saved = blocking(move || {
         let (cards, _, _) = decklink::detect();
-        cfg.check(&cards)?;
-        let before = HardwareConfig::load(&s2.data_dir);
-        strata_core::files::write_json(&HardwareConfig::path(&s2.data_dir), &cfg, false).map_err(|e| format!("cannot save the hardware settings: {e}"))?;
+        cfg.check(&cards).map_err(bad)?;
+        let before = {
+            let _w = write_lock();
+            if q.rev.as_deref().is_some_and(|r| r != revision(&s2.data_dir)) {
+                return Err((StatusCode::CONFLICT, "the hardware settings changed meanwhile (NMOS or another administrator)".to_string()));
+            }
+            let before = HardwareConfig::load(&s2.data_dir);
+            strata_core::files::write_json(&HardwareConfig::path(&s2.data_dir), &cfg, false)
+                .map_err(|e| bad(format!("cannot save the hardware settings: {e}")))?;
+            before
+        };
         reconcile_inputs(&s2);
         let ndi_changed = ndi::write_settings(&s2.data_dir, &cfg.ndi, &cfg.network.ndi);
         // L'heure : remise en place quand ce qui la règle change.
         let files = clock::files(&cfg);
         let applied = (files != clock::files(&before)).then(|| clock::apply(&s2.data_dir, &files, false));
-        Ok::<_, String>((snapshot(&s2), ndi_changed, applied))
+        Ok::<_, (StatusCode, String)>((snapshot(&s2), ndi_changed, applied))
     })
-    .await?
-    .map_err(bad)?;
+    .await??;
     crate::nmos::apply(&s).await;
     tracing::info!("hardware settings changed by {}", me.username);
     let (mut v, ndi_changed, applied) = saved;
