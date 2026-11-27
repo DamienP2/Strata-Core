@@ -75,4 +75,5 @@ export const core: Record<string, string> = {
   'Settings of {name}': 'Réglages de {name}',
   'Server settings': 'Réglages du serveur',
   'Help': 'Aide',
+  'No app yet': 'Aucune appli',
 };

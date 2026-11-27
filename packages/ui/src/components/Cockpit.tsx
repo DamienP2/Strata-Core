@@ -8,10 +8,11 @@
  * Les données (applis, serveurs, instances où l'utilisateur a des droits) viennent du Core.
  */
 import { useRef, useState, type ComponentType, type ReactNode } from 'react';
-import { Grid3x3 } from 'lucide-react';
+import { Grid3x3, LayoutGrid } from 'lucide-react';
 import { t, tn } from '../i18n';
 import { useMenuKeys } from '../menuKeys';
 import { Brand } from './Brand';
+import { Empty } from './basics';
 
 type Icon = ComponentType<{ size?: number }>;
 
@@ -129,6 +130,11 @@ export function Cockpit({ data, title, onOpen, onServer }: {
       <div className="st-cockpit-head">
         <h1>{title ?? t('Apps')}</h1>
       </div>
+      {groups.length === 0 && (
+        <div className="st-cockpit-empty">
+          <Empty icon={LayoutGrid} text={t('No app yet')} />
+        </div>
+      )}
       <div className="st-tiles">
         {groups.map(({ app, list }) => {
           const Icon = app.icon;

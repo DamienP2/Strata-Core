@@ -282,6 +282,7 @@ Une appli s'appuie sur le Core, jamais l'inverse.
 1. ~~Renommer le dépôt en `Strata-Core`.~~ Fait.
 2. ~~Trancher l'architecture.~~ Option A, cockpit, sous-domaines.
 3. **Premier lot : DESIGN.** ~~Inventaire, décisions, maquette du cockpit.~~ Faits. Paquet `@strata/ui` ([`packages/ui`](packages/ui)) : design, composants et coquille du cockpit écrits ; reste à le brancher sur le serveur du Core (données réelles du cockpit) et à y passer une première appli.
-4. **Chaîne de releases** : en place pour le paquet web ([`docs/RELEASES.md`](docs/RELEASES.md)) ; le serveur `strata-core` et l'installateur s'y ajouteront. Une étiquette `v*` publie la release, avec sa fiche `release.json` et ses empreintes.
-5. Puis, dans l'ordre à définir : UTILISATEURS, SERVEUR, SANTÉ, HARDWARE, BIBLIOTHÈQUE, INSTALLATEUR.
-6. Mesures pour la configuration minimale.
+4. **Chaîne de releases** : en place ([`docs/RELEASES.md`](docs/RELEASES.md)) pour le paquet web et le serveur `strata-core` ; l'installateur s'y ajoutera. Une étiquette `v*` publie la release, avec sa fiche `release.json` et ses empreintes.
+5. **Serveur `strata-core`** ([`crates/`](crates), interface dans [`web/`](web)) : commencé. Fait : comptes locaux et sessions (cookie valable pour les sous-domaines), premier administrateur, garde des requêtes, préférences, applis installées et actives (`strata-core app …`), cockpit réel. À suivre : réglages (Ce serveur, Applis, Personnes…), SSO et groupes, relais vers les applis, matériel, santé, mises à jour, plusieurs serveurs.
+6. Puis, dans l'ordre à définir : UTILISATEURS, SERVEUR, SANTÉ, HARDWARE, BIBLIOTHÈQUE, INSTALLATEUR.
+7. Mesures pour la configuration minimale.

@@ -1,0 +1,3 @@
+# Lignes longues, comme dans CG et LiveCut.
+max_width = 160
+use_small_heuristics = "Max"

@@ -1,6 +1,7 @@
 name: CI
 
-# À chaque envoi et chaque pull request : le paquet web se compile et ses types sont justes.
+# À chaque envoi et chaque pull request : le paquet web, l'interface du Core et le serveur Rust se
+# construisent ; les tests et clippy passent.
 on:
   push:
     branches: ['**']
@@ -11,20 +12,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ui:
-    name: '@strata/ui'
+  web:
+    name: '@strata/ui et interface du Core'
     runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: packages/ui
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: packages/ui/package-lock.json
-      - run: npm ci
-      - run: npm run build
-      - name: Le paquet se prépare
-        run: npm pack --dry-run
+          cache-dependency-path: |
+            packages/ui/package-lock.json
+            web/package-lock.json
+      - name: '@strata/ui'
+        working-directory: packages/ui
+        run: |
+          npm ci
+          npm run build
+          npm pack --dry-run
+      - name: Interface du Core
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+  rust:
+    name: Serveur Rust
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Tests
+        run: cargo test --workspace --locked

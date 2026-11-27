@@ -1,12 +1,13 @@
 name: Release
 
 # Une étiquette v* (v0.2.0) publie une release GitHub de Strata-Core avec :
+#   - strata-core-<version>-linux-x86_64.tar.gz : le serveur strata-core, interface comprise ;
 #   - strata-ui-<version>.tgz : le paquet web, que les applis référencent par son adresse ;
 #   - release.json : la fiche de la release (version, fichiers, empreintes), lue par le Core ;
 #   - SHA256SUMS : les empreintes de chaque fichier.
 # Lancée à la main (workflow_dispatch), elle construit les mêmes fichiers sans rien publier.
 # Tout est construit sur Ubuntu 24.04, la plateforme des serveurs (voir docs/RELEASES.md).
-# À ajouter quand ils existeront : le serveur strata-core et l'installateur strata-install (Rust).
+# À ajouter quand il existera : l'installateur strata-install.
 on:
   push:
     tags: ['v*']
@@ -37,7 +38,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: packages/ui/package-lock.json
+          cache-dependency-path: |
+            packages/ui/package-lock.json
+            web/package-lock.json
 
       - name: Paquet web
         working-directory: packages/ui
@@ -47,6 +50,27 @@ jobs:
           mkdir -p ../../dist
           npm pack --pack-destination ../../dist
           test -f "../../dist/strata-ui-$VERSION.tgz"
+
+      - name: Interface du Core
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Serveur
+        run: cargo build --release --locked -p strata-core-server
+
+      - name: Archive du serveur
+        run: |
+          NAME="strata-core-$VERSION-linux-x86_64"
+          mkdir -p "build/$NAME"
+          cp target/release/strata-core "build/$NAME/"
+          cp README.md "build/$NAME/"
+          cp packages/ui/src/styles/fonts/OFL.txt "build/$NAME/OFL-Inter.txt"
+          "build/$NAME/strata-core" --version
+          tar -C build -czf "dist/$NAME.tar.gz" "$NAME"
 
       - name: Fiche et empreintes
         run: node scripts/release-manifest.mjs dist "$VERSION"

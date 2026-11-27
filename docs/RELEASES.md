@@ -12,7 +12,7 @@ git push origin v0.2.0
 Le workflow `Release` (`.github/workflows/release.yml`) :
 
 1. reprend la version de l'étiquette (`scripts/stamp-version.sh` : `v0.2` → `0.2.0`) ;
-2. construit le paquet web `@strata/ui` ;
+2. construit le paquet web `@strata/ui`, l'interface du Core, puis le serveur `strata-core` qui l'embarque ;
 3. écrit la fiche de la release et les empreintes (`scripts/release-manifest.mjs`) ;
 4. publie la release avec ses fichiers.
 
@@ -25,7 +25,7 @@ Lancé à la main (*Actions › Release › Run workflow*), le workflow construi
 | Fichier | Contenu |
 | --- | --- |
 | `strata-ui-<version>.tgz` | le paquet web `@strata/ui` |
-| `strata-core-<version>-linux-x86_64.tar.gz` | le serveur `strata-core` *(à venir)* |
+| `strata-core-<version>-linux-x86_64.tar.gz` | le serveur `strata-core`, interface comprise |
 | `strata-install-<version>-linux-x86_64` | l'installateur *(à venir)* |
 | `release.json` | la fiche de la release |
 | `SHA256SUMS` | l'empreinte SHA-256 de chaque fichier |

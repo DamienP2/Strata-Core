@@ -1,0 +1,40 @@
+[package]
+name = "strata-core-server"
+description = "Le service strata-core : le cockpit, les comptes, et bientôt le matériel, la santé et les mises à jour."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "strata-core"
+path = "src/main.rs"
+
+[lib]
+name = "strata_core_server"
+path = "src/lib.rs"
+
+[dependencies]
+strata-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+semver.workspace = true
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "signal", "net"] }
+tower-http = { version = "0.6", features = ["fs", "trace"] }
+rust-embed = { version = "8", features = ["mime-guess", "include-exclude"] }
+clap = { version = "4", features = ["derive", "env"] }
+argon2 = "0.5"
+rpassword = "7"
+directories = "6"
+arc-swap = "1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+gethostname = "1"
+libc = "0.2"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

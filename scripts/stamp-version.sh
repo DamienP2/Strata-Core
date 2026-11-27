@@ -23,8 +23,10 @@ esac
 # Paquet web (et son package-lock.json).
 perl -pi -e 's/"version": "[^"]*"/"version": "'"$V"'"/ if $. < 6' packages/ui/package.json
 perl -0pi -e 's/("name": "\@strata\/ui",\s*"version": ")[^"]+/${1}'"$V"'/g' packages/ui/package-lock.json
-# Crates Rust (quand ils existeront) : la version du workspace.
-if [ -f Cargo.toml ]; then
-  perl -pi -e 's/^version = "[^"]*"/version = "'"$V"'"/ if $. < 15' Cargo.toml
-fi
+# Interface du Core.
+perl -pi -e 's/"version": "[^"]*"/"version": "'"$V"'"/ if $. < 6' web/package.json
+perl -0pi -e 's/("name": "strata-core-web",\s*"version": ")[^"]+/${1}'"$V"'/g' web/package-lock.json
+# Crates Rust : la version du workspace, et celle de nos crates dans Cargo.lock (--locked).
+perl -pi -e 's/^version = "[^"]*"/version = "'"$V"'"/ if $. < 15' Cargo.toml
+perl -0pi -e 's/(name = "strata-core(?:-server)?"\r?\nversion = ")[^"]+/${1}'"$V"'/g' Cargo.lock
 echo "version : $V"
