@@ -249,6 +249,10 @@ pub fn ndi() -> Option<PathBuf> {
 
 /// La version du Core installé (`strata-core 0.3.0`), s'il l'est.
 pub fn installed_core(root: &Path) -> Option<String> {
+    // Une installation interrompue avant les réglages (pas de config.json) est reprise du début.
+    if !paths::under(root, paths::DATA).join("config.json").exists() {
+        return None;
+    }
     let bin = paths::under(root, paths::BIN);
     let out = Command::new(&bin).arg("--version").output().ok()?;
     let v = String::from_utf8_lossy(&out.stdout).split_whitespace().last().unwrap_or_default().to_string();
