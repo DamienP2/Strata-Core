@@ -820,17 +820,26 @@ mod tests {
                     let mut r = Reader::open(&p, &format!("app{k}")).unwrap();
                     let mut buf = Vec::new();
                     let mut n = 0;
-                    while !stop.load(Ordering::Relaxed) {
+                    let mut read = |r: &mut Reader| {
                         if let Some(f) = r.latest(&mut buf) {
                             let b = (f.no % 251) as u8;
                             assert!(buf.iter().all(|&x| x == b), "a torn frame");
                             n += 1;
                         }
+                    };
+                    while !stop.load(Ordering::Relaxed) {
+                        read(&mut r);
                     }
+                    // La dernière image, pour un lecteur que la machine aurait laissé de côté.
+                    read(&mut r);
                     n
                 })
             })
             .collect();
+        // Tous les lecteurs ouverts avant la première image.
+        while w.readers().len() < 3 {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         let mut data = vec![0u8; size];
         for no in 1..=2000u64 {
             data.fill((no % 251) as u8);
