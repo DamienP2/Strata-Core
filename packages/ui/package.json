@@ -1,0 +1,39 @@
+{
+  "name": "@strata/ui",
+  "version": "0.1.0",
+  "description": "Le design commun des applis Strata : jetons, thèmes, police, composants.",
+  "private": true,
+  "type": "module",
+  "files": ["dist"],
+  "main": "./dist/strata-ui.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/strata-ui.js" },
+    "./styles.css": "./dist/strata-ui.css"
+  },
+  "sideEffects": ["*.css"],
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build && node scripts/fonts.mjs && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "pack": "npm run build && npm pack --pack-destination ../../dist"
+  },
+  "peerDependencies": {
+    "lucide-react": ">=1.57.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "zustand": "^5.0.15"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "lucide-react": "^1.57.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "typescript": "~5.9.3",
+    "vite": "^8.3.4",
+    "zustand": "^5.0.15"
+  }
+}

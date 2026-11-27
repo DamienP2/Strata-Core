@@ -1,0 +1,9 @@
+/* Mise en page du banc d'essai seulement (pas dans le paquet). */
+.pg { display: flex; flex-direction: column; height: 100%; }
+.pg-top { height: 46px; flex: none; display: flex; align-items: center; gap: 12px; padding: 0 14px; border-bottom: 1px solid var(--line); background: var(--topbar-bg); }
+.pg-main { flex: 1; min-height: 0; overflow: auto; background: var(--page-bg); padding: 28px max(16px, 4vw) 100px; display: flex; flex-direction: column; gap: 26px; }
+.pg-section h3 { margin: 0 0 12px; font-size: var(--fs-11); font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); }
+.pg-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; }
+.pg-wide { flex: 1; max-width: 980px; }
+.pg-empty { width: 420px; height: 200px; display: flex; border: 1px dashed var(--line-2); border-radius: 12px; }
+.pg-dots { display: inline-flex; gap: 10px; align-items: center; }

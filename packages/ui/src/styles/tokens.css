@@ -1,0 +1,138 @@
+/*
+ * Jetons du design Strata. Sombre par défaut ; le clair ne fait que redéfinir
+ * les jetons sous :root[data-theme='light'] (posé par theme.ts).
+ * Valeurs reprises telles quelles de CG et de LiveCut (identiques dans les deux).
+ */
+:root {
+  /* Fonds */
+  --bg: #0b0c12;
+  --panel: #12141d;
+  --panel-2: #181b26;
+  --panel-3: #1f2331;
+  /* Traits */
+  --line: #262a3a;
+  --line-2: #323750;
+  /* Texte */
+  --text: #e6e8f2;
+  --text-2: #a3a8bf;
+  --text-3: #8a90ad;
+  /* Accent pervenche ; --on-accent : encre sur l'accent (sombre, l'accent est clair) */
+  --accent: #8fa3ff;
+  --accent-2: #bfcaff;
+  --accent-soft: rgba(143, 163, 255, 0.16);
+  --on-accent: #0b1236;
+  /* États : rouge (erreur, danger, perdu), vert (ok), orange (attention) */
+  --live: #ff3b5c;
+  --live-soft: rgba(255, 59, 92, 0.16);
+  --live-btn: #e11d48; /* boutons rouges pleins à texte blanc */
+  --pvw: #22c55e;
+  --warn: #f5a524;
+  --key: #f5c542;
+  --mask: #2dd4bf;
+  /* Aplats vifs (identiques au sombre ; le clair fonce --pvw et --warn pour le texte) */
+  --pvw-fill: #22c55e;
+  --warn-fill: #f5a524;
+  /* Texte de couleur (le sombre prend des teintes pâles) */
+  --t-red: #ff8aa0;
+  --t-green: #4ade80;
+  --t-blue: #7dd3fc;
+  --t-yellow: #fde047;
+  --t-pink: #f9a8d4;
+  --t-violet: #c4b5fd;
+  --t-orange: #fdba74;
+  /* Fonds de l'Opérateur (CG), du plus profond au plus clair */
+  --op-1: #151722;
+  --op-2: #1c1f2c;
+  --op-3: #252938;
+  --op-4: #2f3446;
+  /* Formes */
+  --radius: 8px;
+  /* Typo : rien sous 11 px */
+  --fs-11: 11px;
+  --fs-12: 12px;
+  --fs-13: 13px;
+  --fs-15: 15px;
+  --fs-20: 20px;
+  --font: Inter, system-ui, sans-serif;
+  --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, 'DejaVu Sans Mono', monospace;
+  /* Contrôles : champs, listes, boutons ; dense ; boutons icône, interrupteurs */
+  --h-control: 32px;
+  --h-control-dense: 28px;
+  --hit-min: 28px;
+  /* Ombres de ce qui flotte */
+  --shadow-float: 0 16px 40px rgba(0, 0, 0, 0.5);
+  --shadow-modal: 0 30px 80px rgba(0, 0, 0, 0.5);
+  --shadow-toast: 0 8px 30px rgba(0, 0, 0, 0.4);
+  --shadow-tip: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-hover: 0 14px 34px rgba(0, 0, 0, 0.35);
+  /* Fonds de page */
+  --page-bg: radial-gradient(ellipse at top, #141725 0%, #0b0c12 60%);
+  --topbar-bg: linear-gradient(180deg, #141623, #10121a);
+  --brand-ink: #fff;
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  --bg: #eef0f5;
+  --panel: #ffffff;
+  --panel-2: #f5f6fa;
+  --panel-3: #e9ecf3;
+  --line: #dde1ea;
+  --line-2: #cfd4e0;
+  --text: #161925;
+  --text-2: #4f5670;
+  --text-3: #6b7290;
+  --accent: #4f63e6;
+  --accent-2: #3a4bc4;
+  --accent-soft: rgba(79, 99, 230, 0.12);
+  --on-accent: #ffffff;
+  --live: #e11d48;
+  --live-soft: rgba(225, 29, 72, 0.12);
+  --live-btn: #e11d48;
+  --pvw: #15803d; /* vert et orange foncés pour le texte sur blanc */
+  --warn: #b45309;
+  --key: #a16207;
+  --mask: #0d9488;
+  --pvw-fill: #22c55e;
+  --warn-fill: #f5a524;
+  --t-red: #c8183f;
+  --t-green: #15803d;
+  --t-blue: #0369a1;
+  --t-yellow: #a16207;
+  --t-pink: #be185d;
+  --t-violet: #6d28d9;
+  --t-orange: #c2410c;
+  --op-1: #ffffff;
+  --op-2: #f3f4f8;
+  --op-3: #e6e9f0;
+  --op-4: #d6dbe6;
+  --shadow-float: 0 12px 32px rgba(22, 25, 37, 0.16);
+  --shadow-modal: 0 12px 32px rgba(22, 25, 37, 0.16);
+  --shadow-toast: 0 12px 32px rgba(22, 25, 37, 0.16);
+  --shadow-tip: 0 12px 32px rgba(22, 25, 37, 0.16);
+  --shadow-hover: 0 6px 18px rgba(22, 25, 37, 0.1);
+  --page-bg: var(--bg);
+  --topbar-bg: var(--panel);
+  --brand-ink: var(--text);
+  color-scheme: light;
+}
+
+/*
+ * Les images (aperçus, vignettes, consoles de journal) restent sombres dans les
+ * deux thèmes : la classe .st-dark remet les jetons sombres sur son conteneur.
+ */
+:root[data-theme='light'] .st-dark {
+  --bg: #0b0c12;
+  --panel: #12141d;
+  --panel-2: #181b26;
+  --panel-3: #1f2331;
+  --line: #262a3a;
+  --line-2: #323750;
+  --text: #e6e8f2;
+  --text-2: #a3a8bf;
+  --text-3: #8a90ad;
+  --accent-2: #bfcaff;
+  --pvw: #22c55e;
+  --warn: #f5a524;
+  color-scheme: dark;
+}

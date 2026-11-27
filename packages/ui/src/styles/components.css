@@ -1,0 +1,126 @@
+/*
+ * Composants du Core. Règles reprises de CG et LiveCut (identiques dans les deux),
+ * classes renommées avec le préfixe st- ; l'ancien nom est en commentaire.
+ */
+
+/* ---------- Marque (.brand) ---------- */
+.st-brand { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; flex: none; }
+.st-brand-lockup { display: flex; align-items: baseline; gap: 6px; }
+.st-brand-lockup:has(.st-brand-f-lead) { align-items: flex-end; }
+.st-brand .st-brand-f-lead { color: var(--brand-ink); margin-right: 2px; margin-bottom: -1px; }
+.st-brand-name, .st-brand-module { font-weight: 800; font-size: 16px; letter-spacing: -0.035em; line-height: 1; color: var(--brand-ink); }
+.st-brand-module { font-weight: 400; letter-spacing: -0.02em; color: var(--accent); }
+.st-brand-sign { display: flex; align-items: flex-end; gap: 3px; color: var(--text-2); }
+.st-brand:not(.stacked) .st-brand-sign { opacity: 0.6; }
+.st-brand svg { display: block; flex: none; overflow: visible; }
+.st-brand.stacked { align-items: center; gap: 12px; }
+.st-brand.stacked .st-brand-lockup { gap: 10px; }
+.st-brand.stacked .st-brand-name, .st-brand.stacked .st-brand-module { font-size: 40px; }
+.st-brand.stacked .st-brand-sign { gap: 6px; }
+
+/* ---------- Boutons (.btn, .icon-btn) ---------- */
+.st-btn { display: inline-flex; align-items: center; gap: 6px; min-height: var(--h-control); background: var(--panel-3); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; cursor: pointer; transition: background 0.12s, border-color 0.12s; white-space: nowrap; text-decoration: none; color: inherit; }
+.st-btn:hover:not(:disabled) { background: var(--line); }
+.st-btn:disabled { opacity: 0.4; cursor: default; }
+.st-btn.small { min-height: var(--h-control-dense); padding: 4px 9px; font-size: 12px; }
+.st-btn.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-2); }
+.st-btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.st-btn.primary:hover:not(:disabled) { background: var(--accent-2); }
+.st-btn.ghost { background: none; border-color: transparent; color: var(--text-2); }
+.st-btn.ghost:hover:not(:disabled) { background: var(--panel-2); color: var(--text); }
+.st-btn.danger { color: var(--live); }
+.st-btn.danger-solid { background: var(--live-btn); border-color: var(--live); color: white; }
+.st-btn.danger-solid:hover { filter: brightness(1.1); }
+.st-btn.warn { background: var(--warn-fill); border-color: var(--warn-fill); color: #1a1205; font-weight: 700; }
+.st-btn.block { justify-content: center; padding: 9px 12px; }
+.st-icon-btn { display: inline-grid; place-items: center; width: var(--hit-min); height: var(--hit-min); border-radius: 6px; border: 1px solid var(--line); background: var(--panel-3); cursor: pointer; color: var(--text-2); transition: all 0.12s; flex: none; }
+.st-icon-btn:hover:not(:disabled) { color: var(--text); background: var(--line); }
+.st-icon-btn:disabled { opacity: 0.3; cursor: default; }
+.st-icon-btn.ghost { background: transparent; border-color: transparent; }
+.st-icon-btn.ghost:hover:not(:disabled) { background: var(--panel-3); }
+.st-icon-btn.on { color: var(--text); }
+
+/* ---------- Contrôle segmenté (.segmented) et petit choix (.lang-switch) ---------- */
+.st-segmented { display: inline-flex; background: var(--panel-3); border: 1px solid var(--line); border-radius: 6px; padding: 2px; }
+.st-segmented button { border: none; background: none; padding: 3px 8px; border-radius: 4px; cursor: pointer; color: var(--text-2); display: grid; place-items: center; font-size: 11.5px; }
+.st-segmented button.on { background: var(--line-2); color: var(--text); }
+.st-segmented button:disabled { opacity: 0.4; cursor: default; }
+.st-choice { display: flex; padding: 2px; gap: 1px; border-radius: 7px; background: var(--panel-2); border: 1px solid var(--line); }
+.st-choice button { border: none; background: none; color: var(--text-3); font-size: var(--fs-11); font-weight: 700; letter-spacing: 0.04em; padding: 3px 7px; border-radius: 5px; cursor: pointer; }
+.st-choice button:hover { color: var(--text); }
+.st-choice button.on { background: var(--accent-soft); color: var(--accent-2); }
+
+/* ---------- Interrupteur (.check) ---------- */
+.st-switch { display: flex; gap: 8px; align-items: center; color: var(--text-2); }
+.st-switch input[type='checkbox'] { appearance: none; width: 34px; height: 18px; border-radius: 9px; background: var(--panel-3); position: relative; cursor: pointer; margin: 0; flex: none; border: 0; padding: 0; min-height: 0; }
+.st-switch input[type='checkbox']::after { content: ''; position: absolute; left: 2px; top: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--text-2); transition: left 0.15s; }
+.st-switch input[type='checkbox']:checked { background: var(--accent); }
+.st-switch input[type='checkbox']:checked::after { left: 18px; background: #fff; }
+.st-switch input[type='checkbox']:disabled { opacity: 0.5; cursor: default; }
+
+/* ---------- Badges et points d'état (.badge, .nav-dot) ---------- */
+.st-badge { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-11); padding: 1px 6px; border-radius: 10px; background: var(--panel-3); color: var(--text-3); white-space: nowrap; }
+.st-badge.ok { background: color-mix(in srgb, var(--pvw) 15%, transparent); color: var(--pvw); }
+.st-badge.warn { background: color-mix(in srgb, var(--warn) 15%, transparent); color: var(--warn); }
+.st-badge.bad { background: var(--live-soft); color: var(--t-red); }
+.st-badge.accent { background: var(--accent-soft); color: var(--accent-2); }
+.st-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--text-3); }
+.st-dot.ok { background: var(--pvw); box-shadow: 0 0 0 3px color-mix(in srgb, var(--pvw) 15%, transparent); }
+.st-dot.warn { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 15%, transparent); }
+.st-dot.bad { background: var(--live); box-shadow: 0 0 0 3px var(--live-soft); }
+
+/* ---------- Cartes de réglages, champs, grilles (.set-card, .set-field, .set-grid) ---------- */
+.st-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+.st-card > header { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); color: var(--accent-2); }
+.st-card > header:last-child { border-bottom: 0; }
+.st-card h2 { margin: 0; font-size: 14px; font-weight: 700; color: var(--text); }
+.st-card > header .st-btn:not(.primary, .danger, .danger-solid, .warn, .on) { color: var(--text); }
+.st-card-body { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+.st-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.st-grid.two { grid-template-columns: 1fr 1fr; }
+@media (max-width: 760px) { .st-grid { grid-template-columns: 1fr; } }
+@media (max-width: 640px) { .st-grid.two { grid-template-columns: 1fr; } }
+.st-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.st-field-label { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-2); }
+.st-field-label .st-badge { margin-left: 6px; text-transform: none; letter-spacing: 0; font-weight: 600; }
+.st-field input, .st-field select { padding: 7px 10px; font-size: 13px; }
+.st-field input[readonly] { color: var(--text-2); }
+.st-field input[aria-invalid='true'] { border-color: var(--live); }
+.st-field > .st-switch { min-height: var(--h-control); }
+.st-field > .st-row { flex-wrap: wrap; }
+.st-field > .st-segmented { align-self: flex-start; }
+.st-field-hint { font-size: 11.5px; color: var(--text-3); }
+
+/* ---------- Barre d'enregistrement (.save-bar) ---------- */
+.st-save-bar { position: fixed; left: 50%; bottom: 18px; transform: translate(-50%, 150%); width: min(720px, calc(100% - 32px)); display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 18px; background: var(--panel-3); border: 1px solid var(--line-2); border-radius: 12px; box-shadow: var(--shadow-float); transition: transform 0.2s; z-index: 50; }
+.st-save-bar.show { transform: translate(-50%, 0); }
+
+/* ---------- État vide (.opx-void) ---------- */
+.st-empty { flex: 1; grid-column: 1 / -1; min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 16px; color: var(--text-3); text-align: center; }
+.st-empty-icon { width: 40px; height: 40px; border-radius: 10px; background: var(--op-2); display: grid; place-items: center; color: var(--text-2); }
+.st-empty-text { color: var(--text-2); }
+
+/* ---------- « i » (.ux3-info) et infobulles dessinées (.tip) ---------- */
+.st-info { display: inline-grid; place-items: center; width: 16px; height: 16px; margin-left: 4px; color: var(--text-3); cursor: help; vertical-align: -3px; flex: none; border-radius: 50%; }
+.st-info:hover { color: var(--text); }
+.st-tip { position: fixed; left: 0; top: 0; z-index: 5000; max-width: 300px; padding: 6px 9px; border-radius: 7px; border: 1px solid var(--line-2); background: color-mix(in srgb, var(--panel-3) 94%, transparent); backdrop-filter: blur(6px); color: var(--text); font-size: 11.5px; line-height: 1.4; box-shadow: var(--shadow-tip); pointer-events: none; opacity: 0; transition: opacity 0.12s; white-space: pre-line; }
+.st-tip.on { opacity: 1; }
+
+/* ---------- Modales et dialogues (.modal-back, .modal, .dialog) ---------- */
+.st-modal-back { position: fixed; inset: 0; z-index: 100; background: rgba(5, 6, 10, 0.65); backdrop-filter: blur(3px); display: grid; place-items: center; padding: 16px; }
+.st-modal { width: min(460px, 100%); max-height: calc(100vh - 32px); overflow: auto; background: var(--panel); border: 1px solid var(--line-2); border-radius: 14px; padding: 20px; display: flex; flex-direction: column; gap: 14px; box-shadow: var(--shadow-modal); }
+.st-modal.wide { width: min(720px, 100%); }
+.st-modal > header, .st-modal > footer { display: flex; align-items: center; gap: 8px; }
+.st-modal > header h2 { font-size: 16px; margin: 0; flex: 1; }
+.st-modal > footer { justify-content: flex-end; padding-top: 4px; }
+.st-dialog-back { z-index: 1500; }
+.st-modal.st-dialog { width: min(440px, 100%); }
+.st-dialog-icon { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; flex: none; color: var(--accent-2); background: var(--accent-soft); }
+.st-dialog.danger .st-dialog-icon { color: var(--t-red); background: var(--live-soft); }
+.st-dialog-message { color: var(--text-2); line-height: 1.55; white-space: pre-line; }
+:root[data-theme='light'] .st-modal-back { background: rgba(22, 25, 37, 0.35); }
+
+/* ---------- Toasts (.toasts, .toast) ---------- */
+.st-toasts { position: fixed; bottom: 18px; right: 18px; display: flex; flex-direction: column; gap: 8px; z-index: 1600; }
+.st-toast { background: var(--panel-3); border: 1px solid var(--line-2); border-left: 3px solid var(--accent); padding: 10px 14px; border-radius: 8px; max-width: 380px; box-shadow: var(--shadow-toast); }
+.st-toast.error { border-left-color: var(--live); }

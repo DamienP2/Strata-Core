@@ -101,10 +101,10 @@ Détacher un membre le rend à nouveau autonome (son cockpit se rallume).
 
 ### Le cockpit avec plusieurs serveurs
 
-- **Une tuile par appli**, pas par serveur. Une appli présente sur plusieurs serveurs porte un bouton par serveur, au nom du serveur (« Régie A », « Régie B »).
+- **Une tuile par appli**, pas par serveur. Une appli présente sur plusieurs serveurs porte un bouton par serveur, au **nom d'usage** du serveur (« Régie A », « Régie B », réglé dans *Nom et adresses*). Les utilisateurs ne voient jamais le nom de machine (`strata01`), réservé aux administrateurs.
 - **Utilisateurs** : seulement *disponible* ou *indisponible* (serveur injoignable).
 - **Administrateurs** : en plus, le nom du serveur sous chaque tuile, un point de couleur par serveur (ok, alerte, injoignable), et la liste des serveurs (nom, nom de machine, nombre d'alertes, injoignable) ; un clic ouvre les réglages du serveur dans son propre onglet.
-- Choix retenus dans la maquette interactive : [`docs/maquettes/cockpit.html`](docs/maquettes/cockpit.html) (proposition C).
+- Validé avec la maquette interactive : [`docs/maquettes/cockpit.html`](docs/maquettes/cockpit.html) (proposition C).
 
 ### Ce que le maître sait des membres
 
