@@ -104,6 +104,7 @@ function App() {
         serverName={auth.serverName}
         setup={auth.needsSetup}
         sso={auth.sso}
+        ssoHref={`/api/auth/sso/start?next=${encodeURIComponent(location.pathname)}`}
         cliHint="sudo strata-core user add admin"
         onLogin={async (username, password) => {
           await api('POST', '/api/auth/login', { username, password });
@@ -136,7 +137,7 @@ function App() {
             )}
             <UserMenu
               name={user.displayName}
-              role={user.admin ? t('Server administrator') : user.groups.join(' · ') || t('User')}
+              role={user.admin ? t('Server administrator') : user.groupNames.join(' · ') || t('User')}
               named
               onLang={(lang) => void savePrefs({ lang })}
               onTheme={(theme) => void savePrefs({ theme })}
@@ -154,7 +155,7 @@ function App() {
 }
 
 loadAuth().catch((e) => {
-  useApp.setState({ auth: { needsSetup: false, user: null, serverName: '', timezone: 'Europe/Paris', version: '', sso: null }, connected: false });
+  useApp.setState({ auth: { needsSetup: false, user: null, serverName: '', timezone: 'Europe/Paris', version: '', sso: null, localAccounts: 'all' }, connected: false });
   if (e instanceof ApiError) toast(message(e), 'error');
 });
 

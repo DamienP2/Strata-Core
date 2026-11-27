@@ -12,11 +12,16 @@ export interface PublicUser {
   username: string;
   displayName: string;
   admin: boolean;
+  /** Les identifiants de ses groupes. */
   groups: string[];
+  /** Leurs noms. */
+  groupNames: string[];
   disabled: boolean;
   lang: string;
   theme: string;
   sso: boolean;
+  /** Compte de l'annuaire dont l'administration est fixée à la main. */
+  adminFixed: boolean;
 }
 
 export interface AuthState {
@@ -25,7 +30,10 @@ export interface AuthState {
   serverName: string;
   timezone: string;
   version: string;
+  /** Le nom du bouton de connexion par l'annuaire (« Okta »), ou rien. */
   sso: string | null;
+  /** Qui peut encore utiliser un compte local. */
+  localAccounts: 'none' | 'adminOnly' | 'all';
 }
 
 /** L'état de l'interface : la connexion, et la liaison avec le serveur. */

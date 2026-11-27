@@ -4,6 +4,7 @@ import { Ellipsis, KeyRound, Pencil, Trash2, UserCheck, UserPlus, UserX } from '
 import { Badge, Field, Modal, PageHead, Switch, confirmDialog, initial, openContextMenu, promptDialog, t, tn, toast, type MenuEntry } from '@strata/ui';
 import { api, useApp, type PublicUser } from '../api';
 import { friendly } from '../errors';
+import { useGroups, type GroupInfo } from './Groups';
 
 function NewUser({ onClose, onCreated }: { onClose: () => void; onCreated: (u: PublicUser) => void }) {
   const [username, setUsername] = useState('');
@@ -59,14 +60,17 @@ function NewUser({ onClose, onCreated }: { onClose: () => void; onCreated: (u: P
   );
 }
 
-function EditUser({ user, self, onClose, onSaved }: { user: PublicUser; self: boolean; onClose: () => void; onSaved: (u: PublicUser) => void }) {
+function EditUser({ user, self, groups, onClose, onSaved }: { user: PublicUser; self: boolean; groups: GroupInfo[]; onClose: () => void; onSaved: (u: PublicUser) => void }) {
   const [displayName, setDisplayName] = useState(user.displayName);
   const [admin, setAdmin] = useState(user.admin);
+  const [mine, setMine] = useState<string[]>(user.groups);
   const [busy, setBusy] = useState(false);
   const submit = async () => {
     setBusy(true);
     try {
-      onSaved(await api<PublicUser>('PATCH', `/api/users/${user.id}`, { displayName, admin }));
+      // Les groupes d'un compte de l'annuaire viennent de l'annuaire, à chaque connexion.
+      const body = user.sso ? { displayName, admin } : { displayName, admin, groups: mine };
+      onSaved(await api<PublicUser>('PATCH', `/api/users/${user.id}`, body));
     } catch (e) {
       toast(friendly(e), 'error');
       setBusy(false);
@@ -98,12 +102,28 @@ function EditUser({ user, self, onClose, onSaved }: { user: PublicUser; self: bo
       <Field label={t('Role')} group>
         <Switch checked={admin} disabled={self} onChange={setAdmin} label={t('Server administrator')} />
       </Field>
+      {groups.length > 0 && (
+        <Field label={user.sso ? t('Groups (from the directory)') : t('Groups')} group>
+          <div className="core-switches">
+            {groups.map((g) => (
+              <Switch
+                key={g.id}
+                checked={mine.includes(g.id)}
+                disabled={user.sso}
+                onChange={(on) => setMine(on ? [...mine, g.id] : mine.filter((x) => x !== g.id))}
+                label={g.name}
+              />
+            ))}
+          </div>
+        </Field>
+      )}
     </Modal>
   );
 }
 
 export function Users() {
   const me = useApp((s) => s.auth?.user);
+  const { groups } = useGroups();
   const [users, setUsers] = useState<PublicUser[] | null>(null);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<PublicUser | null>(null);
@@ -193,7 +213,7 @@ export function Users() {
                 </div>
               </td>
               <td>{u.admin ? <Badge tone="accent">{t('Server administrator')}</Badge> : <Badge>{t('User')}</Badge>}</td>
-              <td className="st-muted">{u.groups.join(' · ') || '—'}</td>
+              <td className="st-muted">{u.groupNames.join(' · ') || '—'}</td>
               <td>
                 {u.disabled && <Badge tone="bad">{t('Disabled')}</Badge>} {u.sso && <Badge>SSO</Badge>}
               </td>
@@ -220,6 +240,7 @@ export function Users() {
         <EditUser
           user={editing}
           self={editing.id === me?.id}
+          groups={groups ?? []}
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
