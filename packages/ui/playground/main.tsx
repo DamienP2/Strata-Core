@@ -1,9 +1,9 @@
 // Banc d'essai : chaque composant du paquet, dans une coquille d'appli, dans les deux thèmes et les deux langues.
 import { StrictMode, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Bell, CircleHelp, Cloud, Copy, Inbox, LayoutList, ListTree, LogIn, MousePointerClick, Palette, Pencil, Plus, Search, Server, SlidersHorizontal, Trash2 } from 'lucide-react';
+import { Bell, CircleHelp, Cloud, Copy, Inbox, Layers, LayoutGrid, LayoutList, ListTree, MousePointerClick, Palette, Pencil, Plus, Scissors, Search, Server, Settings as SettingsIcon, SlidersHorizontal, Trash2 } from 'lucide-react';
 import {
-  Badge, Brand, Card, ContextMenuHost, DialogHost, Dot, Dropdown, Empty, Field, FieldGrid, InfoTip, Login, NavItem, NavSection, NumberField,
+  Badge, Brand, Card, Cockpit, ContextMenuHost, Launcher, Page, TopBar, instanceKey, nameTab, openAppTab, t, type CockpitApp, type CockpitData, type CockpitInstance, type CockpitServer, DialogHost, Dot, Dropdown, Empty, Field, FieldGrid, InfoTip, Login, NavItem, NavSection, NumberField,
   PageHead, SaveBar, Segmented, SidePage, StatusPill, SubTabs, Switch, TextInput, Toasts, UserMenu,
   alertDialog, confirmDialog, formatBytes, formatDuration, installEscape, installNumberWheel, installTooltips, openContextMenu, promptDialog, setLang, timeAgo, toast, useLang,
 } from '../src';
@@ -218,12 +218,36 @@ function BrandPage() {
   );
 }
 
+// ---------------------------------------------------------------- données de démonstration du cockpit
+const APPS: CockpitApp[] = [
+  { id: 'livecut', name: 'LiveCut', icon: Scissors },
+  { id: 'graphics', name: 'Graphics', icon: Layers },
+  { id: 'multiview', name: 'Multiview', icon: LayoutGrid },
+];
+const SERVERS: CockpitServer[] = [
+  { id: 'strata01', name: 'Régie A', host: 'strata01', up: true, alerts: 1, master: true },
+  { id: 'strata02', name: 'Régie B', host: 'strata02', up: true, alerts: 0 },
+  { id: 'strata03', name: 'Studio', host: 'strata03', up: false },
+];
+// Une instance de démonstration s'ouvre dans ce même banc d'essai (?app=…), dans son onglet.
+const inst = (app: string, server: string): CockpitInstance => ({ app, server, url: `${location.origin}${location.pathname}?app=${app}@${server}` });
+const ALL = [inst('livecut', 'strata01'), inst('graphics', 'strata01'), inst('livecut', 'strata02'), inst('multiview', 'strata03')];
+const USER_CAN = new Set(['livecut@strata01', 'livecut@strata02', 'multiview@strata03']);
+const cockpitData = (admin: boolean): CockpitData => ({ apps: APPS, servers: SERVERS, instances: admin ? ALL : ALL.filter((i) => USER_CAN.has(instanceKey(i))), admin });
+const open = (i: CockpitInstance) => openAppTab(i.url, instanceKey(i));
+const APP_KEY = new URLSearchParams(location.search).get('app');
+nameTab(APP_KEY ?? 'cockpit');
+
 function App() {
   useLang((s) => s.lang);
+  const appKey = new URLSearchParams(location.search).get('app');
+  const [view, setView] = useState<'cockpit' | 'components'>('cockpit');
+  const [admin, setAdmin] = useState(true);
   const [page, setPage] = useState<PageId>('buttons');
   const [signedIn, setSignedIn] = useState(true);
   const [connected, setConnected] = useState(true);
   const [load, setLoad] = useState(34);
+  const data = cockpitData(admin);
 
   if (!signedIn)
     return (
@@ -240,38 +264,87 @@ function App() {
       />
     );
 
+  const launcher = <Launcher data={data} current={appKey ?? undefined} onOpen={open} onCockpit={() => (appKey ? openAppTab(`${location.origin}${location.pathname}`, 'cockpit') : setView('cockpit'))} />;
+  const end = (
+    <>
+      <label className="st-switch pg-ctl" title="Banc d’essai : administrateur ou utilisateur">
+        <input type="checkbox" checked={admin} onChange={(e) => setAdmin(e.target.checked)} /> Admin
+      </label>
+      <label className="st-switch pg-ctl" title="Banc d’essai : couper la liaison">
+        <input type="checkbox" checked={connected} onChange={(e) => setConnected(e.target.checked)} /> Liaison
+      </label>
+      <label className="st-switch pg-ctl" title="Banc d’essai : charger la machine">
+        <input type="checkbox" checked={load > 85} onChange={(e) => setLoad(e.target.checked ? 92 : 34)} /> Charge
+      </label>
+      <StatusPill connected={connected} serverName="Régie A" machine={{ cpu: load, cores: 32, memUsed: 21 * 1024 ** 3, memTotal: 64 * 1024 ** 3, hostname: 'strata01' }} onClick={admin ? () => toast('Santé du serveur') : undefined} />
+      <button className="st-help" title={t('Help')}>
+        <CircleHelp size={17} />
+      </button>
+      {admin && (
+        <button className="st-help" title={t('Server settings')} onClick={() => toast('Réglages du serveur')}>
+          <SettingsIcon size={17} />
+        </button>
+      )}
+      <UserMenu name={admin ? 'Damien' : 'Claire Martin'} role={admin ? 'Administrateur des serveurs' : 'Utilisateur'} named onShortcuts={() => toast('Raccourcis')} onSignOut={() => setSignedIn(false)} />
+    </>
+  );
+
+  // Un onglet d'appli (démonstration).
+  if (appKey) {
+    const [a, srv] = appKey.split('@');
+    const app = APPS.find((x) => x.id === a);
+    const server = SERVERS.find((x) => x.id === srv);
+    document.title = `${app?.name} · ${server?.name}`;
+    return (
+      <div className="st-app">
+        <TopBar module={app?.name ?? a} start={launcher} end={end}>
+          <div className="st-tabs">
+            <button className="on">Accueil</button>
+            <button>Réglages</button>
+          </div>
+        </TopBar>
+        <div className="st-content">
+          <Page>
+            <PageHead title={app?.name ?? a} sub={server?.name} />
+            <Card title="Onglet de l’appli">
+              <span className="st-mono">{location.href}</span>
+            </Card>
+          </Page>
+        </div>
+        <ContextMenuHost />
+        <DialogHost />
+        <Toasts />
+      </div>
+    );
+  }
+
   const body = { buttons: <Buttons />, fields: <Fields />, menus: <Menus />, settings: <Settings />, dialogs: <Dialogs />, brand: <BrandPage /> }[page];
   const groups = [...new Set(PAGES.map((p) => p.group))];
   return (
     <div className="st-app">
-      <nav className="st-topbar">
-        <Brand module="Core" />
-        <div className="st-spacer" />
-        <label className="st-switch pg-ctl" title="Banc d’essai : couper la liaison">
-          <input type="checkbox" checked={connected} onChange={(e) => setConnected(e.target.checked)} /> Liaison
-        </label>
-        <label className="st-switch pg-ctl" title="Banc d’essai : charger la machine">
-          <input type="checkbox" checked={load > 85} onChange={(e) => setLoad(e.target.checked ? 92 : 34)} /> Charge
-        </label>
-        <StatusPill connected={connected} serverName="Régie A" machine={{ cpu: load, cores: 32, memUsed: 21 * 1024 ** 3, memTotal: 64 * 1024 ** 3, hostname: 'strata01' }} onClick={() => toast('Santé du serveur')} />
-        <button className="st-help" title="Aide">
-          <CircleHelp size={17} />
-        </button>
-        <UserMenu name="Damien" role="Administrateur des serveurs" named onShortcuts={() => toast('Raccourcis')} onSignOut={() => setSignedIn(false)} />
-      </nav>
+      <TopBar module="Core" start={launcher} end={end}>
+        <div className="st-tabs" title="Banc d’essai">
+          <button className={view === 'cockpit' ? 'on' : ''} onClick={() => setView('cockpit')}>Cockpit</button>
+          <button className={view === 'components' ? 'on' : ''} onClick={() => setView('components')}>Composants</button>
+        </div>
+      </TopBar>
       <div className="st-content">
-        <SidePage
-          nav={groups.map((g) => (
-            <div key={g}>
-              <NavSection title={g} actions={g === 'Identité' ? <button className="st-icon-btn ghost" title="Se déconnecter" onClick={() => setSignedIn(false)}><LogIn size={13} /></button> : undefined} />
-              {PAGES.filter((p) => p.group === g).map((p) => (
-                <NavItem key={p.id} icon={p.icon} label={p.label} on={page === p.id} onClick={() => setPage(p.id)} status={p.id === 'dialogs' ? 'warn' : null} count={p.id === 'menus' ? 3 : undefined} />
-              ))}
-            </div>
-          ))}
-        >
-          {body}
-        </SidePage>
+        {view === 'cockpit' ? (
+          <Cockpit data={data} onOpen={open} onServer={(id) => toast(`Réglages de ${SERVERS.find((s) => s.id === id)?.name}`)} />
+        ) : (
+          <SidePage
+            nav={groups.map((g) => (
+              <div key={g}>
+                <NavSection title={g} />
+                {PAGES.filter((p) => p.group === g).map((p) => (
+                  <NavItem key={p.id} icon={p.icon} label={p.label} on={page === p.id} onClick={() => setPage(p.id)} status={p.id === 'dialogs' ? 'warn' : null} count={p.id === 'menus' ? 3 : undefined} />
+                ))}
+              </div>
+            ))}
+          >
+            {body}
+          </SidePage>
+        )}
       </div>
       <ContextMenuHost />
       <DialogHost />

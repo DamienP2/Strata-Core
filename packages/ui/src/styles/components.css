@@ -270,3 +270,41 @@ button.st-status:hover { background: var(--panel-2); }
 .st-sso-btn { justify-content: center; text-decoration: none; }
 .st-login-sep { display: flex; align-items: center; gap: 10px; color: var(--text-3); font-size: 11px; margin: 2px 0; }
 .st-login-sep::before, .st-login-sep::after { content: ''; flex: 1; border-top: 1px solid var(--line); }
+
+/* ---------- Cockpit (proposition C) : tuiles par appli, boutons par serveur, serveurs ---------- */
+.st-cockpit { height: 100%; overflow: auto; background: var(--page-bg); display: flex; flex-direction: column; align-items: center; gap: 34px; padding: 9vh 24px 60px; }
+.st-cockpit-head { text-align: center; }
+.st-cockpit-head h1 { margin: 0; font-size: 22px; font-weight: 800; }
+.st-tiles { display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; max-width: 920px; }
+.st-tile { width: 176px; min-height: 176px; padding: 18px 12px 14px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; color: var(--text); font: inherit; cursor: pointer; transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s; }
+button.st-tile:hover { border-color: var(--line-2); transform: translateY(-2px); box-shadow: var(--shadow-hover); }
+.st-tile.multi { cursor: default; width: auto; min-width: 176px; padding-inline: 16px; }
+.st-tile.off { opacity: 0.5; cursor: default; }
+.st-tile strong { font-size: 15px; }
+.st-tile .st-muted { font-size: 12px; }
+.st-tile-icon { display: grid; place-items: center; width: 56px; height: 56px; border-radius: 14px; background: var(--accent-soft); color: var(--accent-2); }
+.st-tile.off .st-tile-icon { background: var(--panel-3); color: var(--text-3); }
+.st-insts { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
+.st-inst { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--panel-2); color: var(--text); font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.st-inst:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
+.st-inst:disabled { opacity: 0.55; cursor: default; background: none; border-color: var(--line); }
+.st-inst .st-dot { width: 6px; height: 6px; }
+.st-servers { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; max-width: 920px; }
+.st-server { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--text-2); font: inherit; font-size: 12.5px; cursor: pointer; }
+.st-server:hover { border-color: var(--line-2); color: var(--text); }
+.st-server b { color: var(--text); font-weight: 600; }
+.st-server-warn { color: var(--warn); }
+.st-server-bad { color: var(--live); }
+
+/* ---------- Lanceur ⊞ ---------- */
+.st-launcher { position: relative; flex: none; margin-right: -6px; }
+.st-launcher-btn { width: 30px; height: 30px; display: grid; place-items: center; border: 0; border-radius: 8px; background: none; color: var(--text-2); cursor: pointer; }
+.st-launcher-btn:hover, .st-launcher-btn.on { background: var(--panel-3); color: var(--text); }
+.st-launcher-menu { width: 360px; top: calc(100% + 8px); z-index: 300; }
+.st-launcher-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 4px 8px 8px; font-size: 12px; color: var(--text-3); }
+.st-launcher-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 6px 8px; border: 0; border-radius: 8px; background: none; color: var(--text); font: inherit; text-align: left; }
+.st-launcher-row.click { cursor: pointer; }
+.st-launcher-row.click:hover, .st-launcher-row.click:focus-visible, .st-launcher-row.on { background: var(--accent-soft); outline: none; }
+.st-launcher-row strong { flex: 1; font-weight: 600; }
+.st-launcher-row .st-inst { height: 24px; font-size: 11.5px; }
+.st-launcher-icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; background: var(--accent-soft); color: var(--accent-2); flex: none; }

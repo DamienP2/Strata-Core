@@ -281,7 +281,7 @@ Une appli s'appuie sur le Core, jamais l'inverse.
 
 1. ~~Renommer le dépôt en `Strata-Core`.~~ Fait.
 2. ~~Trancher l'architecture.~~ Option A, cockpit, sous-domaines.
-3. **Premier lot : DESIGN.** ~~Inventaire et décisions.~~ Faits. Puis : **maquette du cockpit et de la barre commune**, puis paquet `@strata/ui`.
+3. **Premier lot : DESIGN.** ~~Inventaire, décisions, maquette du cockpit.~~ Faits. Paquet `@strata/ui` ([`packages/ui`](packages/ui)) : design, composants et coquille du cockpit écrits ; reste à le brancher sur le serveur du Core (données réelles du cockpit) et à y passer une première appli.
 4. **Chaîne de releases** (GitHub Actions sur Ubuntu 24.04), juste après le design : préalable de l'installateur et des mises à jour OTA.
 5. Puis, dans l'ordre à définir : UTILISATEURS, SERVEUR, SANTÉ, HARDWARE, BIBLIOTHÈQUE, INSTALLATEUR.
 6. Mesures pour la configuration minimale.
