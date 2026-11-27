@@ -1,0 +1,67 @@
+name: Release
+
+# Une étiquette v* (v0.2.0) publie une release GitHub de Strata-Core avec :
+#   - strata-ui-<version>.tgz : le paquet web, que les applis référencent par son adresse ;
+#   - release.json : la fiche de la release (version, fichiers, empreintes), lue par le Core ;
+#   - SHA256SUMS : les empreintes de chaque fichier.
+# Lancée à la main (workflow_dispatch), elle construit les mêmes fichiers sans rien publier.
+# Tout est construit sur Ubuntu 24.04, la plateforme des serveurs (voir docs/RELEASES.md).
+# À ajouter quand ils existeront : le serveur strata-core et l'installateur strata-install (Rust).
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version tirée de l'étiquette
+        run: scripts/stamp-version.sh
+
+      - name: Version
+        run: |
+          VERSION=$(node -p "require('./packages/ui/package.json').version")
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "version : $VERSION"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/ui/package-lock.json
+
+      - name: Paquet web
+        working-directory: packages/ui
+        run: |
+          npm ci
+          npm run build
+          mkdir -p ../../dist
+          npm pack --pack-destination ../../dist
+          test -f "../../dist/strata-ui-$VERSION.tgz"
+
+      - name: Fiche et empreintes
+        run: node scripts/release-manifest.mjs dist "$VERSION"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: strata-core-${{ env.VERSION }}
+          path: dist/*
+
+      - name: Publication
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PRE=""; case "$VERSION" in *-*) PRE="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "Strata Core $VERSION" \
+            --generate-notes $PRE
