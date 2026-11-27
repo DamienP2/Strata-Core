@@ -164,7 +164,6 @@ function SystemFiles({ files }: { files: ClockStatus['files'] }) {
         </button>
       }
     >
-      <p className="st-muted core-note">{t('Written by the Core when the settings are saved; chrony and ptp4l are restarted when they change.')}</p>
       {steps && (
         <div className="core-checks">
           {steps.map((s, i) => {
@@ -252,7 +251,6 @@ export function ClockPage() {
             <span>{offsetText}</span>
             <span className={ntp?.source === 'PTP' ? 'ok' : ntp?.synced ? '' : 'bad'}>{from}</span>
           </div>
-          <p className="st-muted core-note">{t('Computed from the server time, the same on every Strata server kept by the same PTP: the apps read it, no LTC cable needed.')}</p>
         </div>
       </Card>
 
@@ -282,7 +280,7 @@ export function ClockPage() {
 
       <Card icon={<Clock size={16} />} title={t('Settings')}>
         <div className="core-clock-form">
-          <Field label={t('House rate')} group hint={t('The rate of every picture of the site: REF, inputs, ST 2110 flows, projects.')}>
+          <Field label={t('House rate')} group>
             <Segmented<HouseRate> value={c.house.rate} options={RATES} onChange={(v) => editHw((x) => void (x.clock.house.rate = v))} />
           </Field>
           <Field label={t('Server time')} group>
@@ -295,7 +293,7 @@ export function ClockPage() {
               onChange={(v) => editHw((x) => void (x.clock.source = v))}
             />
           </Field>
-          <Field label={t('NTP servers')} hint={t('One per line, the best first. The leader often serves NTP too.')}>
+          <Field label={t('NTP servers')} hint={t('One per line')}>
             <textarea
               rows={3}
               className="st-mono"
@@ -314,7 +312,7 @@ export function ClockPage() {
               </Field>
             </FieldGrid>
           )}
-          <Field label={t('Timecode time')} group hint={t('Set it like the LTC of the leader.')}>
+          <Field label={t('Timecode time')} group hint={t('Like the LTC of the leader')}>
             <div className="core-service">
               <Segmented<'local' | 'utc' | 'fixed'>
                 value={c.house.offset}
@@ -340,12 +338,11 @@ export function ClockPage() {
                   <Switch checked={c.house.dropFrame} onChange={(v) => editHw((x) => void (x.clock.house.dropFrame = v))} label={t('Drop frame (29.97 DF)')} />
                 </Field>
               )}
-              <Field label={t('Daily jam')} hint={t('Each day at this time the timecode is set back to the time of day (SMPTE ST 2059-1).')}>
+              <Field label={t('Daily jam')} hint="HH:MM">
                 <input className="st-mono" value={c.house.dailyJam} placeholder="00:00" onChange={(e) => editHw((x) => void (x.clock.house.dailyJam = e.target.value))} />
               </Field>
             </FieldGrid>
           )}
-          <p className="st-muted core-note">{t('SMPTE ST 2059-2: domain 127. TAI − UTC is 37 s since 2017.')}</p>
         </div>
       </Card>
 

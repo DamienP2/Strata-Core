@@ -471,6 +471,8 @@ export const fr: Record<string, string> = {
   'cannot open the input: {why}': 'Impossible d’ouvrir l’entrée : {why}',
   'cannot share the input ({path}): {why}': 'Impossible de partager l’entrée ({path}) : {why}',
   // Horloge
+  'One per line': 'Un par ligne',
+  'Like the LTC of the leader': 'Comme l’LTC du leader',
   'House timecode': 'Timecode maison',
   'Computed from the server time, the same on every Strata server kept by the same PTP: the apps read it, no LTC cable needed.': 'Calculé depuis l’heure du serveur, le même sur tous les serveurs Strata tenus par le même PTP : les applis le lisent, sans câble LTC.',
   'time from PTP': 'heure prise sur le PTP',
