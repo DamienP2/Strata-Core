@@ -28,7 +28,8 @@ Une nouvelle appli (Media, Call) démarre directement sur le Core au lieu de rec
 | Compilation | binaires construits sur **Ubuntu 24.04** par GitHub Actions, publiés en **releases GitHub** ; jamais compilés sur les serveurs. Les paquets des applis sont refaits pour 24.04 |
 | Installateur | **programme Rust** plein terminal (§ 5.7) |
 | Onglets | le cockpit ouvre **chaque appli dans son propre onglet** du navigateur (un onglet par appli, réutilisé) |
-| Plusieurs serveurs | **un seul cockpit** pour tous les serveurs : un serveur **maître** affiche le cockpit et propose les applis des serveurs **membres** ; alertes et ressources restent sur chaque machine (§ 4 bis, proposition à valider) |
+| Plusieurs serveurs | **un seul cockpit** pour tous les serveurs : un serveur **maître** affiche le cockpit et propose les applis des serveurs **membres** ; alertes et ressources restent sur chaque machine (§ 4 bis) |
+| Organisation | **proposition C** des maquettes : cockpit en lanceur (tuiles par appli), bouton ⊞ dans toutes les barres pour changer d'appli, réglages derrière la roue dentée, rangés par objet (Ce serveur, Serveurs, Applis, Personnes, Matériel, Surveillance) |
 | Cockpit | chaque utilisateur n'y voit **que les applis actives où il a des droits** ; chaque appli répond au Core « cet utilisateur a-t-il accès ? » |
 | Comptes | le Core gère **qui sont les utilisateurs** (comptes, SSO, groupes) ; **chaque appli gère ce qu'ils peuvent y faire** (autorisations des utilisateurs et des groupes dans ses propres réglages) |
 | Matériel | **partagé** : une ressource a **la même fonction pour toutes les applis** (une entrée SDI reste une entrée pour toutes) |
@@ -75,7 +76,7 @@ Avant d'écrire le code, il faut une **maquette HTML du cockpit et de la barre c
 - mDNS (`.local`) reste proposé pour les tests et les petits réseaux.
 - **Par adresse IP**, seul le cockpit répond ; ouvrir une appli demande le nom.
 
-## 4 bis. Plusieurs serveurs : un seul cockpit (proposition à valider)
+## 4 bis. Plusieurs serveurs : un seul cockpit
 
 Quand une régie a plusieurs serveurs physiques, on veut **un seul cockpit** qui propose toutes les applis de tous les serveurs.
 
@@ -97,6 +98,13 @@ Un serveur seul est un maître sans membre : rien ne change pour lui. **Activer 
 3. Les deux serveurs échangent leurs clés ; ensuite, ils se parlent en HTTPS authentifié dans les deux sens. Le code ne sert plus.
 
 Détacher un membre le rend à nouveau autonome (son cockpit se rallume).
+
+### Le cockpit avec plusieurs serveurs
+
+- **Une tuile par appli**, pas par serveur. Une appli présente sur plusieurs serveurs porte un bouton par serveur, au nom du serveur (« Régie A », « Régie B »).
+- **Utilisateurs** : seulement *disponible* ou *indisponible* (serveur injoignable).
+- **Administrateurs** : en plus, le nom du serveur sous chaque tuile, un point de couleur par serveur (ok, alerte, injoignable), et la liste des serveurs (nom, nom de machine, nombre d'alertes, injoignable) ; un clic ouvre les réglages du serveur dans son propre onglet.
+- Choix retenus dans la maquette interactive : [`docs/maquettes/cockpit.html`](docs/maquettes/cockpit.html) (proposition C).
 
 ### Ce que le maître sait des membres
 
@@ -265,9 +273,6 @@ Une appli s'appuie sur le Core, jamais l'inverse.
 
 ## 8. Questions ouvertes
 
-- **Plusieurs serveurs** (§ 4 bis) : valider la proposition ; puis
-  - dans le cockpit, regrouper les tuiles **par serveur** (« strata01 : LiveCut, Graphics ») ou **par appli** (« LiveCut : strata01, strata02 ») ?
-  - le maître affiche-t-il au moins le **nombre d'alertes** de chaque membre, ou rien du tout ?
 
 - **Entrées DeckLink redistribuées par le Core** (§ 5.3) : à prototyper tôt (latence, charge processeur, plusieurs applis sur la même entrée), sur une machine avec une carte.
 - **Configuration minimale** : à **calculer** en mesurant, sur un serveur de référence, le Core seul puis chaque appli à vide et en charge typique. Le README donnera le minimum du Core et ce qu'ajoute chaque appli.

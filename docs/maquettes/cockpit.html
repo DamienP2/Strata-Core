@@ -2035,55 +2035,171 @@ th .gr-ico, .gr-opt .gr-ico { width: 22px; height: 22px; border-radius: 6px; }
 .mock-note { bottom: calc(14px + env(safe-area-inset-bottom, 0px)); }
 @media (max-width: 760px) { .mock-note { flex-wrap: wrap; justify-content: center; white-space: normal; width: calc(100% - 32px); } .topbar { overflow-x: auto; } }
 </style>
+<style>
+/* ===== Maquette C : navigateur simulé, plusieurs serveurs ===== */
+:root { --ch-bg: #0d0e12; --ch-tab: #191b22; --ch-on: #23262f; --ch-text: #c9ccd6; --ch-dim: #858a9c; }
+:root[data-theme='light'] { --ch-bg: #d9dce3; --ch-tab: #e6e8ee; --ch-on: #f7f8fa; --ch-text: #2a2e3a; --ch-dim: #5d6273; }
+html, body { background: var(--bg); }
+#root { display: flex; flex-direction: column; height: 100%; }
+.mk-browser { flex: none; background: var(--ch-bg); color: var(--ch-text); font: 12px Inter, system-ui, sans-serif; }
+.mk-tabs { display: flex; align-items: flex-end; gap: 2px; padding: 6px 8px 0; overflow-x: auto; }
+.mk-btab { display: flex; align-items: center; gap: 8px; height: 32px; min-width: 120px; max-width: 230px; padding: 0 8px 0 12px; border-radius: 9px 9px 0 0; background: var(--ch-tab); color: var(--ch-dim); cursor: pointer; flex: none; }
+.mk-btab:hover { color: var(--ch-text); }
+.mk-btab.on { background: var(--ch-on); color: var(--ch-text); }
+.mk-btab-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mk-fav { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; background: var(--accent-soft); color: var(--accent-2); flex: none; }
+.mk-x { display: grid; place-items: center; width: 18px; height: 18px; border: 0; border-radius: 4px; background: none; color: inherit; cursor: pointer; padding: 0; }
+.mk-x:hover { background: rgba(127, 127, 127, 0.25); }
+.mk-url { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px; background: var(--ch-on); border-bottom: 1px solid var(--line); color: var(--ch-dim); }
+.mk-url b { color: var(--ch-text); font-weight: 500; }
+.mk-page { flex: 1; min-height: 0; }
+.mk-page > .app { height: 100%; }
+/* Tuiles par appli */
+.mk-big { height: auto; min-height: 176px; padding: 18px 12px 14px; gap: 10px; }
+.mk-big.dim { opacity: 0.5; cursor: default; }
+.mk-big.dim:hover { transform: none; box-shadow: none; border-color: var(--line); }
+.mk-big .muted { font-size: 12px; }
+.mk-pills { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
+.mk-pill { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--panel-2); color: var(--text); font: inherit; font-size: 12px; cursor: pointer; }
+.mk-pill:hover { border-color: var(--accent); background: var(--accent-soft); }
+.mk-pill:disabled { opacity: 0.5; cursor: default; border-color: var(--line); background: none; }
+.mk-pill .nav-dot { width: 6px; height: 6px; }
+/* Serveurs (administrateurs) */
+.mk-servers { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.mk-srv { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--text-2); font: inherit; font-size: 12.5px; cursor: pointer; }
+.mk-srv:hover { border-color: var(--line-2); color: var(--text); }
+.mk-srv b { color: var(--text); font-weight: 600; }
+.mk-srv .warn-t { color: var(--warn); }
+.mk-srv .bad-t { color: var(--live); }
+.nav-dot.bad { background: var(--live); box-shadow: 0 0 0 3px var(--live-soft); }
+/* Lanceur */
+.menu.mk-launcher { width: 360px; padding: 6px; }
+.mk-lrow { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 8px; border-radius: 8px; }
+.mk-lrow.click { cursor: pointer; }
+.mk-lrow.click:hover, .mk-lrow.on { background: var(--accent-soft); }
+.mk-lrow strong { flex: 1; font-weight: 600; }
+.mk-lrow .mk-pill { height: 24px; font-size: 11.5px; }
+.mk-srv-badge { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: 999px; background: var(--panel-3); color: var(--text-2); font-size: 12px; flex: none; }
+.mk-code { font: 700 26px/1 var(--mono); letter-spacing: 0.12em; color: var(--text); padding: 14px; border-radius: 10px; background: var(--panel-2); border: 1px dashed var(--line-2); text-align: center; }
+.mk-modal-body { display: flex; flex-direction: column; gap: 14px; }
+</style>
 </head>
 <body>
-<div id="root" style="height:100%"></div>
+<div id="root"></div>
 
 <div class="mock-note" id="mock">
-  <span>Proposition</span>
-  <button data-prop="A">A · Onglets</button><button data-prop="B">B · Rail</button><button data-prop="C">C · Lanceur</button>
-  <i></i>
+  <span>Maquette C</span>
   <button data-role="admin">Administrateur</button><button data-role="user">Utilisateur</button>
   <i></i>
   <button data-mtheme>Clair / Sombre</button>
+  <button data-reset>Recommencer</button>
 </div>
 
 <script>
-const ICONS = {"radio":"<path d=\"M4.9 19.1C1 15.2 1 8.8 4.9 4.9\" /><path d=\"M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5\" /><circle cx=\"12\" cy=\"12\" r=\"2\" /><path d=\"M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5\" /><path d=\"M19.1 4.9C23 8.8 23 15.1 19.1 19\" />","scissors":"<circle cx=\"6\" cy=\"6\" r=\"3\" /><path d=\"M8.12 8.12 12 12\" /><path d=\"M20 4 8.12 15.88\" /><circle cx=\"6\" cy=\"18\" r=\"3\" /><path d=\"M14.8 14.8 20 20\" />","radio-tower":"<path d=\"M4.9 16.1C1 12.2 1 5.8 4.9 1.9\" /><path d=\"M7.8 4.7a6.14 6.14 0 0 0-.8 7.5\" /><circle cx=\"12\" cy=\"9\" r=\"2\" /><path d=\"M16.2 4.8c2 2 2.26 5.11.8 7.47\" /><path d=\"M19.1 1.9a9.96 9.96 0 0 1 0 14.1\" /><path d=\"M9.5 18h5\" /><path d=\"m8 22 4-11 4 11\" />","clapperboard":"<path d=\"M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3Z\" /><path d=\"m6.2 5.3 3.1 3.9\" /><path d=\"m12.4 3.4 3.1 4\" /><path d=\"M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z\" />","settings":"<path d=\"M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z\" /><circle cx=\"12\" cy=\"12\" r=\"3\" />","layers":"<path d=\"m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z\" /><path d=\"m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65\" /><path d=\"m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65\" />","package":"<path d=\"M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z\" /><path d=\"M12 22V12\" /><path d=\"m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7\" /><path d=\"m7.5 4.27 9 5.15\" />","activity":"<path d=\"M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2\" />","layout-grid":"<rect width=\"7\" height=\"7\" x=\"3\" y=\"3\" rx=\"1\" /><rect width=\"7\" height=\"7\" x=\"14\" y=\"3\" rx=\"1\" /><rect width=\"7\" height=\"7\" x=\"14\" y=\"14\" rx=\"1\" /><rect width=\"7\" height=\"7\" x=\"3\" y=\"14\" rx=\"1\" />","monitor":"<rect width=\"20\" height=\"14\" x=\"2\" y=\"3\" rx=\"2\" /><line x1=\"8\" x2=\"16\" y1=\"21\" y2=\"21\" /><line x1=\"12\" x2=\"12\" y1=\"17\" y2=\"21\" />","network":"<rect x=\"16\" y=\"16\" width=\"6\" height=\"6\" rx=\"1\" /><rect x=\"2\" y=\"16\" width=\"6\" height=\"6\" rx=\"1\" /><rect x=\"9\" y=\"2\" width=\"6\" height=\"6\" rx=\"1\" /><path d=\"M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3\" /><path d=\"M12 12V8\" />","film":"<rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\" /><path d=\"M7 3v18\" /><path d=\"M3 7.5h4\" /><path d=\"M3 12h18\" /><path d=\"M3 16.5h4\" /><path d=\"M17 3v18\" /><path d=\"M17 7.5h4\" /><path d=\"M17 16.5h4\" />","phone":"<path d=\"M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z\" />","circle-help":"<circle cx=\"12\" cy=\"12\" r=\"10\" /><path d=\"M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3\" /><path d=\"M12 17h.01\" />","user":"<path d=\"M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2\" /><circle cx=\"12\" cy=\"7\" r=\"4\" />","chevron-down":"<path d=\"m6 9 6 6 6-6\" />","languages":"<path d=\"m5 8 6 6\" /><path d=\"m4 14 6-6 2-3\" /><path d=\"M2 5h12\" /><path d=\"M7 2h1\" /><path d=\"m22 22-5-10-5 10\" /><path d=\"M14 18h6\" />","sun-moon":"<path d=\"M12 8a2.83 2.83 0 0 0 4 4 4 4 0 1 1-4-4\" /><path d=\"M12 2v2\" /><path d=\"M12 20v2\" /><path d=\"m4.9 4.9 1.4 1.4\" /><path d=\"m17.7 17.7 1.4 1.4\" /><path d=\"M2 12h2\" /><path d=\"M20 12h2\" /><path d=\"m6.3 17.7-1.4 1.4\" /><path d=\"m19.1 4.9-1.4 1.4\" />","keyboard":"<path d=\"M10 8h.01\" /><path d=\"M12 12h.01\" /><path d=\"M14 8h.01\" /><path d=\"M16 12h.01\" /><path d=\"M18 8h.01\" /><path d=\"M6 8h.01\" /><path d=\"M7 16h10\" /><path d=\"M8 12h.01\" /><rect width=\"20\" height=\"16\" x=\"2\" y=\"4\" rx=\"2\" />","log-out":"<path d=\"M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4\" /><polyline points=\"16 17 21 12 16 7\" /><line x1=\"21\" x2=\"9\" y1=\"12\" y2=\"12\" />","server":"<rect width=\"20\" height=\"8\" x=\"2\" y=\"2\" rx=\"2\" ry=\"2\" /><rect width=\"20\" height=\"8\" x=\"2\" y=\"14\" rx=\"2\" ry=\"2\" /><line x1=\"6\" x2=\"6.01\" y1=\"6\" y2=\"6\" /><line x1=\"6\" x2=\"6.01\" y1=\"18\" y2=\"18\" />","circle-check":"<circle cx=\"12\" cy=\"12\" r=\"10\" /><path d=\"m9 12 2 2 4-4\" />","globe":"<circle cx=\"12\" cy=\"12\" r=\"10\" /><path d=\"M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20\" /><path d=\"M2 12h20\" />","lock":"<rect width=\"18\" height=\"11\" x=\"3\" y=\"11\" rx=\"2\" ry=\"2\" /><path d=\"M7 11V7a5 5 0 0 1 10 0v4\" />","upload":"<path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\" /><polyline points=\"17 8 12 3 7 8\" /><line x1=\"12\" x2=\"12\" y1=\"3\" y2=\"15\" />","rotate-ccw":"<path d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\" /><path d=\"M3 3v5h5\" />","cloud-download":"<path d=\"M12 13v8l-4-4\" /><path d=\"m12 21 4-4\" /><path d=\"M4.393 15.269A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.436 8.284\" />","key-round":"<path d=\"M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z\" /><circle cx=\"16.5\" cy=\"7.5\" r=\".5\" fill=\"currentColor\" />","user-plus":"<path d=\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2\" /><circle cx=\"9\" cy=\"7\" r=\"4\" /><line x1=\"19\" x2=\"19\" y1=\"8\" y2=\"14\" /><line x1=\"22\" x2=\"16\" y1=\"11\" y2=\"11\" />","users-round":"<path d=\"M18 21a8 8 0 0 0-16 0\" /><circle cx=\"10\" cy=\"8\" r=\"5\" /><path d=\"M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3\" />","ellipsis":"<circle cx=\"12\" cy=\"12\" r=\"1\" /><circle cx=\"19\" cy=\"12\" r=\"1\" /><circle cx=\"5\" cy=\"12\" r=\"1\" />","plus":"<path d=\"M5 12h14\" /><path d=\"M12 5v14\" />","send":"<path d=\"M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z\" /><path d=\"m21.854 2.147-10.94 10.939\" />","waves":"<path d=\"M2 6c.6.5 1.2 1 2.5 1C7 7 7 5 9.5 5c2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1\" /><path d=\"M2 12c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1\" /><path d=\"M2 18c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1\" />","ethernet-port":"<path d=\"m15 20 3-3h2a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h2l3 3z\" /><path d=\"M6 8v1\" /><path d=\"M10 8v1\" /><path d=\"M14 8v1\" /><path d=\"M18 8v1\" />","clock":"<circle cx=\"12\" cy=\"12\" r=\"10\" /><polyline points=\"12 6 12 12 16 14\" />","bell":"<path d=\"M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9\" /><path d=\"M10.3 21a1.94 1.94 0 0 0 3.4 0\" />","webhook":"<path d=\"M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17c.01-.7.2-1.4.57-2\" /><path d=\"m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06\" /><path d=\"m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8\" />","mail":"<rect width=\"20\" height=\"16\" x=\"2\" y=\"4\" rx=\"2\" /><path d=\"m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7\" />","triangle-alert":"<path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\" /><path d=\"M12 9v4\" /><path d=\"M12 17h.01\" />","arrow-up-right":"<path d=\"M7 7h10v10\" /><path d=\"M7 17 17 7\" />","search":"<circle cx=\"11\" cy=\"11\" r=\"8\" /><path d=\"m21 21-4.3-4.3\" />","power":"<path d=\"M12 2v10\" /><path d=\"M18.4 6.6a9 9 0 1 1-12.77.04\" />","scroll-text":"<path d=\"M15 12h-5\" /><path d=\"M15 8h-5\" /><path d=\"M19 17V5a2 2 0 0 0-2-2H4\" /><path d=\"M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3\" />","trash-2":"<path d=\"M3 6h18\" /><path d=\"M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6\" /><path d=\"M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2\" /><line x1=\"10\" x2=\"10\" y1=\"11\" y2=\"17\" /><line x1=\"14\" x2=\"14\" y1=\"11\" y2=\"17\" />","gauge":"<path d=\"m12 14 4-4\" /><path d=\"M3.34 19a10 10 0 1 1 17.32 0\" />","logs":"<path d=\"M13 12h8\" /><path d=\"M13 18h8\" /><path d=\"M13 6h8\" /><path d=\"M3 12h1\" /><path d=\"M3 18h1\" /><path d=\"M3 6h1\" /><path d=\"M8 12h1\" /><path d=\"M8 18h1\" /><path d=\"M8 6h1\" />","video":"<path d=\"m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5\" /><rect x=\"2\" y=\"6\" width=\"14\" height=\"12\" rx=\"2\" />","library":"<path d=\"m16 6 4 14\" /><path d=\"M12 6v14\" /><path d=\"M8 8v12\" /><path d=\"M4 4v16\" />","users":"<path d=\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2\" /><circle cx=\"9\" cy=\"7\" r=\"4\" /><path d=\"M22 21v-2a4 4 0 0 0-3-3.87\" /><path d=\"M16 3.13a4 4 0 0 1 0 7.75\" />","layout-dashboard":"<rect width=\"7\" height=\"9\" x=\"3\" y=\"3\" rx=\"1\" /><rect width=\"7\" height=\"5\" x=\"14\" y=\"3\" rx=\"1\" /><rect width=\"7\" height=\"9\" x=\"14\" y=\"12\" rx=\"1\" /><rect width=\"7\" height=\"5\" x=\"3\" y=\"16\" rx=\"1\" />","house":"<path d=\"M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8\" /><path d=\"M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z\" />","check":"<path d=\"M20 6 9 17l-5-5\" />","grid-3x3":"<rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\" /><path d=\"M3 9h18\" /><path d=\"M3 15h18\" /><path d=\"M9 3v18\" /><path d=\"M15 3v18\" />","monitor-cog":"<path d=\"M12 17v4\" /><path d=\"m15.2 4.9-.9-.4\" /><path d=\"m15.2 7.1-.9.4\" /><path d=\"m16.9 3.2-.4-.9\" /><path d=\"m16.9 8.8-.4.9\" /><path d=\"m19.5 2.3-.4.9\" /><path d=\"m19.5 9.7-.4-.9\" /><path d=\"m21.7 4.5-.9.4\" /><path d=\"m21.7 7.5-.9-.4\" /><path d=\"M22 13v2a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7\" /><path d=\"M8 21h8\" /><circle cx=\"18\" cy=\"6\" r=\"3\" />"};
+const ICONS = {"radio":"<path d=\"M4.9 19.1C1 15.2 1 8.8 4.9 4.9\" /><path d=\"M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5\" /><circle cx=\"12\" cy=\"12\" r=\"2\" /><path d=\"M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5\" /><path d=\"M19.1 4.9C23 8.8 23 15.1 19.1 19\" />","scissors":"<circle cx=\"6\" cy=\"6\" r=\"3\" /><path d=\"M8.12 8.12 12 12\" /><path d=\"M20 4 8.12 15.88\" /><circle cx=\"6\" cy=\"18\" r=\"3\" /><path d=\"M14.8 14.8 20 20\" />","radio-tower":"<path d=\"M4.9 16.1C1 12.2 1 5.8 4.9 1.9\" /><path d=\"M7.8 4.7a6.14 6.14 0 0 0-.8 7.5\" /><circle cx=\"12\" cy=\"9\" r=\"2\" /><path d=\"M16.2 4.8c2 2 2.26 5.11.8 7.47\" /><path d=\"M19.1 1.9a9.96 9.96 0 0 1 0 14.1\" /><path d=\"M9.5 18h5\" /><path d=\"m8 22 4-11 4 11\" />","clapperboard":"<path d=\"M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3Z\" /><path d=\"m6.2 5.3 3.1 3.9\" /><path d=\"m12.4 3.4 3.1 4\" /><path d=\"M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z\" />","settings":"<path d=\"M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z\" /><circle cx=\"12\" cy=\"12\" r=\"3\" />","layers":"<path d=\"m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z\" /><path d=\"m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65\" /><path d=\"m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65\" />","package":"<path d=\"M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z\" /><path d=\"M12 22V12\" /><path d=\"m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7\" /><path d=\"m7.5 4.27 9 5.15\" />","activity":"<path d=\"M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2\" />","layout-grid":"<rect width=\"7\" height=\"7\" x=\"3\" y=\"3\" rx=\"1\" /><rect width=\"7\" height=\"7\" x=\"14\" y=\"3\" rx=\"1\" /><rect width=\"7\" height=\"7\" x=\"14\" y=\"14\" rx=\"1\" /><rect width=\"7\" height=\"7\" x=\"3\" y=\"14\" rx=\"1\" />","monitor":"<rect width=\"20\" height=\"14\" x=\"2\" y=\"3\" rx=\"2\" /><line x1=\"8\" x2=\"16\" y1=\"21\" y2=\"21\" /><line x1=\"12\" x2=\"12\" y1=\"17\" y2=\"21\" />","network":"<rect x=\"16\" y=\"16\" width=\"6\" height=\"6\" rx=\"1\" /><rect x=\"2\" y=\"16\" width=\"6\" height=\"6\" rx=\"1\" /><rect x=\"9\" y=\"2\" width=\"6\" height=\"6\" rx=\"1\" /><path d=\"M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3\" /><path d=\"M12 12V8\" />","film":"<rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\" /><path d=\"M7 3v18\" /><path d=\"M3 7.5h4\" /><path d=\"M3 12h18\" /><path d=\"M3 16.5h4\" /><path d=\"M17 3v18\" /><path d=\"M17 7.5h4\" /><path d=\"M17 16.5h4\" />","phone":"<path d=\"M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z\" />","grid-3x3":"<rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\" /><path d=\"M3 9h18\" /><path d=\"M3 15h18\" /><path d=\"M9 3v18\" /><path d=\"M15 3v18\" />","chevron-down":"<path d=\"m6 9 6 6 6-6\" />","circle-help":"<circle cx=\"12\" cy=\"12\" r=\"10\" /><path d=\"M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3\" /><path d=\"M12 17h.01\" />","user":"<path d=\"M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2\" /><circle cx=\"12\" cy=\"7\" r=\"4\" />","languages":"<path d=\"m5 8 6 6\" /><path d=\"m4 14 6-6 2-3\" /><path d=\"M2 5h12\" /><path d=\"M7 2h1\" /><path d=\"m22 22-5-10-5 10\" /><path d=\"M14 18h6\" />","sun-moon":"<path d=\"M12 8a2.83 2.83 0 0 0 4 4 4 4 0 1 1-4-4\" /><path d=\"M12 2v2\" /><path d=\"M12 20v2\" /><path d=\"m4.9 4.9 1.4 1.4\" /><path d=\"m17.7 17.7 1.4 1.4\" /><path d=\"M2 12h2\" /><path d=\"M20 12h2\" /><path d=\"m6.3 17.7-1.4 1.4\" /><path d=\"m19.1 4.9-1.4 1.4\" />","keyboard":"<path d=\"M10 8h.01\" /><path d=\"M12 12h.01\" /><path d=\"M14 8h.01\" /><path d=\"M16 12h.01\" /><path d=\"M18 8h.01\" /><path d=\"M6 8h.01\" /><path d=\"M7 16h10\" /><path d=\"M8 12h.01\" /><rect width=\"20\" height=\"16\" x=\"2\" y=\"4\" rx=\"2\" />","log-out":"<path d=\"M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4\" /><polyline points=\"16 17 21 12 16 7\" /><line x1=\"21\" x2=\"9\" y1=\"12\" y2=\"12\" />","layout-dashboard":"<rect width=\"7\" height=\"9\" x=\"3\" y=\"3\" rx=\"1\" /><rect width=\"7\" height=\"5\" x=\"14\" y=\"3\" rx=\"1\" /><rect width=\"7\" height=\"9\" x=\"14\" y=\"12\" rx=\"1\" /><rect width=\"7\" height=\"5\" x=\"3\" y=\"16\" rx=\"1\" />","globe":"<circle cx=\"12\" cy=\"12\" r=\"10\" /><path d=\"M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20\" /><path d=\"M2 12h20\" />","lock":"<rect width=\"18\" height=\"11\" x=\"3\" y=\"11\" rx=\"2\" ry=\"2\" /><path d=\"M7 11V7a5 5 0 0 1 10 0v4\" />","cloud-download":"<path d=\"M12 13v8l-4-4\" /><path d=\"m12 21 4-4\" /><path d=\"M4.393 15.269A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.436 8.284\" />","library":"<path d=\"m16 6 4 14\" /><path d=\"M12 6v14\" /><path d=\"M8 8v12\" /><path d=\"M4 4v16\" />","plus":"<path d=\"M5 12h14\" /><path d=\"M12 5v14\" />","users":"<path d=\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2\" /><circle cx=\"9\" cy=\"7\" r=\"4\" /><path d=\"M22 21v-2a4 4 0 0 0-3-3.87\" /><path d=\"M16 3.13a4 4 0 0 1 0 7.75\" />","users-round":"<path d=\"M18 21a8 8 0 0 0-16 0\" /><circle cx=\"10\" cy=\"8\" r=\"5\" /><path d=\"M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3\" />","key-round":"<path d=\"M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z\" /><circle cx=\"16.5\" cy=\"7.5\" r=\".5\" fill=\"currentColor\" />","waves":"<path d=\"M2 6c.6.5 1.2 1 2.5 1C7 7 7 5 9.5 5c2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1\" /><path d=\"M2 12c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1\" /><path d=\"M2 18c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1\" />","ethernet-port":"<path d=\"m15 20 3-3h2a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h2l3 3z\" /><path d=\"M6 8v1\" /><path d=\"M10 8v1\" /><path d=\"M14 8v1\" /><path d=\"M18 8v1\" />","clock":"<circle cx=\"12\" cy=\"12\" r=\"10\" /><polyline points=\"12 6 12 12 16 14\" />","logs":"<path d=\"M13 12h8\" /><path d=\"M13 18h8\" /><path d=\"M13 6h8\" /><path d=\"M3 12h1\" /><path d=\"M3 18h1\" /><path d=\"M3 6h1\" /><path d=\"M8 12h1\" /><path d=\"M8 18h1\" /><path d=\"M8 6h1\" />","scroll-text":"<path d=\"M15 12h-5\" /><path d=\"M15 8h-5\" /><path d=\"M19 17V5a2 2 0 0 0-2-2H4\" /><path d=\"M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3\" />","bell":"<path d=\"M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9\" /><path d=\"M10.3 21a1.94 1.94 0 0 0 3.4 0\" />","triangle-alert":"<path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\" /><path d=\"M12 9v4\" /><path d=\"M12 17h.01\" />","server":"<rect width=\"20\" height=\"8\" x=\"2\" y=\"2\" rx=\"2\" ry=\"2\" /><rect width=\"20\" height=\"8\" x=\"2\" y=\"14\" rx=\"2\" ry=\"2\" /><line x1=\"6\" x2=\"6.01\" y1=\"6\" y2=\"6\" /><line x1=\"6\" x2=\"6.01\" y1=\"18\" y2=\"18\" />","circle-check":"<circle cx=\"12\" cy=\"12\" r=\"10\" /><path d=\"m9 12 2 2 4-4\" />","upload":"<path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\" /><polyline points=\"17 8 12 3 7 8\" /><line x1=\"12\" x2=\"12\" y1=\"3\" y2=\"15\" />","rotate-ccw":"<path d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\" /><path d=\"M3 3v5h5\" />","arrow-up-right":"<path d=\"M7 7h10v10\" /><path d=\"M7 17 17 7\" />","ellipsis":"<circle cx=\"12\" cy=\"12\" r=\"1\" /><circle cx=\"19\" cy=\"12\" r=\"1\" /><circle cx=\"5\" cy=\"12\" r=\"1\" />","user-plus":"<path d=\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2\" /><circle cx=\"9\" cy=\"7\" r=\"4\" /><line x1=\"19\" x2=\"19\" y1=\"8\" y2=\"14\" /><line x1=\"22\" x2=\"16\" y1=\"11\" y2=\"11\" />","send":"<path d=\"M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z\" /><path d=\"m21.854 2.147-10.94 10.939\" />","webhook":"<path d=\"M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17c.01-.7.2-1.4.57-2\" /><path d=\"m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06\" /><path d=\"m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8\" />","mail":"<rect width=\"20\" height=\"16\" x=\"2\" y=\"4\" rx=\"2\" /><path d=\"m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7\" />","power":"<path d=\"M12 2v10\" /><path d=\"M18.4 6.6a9 9 0 1 1-12.77.04\" />","trash-2":"<path d=\"M3 6h18\" /><path d=\"M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6\" /><path d=\"M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2\" /><line x1=\"10\" x2=\"10\" y1=\"11\" y2=\"17\" /><line x1=\"14\" x2=\"14\" y1=\"11\" y2=\"17\" />","x":"<path d=\"M18 6 6 18\" /><path d=\"m6 6 12 12\" />"};
 const F = 'M145.93,22.93v-10.33h-35.97c2.12,2.08,7.43,7.77,7.92,13.05-.05-.42-.28-1.57-1.25-3.27-.98-1.72-2.72-4-5.8-6.66-.03-.03-.06-.05-.09-.08-1.11-.96-2.39-1.98-3.87-3.03C98.07,5.95,95.14,2.38,94.38.01c0,0-2.69,9.66,4.5,17.36,0,0-1.74-.36-3.41-1.02,0,0,2.98,7.41,11.12,11.33,0,0-2.11.07-3.92-.14,0,0,1.93,2.92,7.66,5.88v8.46c0,.57-.46,1.04-1.04,1.04h-3.97v7.83h24.8v-7.85h-3.76c-.57,0-1.04-.46-1.04-1.04v-3.41c1.19.21,4.51,1.95,5.96,3.12,3.92,3.17,8.11,8.05,8.11,8.05l1.83,1.13s-5.07-6.05-8.33-9.3c-2.27-2.27-6.1-6.1-6.1-6.1l-.2-.22h9.57v-7.19h-10.82v-7.51l9.78-.04c.58,0,1.04.46,1.04,1.04v1.5h9.8-.03Z';
 const ic = (n, s = 14) => `<svg class="lucide" xmlns="http://www.w3.org/2000/svg" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n] || ''}</svg>`;
 
 // ------------------------------------------------------------------ données
-const SERVER = 'strata01';
-const DOMAIN = 'strata01.regie.exemple.fr';
-const APPS = [
-  { id: 'livecut', name: 'LiveCut', icon: 'scissors', ver: '0.3.0', next: '0.3.1', state: 'active', user: true, cpu: 22, mem: '9,8 Go', tabs: [['radio-tower', 'Enregistreurs'], ['scissors', 'Extraction'], ['clapperboard', 'Extraits'], ['settings', 'Réglages']] },
-  { id: 'graphics', name: 'Graphics', icon: 'layers', ver: '0.8.0', state: 'active', user: false, cpu: 9, mem: '3,1 Go', tabs: [['layers', 'Projets'], ['package', 'Ressources'], ['activity', 'Données'], ['radio-tower', 'Diffusion'], ['settings', 'Réglages']] },
-  { id: 'multiview', name: 'Multiview', icon: 'layout-grid', ver: '0.5.2', state: 'active', user: true, cpu: 6, mem: '2,4 Go', tabs: [['layout-grid', 'Mosaïques'], ['radio-tower', 'Sources'], ['monitor', 'Sorties'], ['settings', 'Réglages']] },
-  { id: 'network', name: 'Network', icon: 'network', ver: '0.4.1', next: '0.5.0', needs: '1.1', state: 'inactive', tabs: [] },
-  { id: 'media', name: 'Media', icon: 'film', ver: '0.1.0', state: 'none', tabs: [] },
-  { id: 'call', name: 'Call', icon: 'phone', ver: '0.1.0', state: 'none', tabs: [] },
+const DOMAIN = 'regie.exemple.fr';
+const SERVERS = [
+  { id: 'strata01', name: 'Régie A', master: true, up: true, alerts: 1, cpu: 34, mem: 21, since: '12 j' },
+  { id: 'strata02', name: 'Régie B', master: false, up: true, alerts: 0, cpu: 18, mem: 12, since: '3 j' },
+  { id: 'strata03', name: 'Studio', master: false, up: false, alerts: 0, cpu: 0, mem: 0, since: '' },
 ];
-const ME = { admin: { name: 'Damien', init: 'D', role: 'Administrateur du serveur' }, user: { name: 'Claire Martin', init: 'C', role: 'Utilisateur' } };
-const appUrl = (a) => `${a.id}.${DOMAIN}`;
+const MASTER = SERVERS[0];
+const APPS = {
+  livecut: { name: 'LiveCut', icon: 'scissors', tabs: [['radio-tower', 'Enregistreurs'], ['scissors', 'Extraction'], ['clapperboard', 'Extraits'], ['settings', 'Réglages']] },
+  graphics: { name: 'Graphics', icon: 'layers', tabs: [['layers', 'Projets'], ['package', 'Ressources'], ['activity', 'Données'], ['radio-tower', 'Diffusion'], ['settings', 'Réglages']] },
+  multiview: { name: 'Multiview', icon: 'layout-grid', tabs: [['layout-grid', 'Mosaïques'], ['radio-tower', 'Sources'], ['monitor', 'Sorties'], ['settings', 'Réglages']] },
+  network: { name: 'Network', icon: 'network', tabs: [['network', 'Réseau'], ['settings', 'Réglages']] },
+  media: { name: 'Media', icon: 'film', ver: '0.1.0' },
+  call: { name: 'Call', icon: 'phone', ver: '0.1.0' },
+};
+// Une appli installée sur un serveur.
+const INST = [
+  { app: 'livecut', sv: 'strata01', ver: '0.3.0', next: '0.3.1', state: 'active', user: true, cpu: 22, mem: '9,8 Go' },
+  { app: 'graphics', sv: 'strata01', ver: '0.8.0', state: 'active', user: false, cpu: 9, mem: '3,1 Go' },
+  { app: 'livecut', sv: 'strata02', ver: '0.3.0', next: '0.3.1', state: 'active', user: true, cpu: 14, mem: '6,2 Go' },
+  { app: 'network', sv: 'strata02', ver: '0.4.1', next: '0.5.0', needs: '1.1', state: 'inactive' },
+  { app: 'multiview', sv: 'strata03', ver: '0.5.2', state: 'active', user: true, cpu: 6, mem: '2,4 Go' },
+];
+const ME = { admin: { name: 'Damien', init: 'D', role: 'Administrateur des serveurs' }, user: { name: 'Claire Martin', init: 'C', role: 'Utilisateur' } };
+const sv = (id) => SERVERS.find((s) => s.id === id);
+const host = (s) => `${s.id}.${DOMAIN}`;
+const instUrl = (i) => `${i.app}.${i.sv}.${DOMAIN}`;
+const instKey = (i) => `${i.app}@${i.sv}`;
+const inst = (key) => INST.find((i) => instKey(i) === key);
 
-// ------------------------------------------------------------------ état
-const S = { prop: 'A', role: 'admin', where: 'home', page: null, tab: null, app: null, menu: null };
+// ------------------------------------------------------------------ état : les onglets du navigateur
+const fresh = () => ({ tabs: [{ id: 'cockpit', kind: 'cockpit', view: 'home', page: null }], active: 'cockpit', menu: null, modal: null });
+const S = Object.assign({ role: 'admin' }, fresh());
 const isAdmin = () => S.role === 'admin';
-const visibleApps = () => APPS.filter((a) => a.state === 'active' && (isAdmin() || a.user));
-const appById = (id) => APPS.find((a) => a.id === id);
+const tab = () => S.tabs.find((t) => t.id === S.active);
+let CTX = MASTER; // le serveur dont on montre les réglages
+
+// Applis du cockpit, regroupées par appli : les instances actives où l'utilisateur a des droits.
+function byApp() {
+  const out = [];
+  for (const i of INST.filter((i) => i.state === 'active' && (isAdmin() || i.user))) {
+    let g = out.find((g) => g.app === i.app);
+    if (!g) out.push((g = { app: i.app, list: [] }));
+    g.list.push(i);
+  }
+  return out;
+}
+
+// ------------------------------------------------------------------ ouvrir, fermer
+function activate(id) { S.active = id; S.menu = null; }
+function openApp(key) {
+  const i = inst(key);
+  if (!sv(i.sv).up) return;
+  const id = 'app:' + key;
+  if (!S.tabs.find((t) => t.id === id)) S.tabs.push({ id, kind: 'app', key });
+  activate(id);
+}
+function openSettings(id, page) {
+  if (id === MASTER.id) { const c = S.tabs[0]; c.view = 'settings'; c.page = page || c.page || 'overview'; return activate('cockpit'); }
+  const tid = 'set:' + id;
+  let t = S.tabs.find((t) => t.id === tid);
+  if (!t) S.tabs.push((t = { id: tid, kind: 'settings', sv: id, page: 'overview' }));
+  if (page) t.page = page;
+  activate(tid);
+}
+function tabTitle(t) {
+  if (t.kind === 'cockpit') return t.view === 'settings' ? `Réglages · ${MASTER.name}` : 'Strata';
+  if (t.kind === 'settings') return `Réglages · ${sv(t.sv).name}`;
+  const i = inst(t.key);
+  return `${APPS[i.app].name} · ${sv(i.sv).name}`;
+}
+function tabUrl(t) {
+  if (t.kind === 'cockpit') return t.view === 'settings' ? [host(MASTER), '/reglages'] : [host(MASTER), '/'];
+  if (t.kind === 'settings') return [host(sv(t.sv)), '/reglages'];
+  return [instUrl(inst(t.key)), '/'];
+}
+const tabIcon = (t) => (t.kind === 'app' ? APPS[inst(t.key).app].icon : t.kind === 'settings' || t.view === 'settings' ? 'settings' : 'grid-3x3');
 
 // ------------------------------------------------------------------ pièces communes
-function brand(module, { lead = true } = {}) {
-  return `<div class="brand" aria-label="Strata ${module}, Le Figaro AudioVisuel"><span class="brand-lockup">${lead ? `<svg class="brand-f-lead" viewBox="93.8 -0.2 52.3 52.95" width="23.7" height="24" aria-hidden="true"><path fill="currentColor" d="${F}"/></svg>` : ''}<span class="brand-name">Strata</span><span class="brand-module">${module}</span></span></div>`;
+function brand(module) {
+  return `<div class="brand" aria-label="Strata ${module}, Le Figaro AudioVisuel"><span class="brand-lockup"><svg class="brand-f-lead" viewBox="93.8 -0.2 52.3 52.95" width="23.7" height="24" aria-hidden="true"><path fill="currentColor" d="${F}"/></svg><span class="brand-name">Strata</span><span class="brand-module">${module}</span></span></div>`;
 }
-const fLogo = (h = 26) => `<svg viewBox="93.8 -0.2 52.3 52.95" width="${(h * 52.3) / 52.95}" height="${h}" aria-hidden="true"><path fill="currentColor" d="${F}"/></svg>`;
-function right() {
+const head = (title, sub, actions = '') => `<div class="settings-head"><div><h1>${title}</h1>${sub ? `<p class="muted">${sub}</p>` : ''}</div><div class="spacer"></div>${actions}</div>`;
+const card = (icon, title, body, actions = '') => `<section class="set-card"><header>${ic(icon, 16)}<h2>${title}</h2>${actions ? `<div class="spacer"></div>${actions}` : ''}</header><div class="set-body">${body}</div></section>`;
+const field = (label, input) => `<label class="set-field"><span class="set-label">${label}</span>${input}</label>`;
+const dd = (label) => `<button class="dd-btn"><span class="dd-label">${label}</span>${ic('chevron-down', 12)}</button>`;
+const sw = (label, on = true) => `<label class="check"><input type="checkbox" ${on ? 'checked' : ''} /> ${label}</label>`;
+const seg = (opts, on = 0) => `<div class="segmented">${opts.map((o, i) => `<button class="${i === on ? 'on' : ''}">${o}</button>`).join('')}</div>`;
+const bar = (pct, tone = 'ok') => `<span class="perf-bar tone-${tone}"><span class="perf-bar-fill" style="transform:translateX(${pct - 100}%)"></span></span>`;
+const meter = (label, val, pct, sub, tone = 'ok') => `<div class="mk-meter"><div class="mk-meter-h"><span>${label}</span><b>${val}</b></div>${bar(pct, tone)}<span class="muted">${sub}</span></div>`;
+const lines = (rows) => `<div class="mk-lines">${rows.join('')}</div>`;
+const line = (dot, label, right) => `<div class="mk-line"><span class="nav-dot ${dot}"></span><span class="grow">${label}</span>${right}</div>`;
+
+function right({ gear }) {
   const me = ME[S.role];
   return `<div class="spacer"></div>
-  <span class="ux1-pill" title="${SERVER} · Connecté&#10;CPU 34 % · 32 cœurs&#10;Mémoire 21 Go sur 64 Go"><span class="ux1-dot"></span>Connecté</span>
+  <span class="ux1-pill" title="Connecté"><span class="ux1-dot"></span>Connecté</span>
   <button class="learn-help" title="Aide">${ic('circle-help', 17)}</button>
-  ${S.prop === 'C' && isAdmin() ? `<button class="learn-help ${S.where === 'settings' ? 'on' : ''}" title="Réglages du serveur" data-go="settings">${ic('settings', 17)}</button>` : ''}
+  ${isAdmin() && gear ? `<button class="learn-help ${gear === 'on' ? 'on' : ''}" title="Réglages du serveur" data-settings="${gear === 'on' ? '' : gear}">${ic('settings', 17)}</button>` : ''}
   <div class="ux1-user">
     <button class="ux1-user-btn named ${S.menu === 'user' ? 'on' : ''}" data-menu="user"><span class="avatar">${me.init}</span><span class="user-name">${me.name}</span>${ic('chevron-down', 13)}</button>
     ${S.menu === 'user' ? `<div class="menu ux1-umenu">
@@ -2097,289 +2213,193 @@ function right() {
     </div>` : ''}
   </div>`;
 }
-const tabsHtml = (items, cur, attr) => `<div class="tabs home-tabs">${items.map(([id, icon, label]) => `<button class="${cur === id ? 'on' : ''}" ${attr}="${id}">${ic(icon)} <span>${label}</span></button>`).join('')}</div>`;
-const head = (title, sub, actions = '') => `<div class="settings-head"><div><h1>${title}</h1>${sub ? `<p class="muted">${sub}</p>` : ''}</div><div class="spacer"></div>${actions}</div>`;
-const card = (icon, title, body, actions = '') => `<section class="set-card"><header>${ic(icon, 16)}<h2>${title}</h2>${actions ? `<div class="spacer"></div>${actions}` : ''}</header><div class="set-body">${body}</div></section>`;
-const field = (label, input) => `<label class="set-field"><span class="set-label">${label}</span>${input}</label>`;
-const dd = (label, detail = '') => `<button class="dd-btn"><span class="dd-label">${label}</span>${detail ? `<span class="dd-detail">${detail}</span>` : ''}${ic('chevron-down', 12)}</button>`;
-const sw = (label, on = true) => `<label class="check"><input type="checkbox" ${on ? 'checked' : ''} /> ${label}</label>`;
-const seg = (opts, on = 0) => `<div class="segmented">${opts.map((o, i) => `<button class="${i === on ? 'on' : ''}">${o}</button>`).join('')}</div>`;
-const bar = (pct, tone = 'ok') => `<span class="perf-bar tone-${tone}"><span class="perf-bar-fill" style="transform:translateX(${pct - 100}%)"></span></span>`;
-const meter = (label, val, pct, sub, tone = 'ok') => `<div class="mk-meter"><div class="mk-meter-h"><span>${label}</span><b>${val}</b></div>${bar(pct, tone)}<span class="muted">${sub}</span></div>`;
-const stateBadge = (a) => a.state === 'active' ? '<span class="badge ok">Active</span>' : a.state === 'inactive' ? '<span class="badge">Inactive</span>' : '<span class="badge acc">Disponible</span>';
 
-// ------------------------------------------------------------------ pages des réglages (communes aux trois propositions)
+// Bouton d'une instance : le nom du serveur (Régie A…), l'hôte et ses alertes en plus pour les administrateurs.
+function instPill(i) {
+  const s = sv(i.sv);
+  if (!s.up) return `<button class="mk-pill" disabled title="${isAdmin() ? `${s.id} injoignable` : 'Indisponible'}">${isAdmin() ? `<span class="nav-dot bad"></span>${s.name}` : `${s.name} · indisponible`}</button>`;
+  const dot = isAdmin() ? `<span class="nav-dot ${s.alerts ? 'warn' : 'ok'}"></span>` : '';
+  return `<button class="mk-pill" data-inst="${instKey(i)}" title="${isAdmin() ? `${s.id}${s.alerts ? ` · ${s.alerts} alerte` : ''}` : ''}">${dot}${s.name}</button>`;
+}
+
+// Le lanceur ⊞, le même dans tous les onglets.
+function launcher(curKey) {
+  return `<div class="menu mk-launcher">
+    <div class="mk-l-head"><span>Applis</span><button class="btn small ghost" data-home>${ic('grid-3x3', 13)} Cockpit</button></div>
+    ${byApp().map((g) => {
+      const A = APPS[g.app];
+      const one = g.list.length === 1 && sv(g.list[0].sv).up;
+      return `<div class="mk-lrow ${one ? 'click' : ''} ${g.list.some((i) => instKey(i) === curKey) ? 'on' : ''}" ${one ? `data-inst="${instKey(g.list[0])}"` : ''}><span class="mk-ico xs">${ic(A.icon, 15)}</span><strong>${A.name}</strong>
+        ${one ? (isAdmin() ? `<span class="muted">${sv(g.list[0].sv).name}</span>` : '') : g.list.map(instPill).join('')}</div>`;
+    }).join('')}
+  </div>`;
+}
+const launchBtn = (curKey) => `<div class="mk-anchor"><button class="mk-sq ${S.menu === 'launch' ? 'on' : ''}" data-menu="launch" title="Applis">${ic('grid-3x3', 17)}</button>${S.menu === 'launch' ? launcher(curKey) : ''}</div>`;
+
+// ------------------------------------------------------------------ le cockpit
+function cockpit() {
+  const groups = byApp();
+  const tiles = groups.map((g) => {
+    const A = APPS[g.app];
+    const up = g.list.filter((i) => sv(i.sv).up);
+    if (!up.length) return `<div class="mk-big dim"><span class="mk-ico off">${ic(A.icon, 28)}</span><strong>${A.name}</strong><span class="muted">Indisponible</span></div>`;
+    if (g.list.length === 1) {
+      const s = sv(g.list[0].sv);
+      return `<div class="mk-big" data-inst="${instKey(g.list[0])}"><span class="mk-ico">${ic(A.icon, 28)}</span><strong>${A.name}</strong>${isAdmin() ? `<span class="muted">${s.name}</span>` : ''}</div>`;
+    }
+    return `<div class="mk-big" style="cursor:default"><span class="mk-ico">${ic(A.icon, 28)}</span><strong>${A.name}</strong><div class="mk-pills">${g.list.map(instPill).join('')}</div></div>`;
+  }).join('');
+  const servers = isAdmin() ? `<div class="mk-servers">${SERVERS.map((s) => `<button class="mk-srv" data-settings="${s.id}" title="Réglages de ${s.name}"><span class="nav-dot ${!s.up ? 'bad' : s.alerts ? 'warn' : 'ok'}"></span><b>${s.name}</b><span>${s.id}</span>${!s.up ? '<span class="bad-t">injoignable</span>' : s.alerts ? `<span class="warn-t">${s.alerts} alerte</span>` : ''}</button>`).join('')}</div>` : '';
+  return `<section class="mk-launch-page"><div class="mk-launch-head"><h1>Applis</h1></div><div class="mk-launch">${tiles}</div>${servers}</section>`;
+}
+
+// ------------------------------------------------------------------ les réglages d'un serveur (CTX)
+const here = () => INST.filter((i) => i.sv === CTX.id);
+function nav() {
+  const g = [['Ce serveur', [['overview', 'layout-dashboard', 'Vue d’ensemble'], ['general', 'globe', 'Nom et adresses'], ['https', 'lock', 'HTTPS'], ['updates', 'cloud-download', 'Mises à jour', here().filter((i) => i.next).length || null], ['cockpit', 'grid-3x3', CTX.master ? 'Serveurs' : 'Cockpit', CTX.master ? SERVERS.length : null]]],
+    ['Applis', [...here().map((i) => ['app:' + i.app, APPS[i.app].icon, APPS[i.app].name, null, i.state === 'active' ? 'ok' : 'off']), ['library', 'plus', 'Ajouter une appli']]]];
+  if (CTX.master) g.push(['Personnes', [['users', 'users', 'Utilisateurs', 5], ['groups', 'users-round', 'Groupes', 4], ['sso', 'key-round', 'Annuaire']]]);
+  g.push(['Matériel', [['sdi', 'monitor', 'Cartes SDI'], ['ndi', 'radio-tower', 'NDI'], ['st2110', 'waves', 'ST 2110'], ['network', 'ethernet-port', 'Réseau'], ['clock', 'clock', 'Horloge']]],
+    ['Surveillance', [['logs', 'scroll-text', 'Journaux'], ['alerts', 'bell', 'Alertes', CTX.alerts || null], ['snmp', 'radio', 'SNMP']]]);
+  return g;
+}
+function settingsView(t) {
+  const cur = t.page || 'overview';
+  const navHtml = nav().map(([title, items]) => `<div class="lib-nav-section"><span class="grow">${title}</span></div>` + items.map(([id, icon, label, count, dot]) =>
+    `<div class="lib-nav-item ${cur === id ? 'on' : ''}" data-page="${id}">${ic(icon, 15)}<span class="grow">${label}</span>${count ? `<span class="count">${count}</span>` : ''}${dot ? `<span class="nav-dot ${dot === 'ok' ? 'ok' : ''}"></span>` : ''}</div>`).join('')).join('');
+  const body = cur.startsWith('app:') ? appPage(cur.slice(4)) : (PAGES[cur] || PAGES.overview)();
+  return `<section class="projects-page"><aside class="lib-nav">${navHtml}</aside><main class="library"><div class="library-inner">${body}</div></main></section>`;
+}
+
 const PAGES = {
-  general: () => head('Nom et adresses', DOMAIN) +
-    card('server', 'Serveur', `<div class="set-grid">${field('Nom du serveur', `<input value="${SERVER}" />`)}${field('Nom DNS', `<input value="${DOMAIN}" />`)}${field('Fuseau horaire', dd('Europe/Paris'))}</div>
-      <div class="mk-sub"><span class="badge ok">${ic('circle-check', 11)} *.${DOMAIN} résolu</span></div>`) +
-    card('globe', 'Adresses', `<table class="user-table"><thead><tr><th>Appli</th><th>Adresse</th><th>État</th></tr></thead><tbody>
-      <tr><td><strong>Cockpit</strong></td><td class="mono">https://${DOMAIN}</td><td><span class="badge ok">En ligne</span></td></tr>
-      ${APPS.filter((a) => a.state !== 'none').map((a) => `<tr><td><strong>${a.name}</strong></td><td class="mono">https://${appUrl(a)}</td><td>${a.state === 'active' ? '<span class="badge ok">En ligne</span>' : '<span class="badge">Inactive</span>'}</td></tr>`).join('')}
+  overview: () => head(CTX.name, `${host(CTX)} · ${CTX.master ? 'maître' : 'membre'} · Core 1.0.0 · en marche depuis ${CTX.since}`) +
+    `<div class="mk-meters">${meter('Processeur', `${CTX.cpu} %`, CTX.cpu, '32 cœurs')}${meter('Mémoire', `${CTX.mem} Go`, Math.round((CTX.mem / 64) * 100), 'sur 64 Go')}${meter('Disque des données', '67 %', 67, '2,6 To libres sur 8 To', 'warn')}${meter('Réseau', '1,2 Gb/s', 24, 'ens2f0 · 25 Gb/s')}</div>` +
+    `<div class="mk-cols">${card('triangle-alert', 'Alertes', CTX.alerts ? lines([line('warn', 'SDI 2 sans signal', '<span class="muted mono">00:12:40</span>')]) : '<span class="muted">Aucune alerte</span>')}
+      ${card('monitor', 'Matériel', lines([line('ok', 'SDI', `<span class="muted">${CTX.alerts ? '3 sur 4 avec signal' : '4 sur 4 avec signal'}</span>`), line('ok', 'NDI', '<span class="muted">3 sources</span>'), line('ok', 'PTP', '<span class="muted">verrouillé</span>')]))}
+      ${card('package', 'Applis', lines(here().map((i) => line(i.state === 'active' ? 'ok' : '', APPS[i.app].name, `${i.next ? '<span class="badge warn">Mise à jour</span>' : ''}<span class="muted mono">${i.ver}</span>`))))}</div>`,
+  general: () => head('Nom et adresses', host(CTX)) +
+    card('server', 'Serveur', `<div class="set-grid">${field('Nom', `<input value="${CTX.name}" />`)}${field('Nom DNS', `<input value="${host(CTX)}" />`)}${field('Fuseau horaire', dd('Europe/Paris'))}</div>
+      <div class="mk-sub"><span class="badge ok">${ic('circle-check', 11)} *.${host(CTX)} résolu</span></div>`) +
+    card('globe', 'Adresses', `<table class="user-table"><thead><tr><th>Page</th><th>Adresse</th></tr></thead><tbody>
+      ${CTX.master ? `<tr><td><strong>Cockpit</strong></td><td class="mono">https://${host(CTX)}</td></tr>` : `<tr><td><strong>Cockpit</strong></td><td class="mono">https://${host(MASTER)} <span class="muted">(maître)</span></td></tr>`}
+      <tr><td><strong>Réglages</strong></td><td class="mono">https://${host(CTX)}/reglages</td></tr>
+      ${here().map((i) => `<tr><td><strong>${APPS[i.app].name}</strong></td><td class="mono">https://${instUrl(i)}</td></tr>`).join('')}
     </tbody></table>`),
   https: () => head('HTTPS', 'Certificat valable jusqu’au 27/11/2027') +
     card('lock', 'Certificat', `<div class="set-grid two">${field('Origine', seg(['Fait par Strata', 'Entreprise']))}${field('Expire le', '<input value="27/11/2027" readonly />')}</div>
-      ${field('Noms couverts', `<input value="${DOMAIN}, *.${DOMAIN}" readonly />`)}
-      <div class="mk-sub"><button class="btn">${ic('upload')} Importer un certificat</button><button class="btn ghost">${ic('rotate-ccw')} Renouveler</button></div>`) +
-    card('globe', 'HTTP', field('Requêtes en HTTP', seg(['Rediriger vers HTTPS', 'Refuser']))),
-  updates: () => head('Mises à jour', 'Core 1.0.0 · 2 mises à jour disponibles', `<button class="btn">${ic('rotate-ccw')} Vérifier maintenant</button>`) +
+      ${field('Noms couverts', `<input value="${host(CTX)}, *.${host(CTX)}" readonly />`)}
+      <div class="mk-sub"><button class="btn">${ic('upload')} Importer un certificat</button></div>`),
+  updates: () => head('Mises à jour', `Core 1.0.0 · ${here().filter((i) => i.next).length} mises à jour disponibles`, `<button class="btn">${ic('rotate-ccw')} Vérifier maintenant</button>`) +
     card('cloud-download', 'Versions', `<table class="user-table"><thead><tr><th>Composant</th><th>Installée</th><th>Disponible</th><th></th></tr></thead><tbody>
       <tr><td><strong>Core</strong></td><td class="mono">1.0.0</td><td><span class="badge ok">À jour</span></td><td></td></tr>
-      ${APPS.filter((a) => a.state !== 'none').map((a) => `<tr><td><strong>${a.name}</strong> ${a.state === 'inactive' ? '<span class="badge">Inactive</span>' : ''}</td><td class="mono">${a.ver}</td>
-        <td>${a.next ? `<span class="mono">${a.next}</span> ${a.needs ? `<span class="badge warn">Demande le Core ${a.needs}</span>` : ''}` : '<span class="badge ok">À jour</span>'}</td>
-        <td class="r">${a.next && !a.needs ? `<button class="btn small primary">${ic('cloud-download', 13)} Mettre à jour</button>` : ''}</td></tr>`).join('')}
-    </tbody></table>
-    ${sw('Vérifier chaque jour')}`) +
-    card('key-round', 'Accès GitHub', `<table class="user-table"><thead><tr><th>Dépôt</th><th>Clé</th><th></th></tr></thead><tbody>
-      ${['Strata-Core', 'Strata-Cut', 'CG', 'Strata-Multiview', 'Strata-Network'].map((r) => `<tr><td class="mono">DamienP2/${r}</td><td><span class="badge ok">Enregistrée</span></td><td class="r"><button class="btn small">Remplacer</button></td></tr>`).join('')}
-    </tbody></table>`) +
-    card('upload', 'Hors ligne', `<div class="mk-sub"><button class="btn">${ic('upload')} Envoyer une archive</button><span class="muted">.tar.gz d’une release</span></div>`),
-  library: () => head('Bibliothèque', '6 applis · 3 actives') +
-    `<div class="media-toolbar"><div class="asr-chips"><button class="asr-chip on">Toutes <span class="asr-chip-n">6</span></button><button class="asr-chip">Actives <span class="asr-chip-n">3</span></button><button class="asr-chip">Inactives <span class="asr-chip-n">1</span></button><button class="asr-chip">Disponibles <span class="asr-chip-n">2</span></button></div></div>
-    <div class="mk-cards">${APPS.map(libCard).join('')}</div>`,
-  users: () => head('Utilisateurs', '5 utilisateurs · 2 administrateurs', `<button class="btn primary">${ic('user-plus')} Nouvel utilisateur</button>`) +
-    `<div class="user-grid">${[
-      ['Damien', 'damien', 1, 1, 'Réalisation · Technique'], ['Claire Martin', 'c.martin', 0, 1, 'Montage'], ['Hugo Bernard', 'h.bernard', 0, 1, 'Réalisation'],
-      ['Inès Petit', 'i.petit', 1, 0, 'Technique'], ['Régie B', 'regie-b', 0, 0, '—'],
-    ].map(([n, l, adm, sso, g]) => `<div class="user-card ${adm ? 'role-admin' : 'role-viewer'}"><div class="user-card-head"><span class="avatar">${n[0]}</span><div class="user-card-name"><strong>${n}</strong><span class="user-card-sub muted"><span class="user-card-login">${l}</span>${sso ? '<span class="badge sso">SSO</span>' : ''}</span></div></div>
-      <div>${adm ? '<span class="badge role-admin">Administrateur du serveur</span>' : '<span class="badge role-viewer">Utilisateur</span>'}</div>
-      <div class="muted">${ic('users-round', 12)} ${g}</div>
-      <div class="user-card-actions"><button class="btn small ghost">Modifier</button><div class="spacer"></div><button class="icon-btn ghost" title="Plus">${ic('ellipsis')}</button></div></div>`).join('')}</div>`,
-  groups: () => head('Groupes', '4 groupes', `<button class="btn primary">${ic('plus')} Nouveau groupe</button>`) +
-    `<table class="user-table"><thead><tr><th>Groupe</th><th>Membres</th><th>Origine</th><th></th></tr></thead><tbody>
-      ${[['Réalisation', 6, 'Annuaire'], ['Montage', 4, 'Annuaire'], ['Technique', 3, 'Annuaire'], ['Graphistes', 3, 'Local']].map(([g, n, o]) => `<tr><td><strong>${g}</strong></td><td>${n}</td><td>${o === 'Local' ? '<span class="badge">Local</span>' : '<span class="badge acc">Annuaire</span>'}</td><td class="r"><button class="icon-btn ghost">${ic('ellipsis')}</button></td></tr>`).join('')}
-    </tbody></table>`,
+      ${here().map((i) => `<tr><td><strong>${APPS[i.app].name}</strong> ${i.state === 'inactive' ? '<span class="badge">Inactive</span>' : ''}</td><td class="mono">${i.ver}</td>
+        <td>${i.next ? `<span class="mono">${i.next}</span> ${i.needs ? `<span class="badge warn">Demande le Core ${i.needs}</span>` : ''}` : '<span class="badge ok">À jour</span>'}</td>
+        <td class="r">${i.next && !i.needs ? `<button class="btn small primary">${ic('cloud-download', 13)} Mettre à jour</button>` : ''}</td></tr>`).join('')}
+    </tbody></table>${sw('Vérifier chaque jour')}`) +
+    card('key-round', 'Accès GitHub', `<table class="user-table"><tbody>${['Strata-Core', ...new Set(here().map((i) => ({ livecut: 'Strata-Cut', graphics: 'CG', multiview: 'Strata-Multiview', network: 'Strata-Network' })[i.app]))].map((r) => `<tr><td class="mono">DamienP2/${r}</td><td><span class="badge ok">Clé enregistrée</span></td><td class="r"><button class="btn small">Remplacer</button></td></tr>`).join('')}</tbody></table>`),
+  cockpit: () => CTX.master
+    ? head('Serveurs', `${SERVERS.length} serveurs · ${SERVERS.filter((s) => !s.up).length} injoignable`, `<button class="btn primary" data-modal="invite">${ic('plus')} Ajouter un serveur</button>`) +
+      card('grid-3x3', 'Ce serveur', field('Rôle', seg(['Maître', 'Membre'], 0))) +
+      `<table class="user-table"><thead><tr><th>Serveur</th><th>Rôle</th><th>État</th><th>Alertes</th><th>Applis</th><th></th></tr></thead><tbody>
+      ${SERVERS.map((s) => `<tr><td><strong>${s.name}</strong><div class="mono muted">${s.id}</div></td><td>${s.master ? '<span class="badge acc">Maître</span>' : '<span class="badge">Membre</span>'}</td>
+        <td>${s.up ? '<span class="badge ok">Joignable</span>' : '<span class="badge bad">Injoignable</span>'}</td><td>${s.up ? (s.alerts ? `<span class="badge warn">${s.alerts}</span>` : '<span class="muted">0</span>') : '<span class="muted">—</span>'}</td>
+        <td>${INST.filter((i) => i.sv === s.id && i.state === 'active').map((i) => APPS[i.app].name).join(', ') || '<span class="muted">—</span>'}</td>
+        <td class="r">${s.master ? '' : `<button class="btn small" data-settings="${s.id}">${ic('arrow-up-right', 13)} Réglages</button> <button class="icon-btn ghost" title="Détacher">${ic('ellipsis')}</button>`}</td></tr>`).join('')}
+      </tbody></table>`
+    : head('Cockpit', `Membre de ${MASTER.name}`) +
+      card('grid-3x3', 'Ce serveur', `${field('Rôle', seg(['Maître', 'Membre'], 1))}<div class="set-grid two">${field('Maître', `<input value="${host(MASTER)}" readonly />`)}${field('Liaison', '<div class="mk-sub" style="min-height:32px"><span class="badge ok">Connecté</span></div>')}</div>
+        <div class="mk-sub"><button class="btn danger">Détacher de ${MASTER.name}</button></div>`) +
+      card('key-round', 'Secours', `<div class="set-grid two">${field('Compte administrateur local', '<input value="secours" />')}${field('Connexion par le SSO si le maître ne répond pas', sw('Autorisée'))}</div>`),
+  library: () => head('Ajouter une appli', CTX.name) +
+    `<div class="mk-cards">${Object.keys(APPS).filter((a) => !here().some((i) => i.app === a)).map((a) => `<div class="mk-libcard off"><div class="mk-libcard-h"><span class="mk-ico sm off">${ic(APPS[a].icon, 18)}</span><div><strong>${APPS[a].name}</strong><span class="muted mono">${APPS[a].ver || '—'}</span></div></div><div class="mk-libcard-f"><div class="spacer"></div><button class="btn small primary">${ic('cloud-download', 13)} Installer</button></div></div>`).join('')}</div>`,
+  users: () => head('Utilisateurs', '5 utilisateurs · tous les serveurs', `<button class="btn primary">${ic('user-plus')} Nouvel utilisateur</button>`) +
+    `<div class="user-grid">${[['Damien', 'damien', 1, 1, 'Réalisation · Technique'], ['Claire Martin', 'c.martin', 0, 1, 'Montage'], ['Hugo Bernard', 'h.bernard', 0, 1, 'Réalisation'], ['Inès Petit', 'i.petit', 1, 0, 'Technique'], ['Régie B', 'regie-b', 0, 0, '—']]
+      .map(([n, l, adm, sso, g]) => `<div class="user-card ${adm ? 'role-admin' : 'role-viewer'}"><div class="user-card-head"><span class="avatar">${n[0]}</span><div class="user-card-name"><strong>${n}</strong><span class="user-card-sub muted"><span class="user-card-login">${l}</span>${sso ? '<span class="badge sso">SSO</span>' : ''}</span></div></div>
+      <div>${adm ? '<span class="badge role-admin">Administrateur des serveurs</span>' : '<span class="badge role-viewer">Utilisateur</span>'}</div><div class="muted">${ic('users-round', 12)} ${g}</div>
+      <div class="user-card-actions"><button class="btn small ghost">Modifier</button><div class="spacer"></div><button class="icon-btn ghost">${ic('ellipsis')}</button></div></div>`).join('')}</div>`,
+  groups: () => head('Groupes', '4 groupes') + `<table class="user-table"><thead><tr><th>Groupe</th><th>Membres</th><th>Origine</th></tr></thead><tbody>
+      ${[['Réalisation', 6, 'Annuaire'], ['Montage', 4, 'Annuaire'], ['Technique', 3, 'Annuaire'], ['Graphistes', 3, 'Local']].map(([g, n, o]) => `<tr><td><strong>${g}</strong></td><td>${n}</td><td>${o === 'Local' ? '<span class="badge">Local</span>' : '<span class="badge acc">Annuaire</span>'}</td></tr>`).join('')}</tbody></table>`,
   sso: () => head('Annuaire', 'OpenID Connect · Okta') +
-    card('key-round', 'OpenID Connect', `${sw('Connexion par l’annuaire')}
-      <div class="set-grid two">${field('Fournisseur', dd('Okta'))}${field('Émetteur', '<input value="https://exemple.okta.com" />')}${field('Identifiant client', '<input value="0oa9strata01" />')}${field('Secret', '<input type="password" value="secret-secret" />')}</div>
-      ${field('Adresse de retour', `<input value="https://${DOMAIN}/api/auth/sso/callback" readonly />`)}
-      ${field('Groupe des administrateurs du serveur', '<input value="strata-admins" />')}
-      <div class="mk-sub"><button class="btn">${ic('send')} Tester</button></div>`),
-  sdi: () => card('monitor', 'DeckLink 8K Pro', `<div class="hw-ports">${[
-      ['SDI 1', 'Entrée', 'ok', '1080i50', ['LiveCut', 'Multiview']], ['SDI 2', 'Entrée', 'warn', 'Sans signal', ['LiveCut']],
-      ['SDI 3', 'Sortie', 'ok', '1080i50', ['Graphics']], ['SDI 4', 'Sortie', '', '—', []],
-    ].map(([n, f, st, fmt, uses]) => `<div class="hw-port"><span class="hw-dot ${st}"></span><span class="mk-port-name"><strong>${n}</strong>${dd(f)}</span><span class="${st === 'warn' ? '' : 'mono'}" style="${st === 'warn' ? 'color:var(--warn)' : ''}">${fmt}</span><span class="mk-uses">${uses.length ? uses.map((u) => `<span class="badge acc">${u}</span>`).join('') : '<span class="muted">Libre</span>'}</span></div>`).join('')}</div>
-      <div class="mk-sub"><span class="badge ok">Référence verrouillée</span><span class="muted">Pilote Desktop Video 14.2</span></div>`, '<span class="badge">4 connecteurs</span>'),
-  ndi: () => card('radio-tower', 'NDI', `<div class="set-grid">${field('Bibliothèque', '<input value="NDI 6.1" readonly />')}${field('Groupes', '<input value="public" />')}${field('Serveur de découverte', '<input placeholder="Aucun" />')}</div>
-      <table class="user-table"><thead><tr><th>Source</th><th>Format</th><th>Utilisée par</th></tr></thead><tbody>
-      ${[['CAM-PTZ-03 (Studio B)', '1080p50', 'LiveCut'], ['REGIE-B (Programme)', '1080i50', 'Multiview'], ['GFX-02 (Habillage)', '1080i50', '—']].map(([s, f, u]) => `<tr><td><strong>${s}</strong></td><td class="mono">${f}</td><td>${u === '—' ? '<span class="muted">—</span>' : `<span class="badge acc">${u}</span>`}</td></tr>`).join('')}
-      </tbody></table>`),
-  st2110: () => card('waves', 'ST 2110', `<table class="user-table"><thead><tr><th>Flux</th><th>Sens</th><th>Multicast</th><th>Format</th><th>Carte</th><th>Utilisé par</th></tr></thead><tbody>
-      ${[['Régie 2', 'Entrée', '239.10.2.1:5004', '1080i50', 'ens2f0', 'LiveCut'], ['Programme fill', 'Sortie', '239.20.1.1:5004', '1080i50', 'ens2f0', 'Graphics'], ['Programme key', 'Sortie', '239.20.1.2:5004', '1080i50', 'ens2f0', 'Graphics']].map((r) => `<tr><td><strong>${r[0]}</strong></td><td>${r[1]}</td><td class="mono">${r[2]}</td><td class="mono">${r[3]}</td><td class="mono">${r[4]}</td><td><span class="badge acc">${r[5]}</span></td></tr>`).join('')}
-      </tbody></table>`, `<button class="btn small">${ic('plus', 13)} Nouveau flux</button>`),
-  network: () => card('ethernet-port', 'Cartes réseau', `<table class="user-table"><thead><tr><th>Interface</th><th>Adresse</th><th>Débit</th><th>Rôle</th><th>État</th></tr></thead><tbody>
-      ${[['eno1', '10.0.0.20/24', '1 Gb/s', 'Gestion', 1], ['ens2f0', '192.168.110.20/24', '25 Gb/s', 'ST 2110 · rouge', 1], ['ens2f1', '192.168.120.20/24', '25 Gb/s', 'ST 2110 · bleu', 1], ['eno2', '—', '—', 'Aucun', 0]].map((r) => `<tr><td class="mono">${r[0]}</td><td class="mono">${r[1]}</td><td>${r[2]}</td><td style="width:200px">${dd(r[3])}</td><td>${r[4] ? '<span class="badge ok">Connectée</span>' : '<span class="badge">Débranchée</span>'}</td></tr>`).join('')}
-      </tbody></table>`),
-  clock: () => `<div class="set-grid two">` +
-    card('clock', 'PTP', `<div class="mk-lines">${[['État', '<span class="badge ok">Verrouillé</span>'], ['Grand maître', '<span class="mono">00:1d:c1:ff:fe:0a:12:34</span>'], ['Domaine', '127'], ['Décalage', '<span class="mono">± 42 ns</span>'], ['Interface', '<span class="mono">ens2f0</span>']].map(([k, v]) => `<div class="mk-line"><span class="grow muted">${k}</span>${v}</div>`).join('')}</div>`) +
-    card('globe', 'NTP', `<div class="mk-lines">${[['État', '<span class="badge ok">Synchronisé</span>'], ['Serveurs', '<span class="mono">ntp1.exemple.fr · ntp2.exemple.fr</span>'], ['Écart', '<span class="mono">0,3 ms</span>']].map(([k, v]) => `<div class="mk-line"><span class="grow muted">${k}</span>${v}</div>`).join('')}</div>`) + `</div>`,
-  state: () => head('Ressources', `${SERVER} · en marche depuis 12 j`) + meters() +
-    card('activity', 'Par appli', `<table class="user-table"><thead><tr><th>Appli</th><th>Processeur</th><th>Mémoire</th><th>État</th></tr></thead><tbody>
-      <tr><td><strong>Core</strong></td><td style="width:260px">${bar(3)}</td><td class="mono">0,4 Go</td><td><span class="badge ok">En marche</span></td></tr>
-      ${APPS.filter((a) => a.state === 'active').map((a) => `<tr><td><strong>${a.name}</strong></td><td>${bar(a.cpu)}</td><td class="mono">${a.mem}</td><td><span class="badge ok">En marche</span></td></tr>`).join('')}
-    </tbody></table>`),
-  logs: () => head('Journaux', '5 000 dernières lignes') + logs(),
-  alerts: () => head('Alertes', '1 alerte en cours') +
-    card('bell', 'Destinations', `<table class="user-table"><thead><tr><th>Destination</th><th>Adresse</th><th></th></tr></thead><tbody>
-      <tr><td>${ic('webhook', 13)} Teams</td><td class="mono">https://exemple.webhook.office.com/…</td><td class="r"><button class="btn small">${ic('send', 13)} Tester</button></td></tr>
-      <tr><td>${ic('mail', 13)} E-mail</td><td class="mono">regie-tech@exemple.fr</td><td class="r"><button class="btn small">${ic('send', 13)} Tester</button></td></tr>
-    </tbody></table>`, `<button class="btn small">${ic('plus', 13)} Ajouter</button>`) +
-    card('triangle-alert', 'Évènements', `<div class="set-grid">${['Entrée sans signal', 'Image noire ou figée', 'Silence', 'Disque presque plein', 'Horloge PTP perdue', 'Appli arrêtée', 'Carte DeckLink absente', 'Redémarrage imprévu'].map((e, i) => sw(e, i !== 2)).join('')}</div>
-      <div class="set-grid">${field('Prévenir après', '<div class="num-field"><input value="10" /><span class="suffix">s</span></div>')}</div>`),
-  snmp: () => head('SNMP', 'Actif · v2c · port 161') +
-    card('radio', 'SNMP', `${sw('Exposer l’état du serveur')}
-      <div class="set-grid">${field('Version', seg(['v2c', 'v3']))}${field('Communauté', '<input value="regie-ro" />')}${field('Port', '<input value="161" />')}</div>
-      ${field('Destination des alertes (traps)', '<input value="10.0.0.5:162" />')}`),
-  overview: () => head(SERVER, `${DOMAIN} · Core 1.0.0 · en marche depuis 12 j`) + meters() +
-    `<div class="mk-cols">${card('triangle-alert', 'Alertes', alertLines())}${card('monitor', 'Matériel', hwLines())}${card('package', 'Applis', APPS.filter((a) => a.state !== 'none').map((a) => `<div class="mk-line"><span class="nav-dot ${a.state === 'active' ? 'ok' : ''}"></span><span class="grow">${a.name}</span>${a.next ? '<span class="badge warn">Mise à jour</span>' : ''}<span class="muted mono">${a.ver}</span></div>`).join('').replace(/^/, '<div class="mk-lines">') + '</div>')}</div>`,
+    card('key-round', 'OpenID Connect', `${sw('Connexion par l’annuaire')}<div class="set-grid two">${field('Fournisseur', dd('Okta'))}${field('Émetteur', '<input value="https://exemple.okta.com" />')}${field('Identifiant client', '<input value="0oa9strata" />')}${field('Secret', '<input type="password" value="secret-secret" />')}</div>
+      ${field('Groupe des administrateurs des serveurs', '<input value="strata-admins" />')}<div class="mk-sub"><button class="btn">${ic('send')} Tester</button></div>`),
+  sdi: () => head('Cartes SDI', '1 carte · 4 connecteurs') + card('monitor', 'DeckLink 8K Pro', `<div class="hw-ports">${[['SDI 1', 'Entrée', 'ok', '1080i50', ['LiveCut']], ['SDI 2', 'Entrée', CTX.alerts ? 'warn' : 'ok', CTX.alerts ? 'Sans signal' : '1080i50', ['LiveCut']], ['SDI 3', 'Sortie', 'ok', '1080i50', CTX.id === 'strata01' ? ['Graphics'] : []], ['SDI 4', 'Sortie', '', '—', []]]
+      .map(([n, f, st, fmt, uses]) => `<div class="hw-port"><span class="hw-dot ${st}"></span><span class="mk-port-name"><strong>${n}</strong>${dd(f)}</span><span class="${st === 'warn' ? '' : 'mono'}" style="${st === 'warn' ? 'color:var(--warn)' : ''}">${fmt}</span><span class="mk-uses">${uses.length ? uses.map((u) => `<span class="badge acc">${u}</span>`).join('') : '<span class="muted">Libre</span>'}</span></div>`).join('')}</div>`),
+  ndi: () => head('NDI', '3 sources') + card('radio-tower', 'Sources', `<table class="user-table"><tbody>${[['CAM-PTZ-03 (Studio B)', '1080p50'], ['REGIE-B (Programme)', '1080i50'], ['GFX-02 (Habillage)', '1080i50']].map(([s, f]) => `<tr><td><strong>${s}</strong></td><td class="mono">${f}</td></tr>`).join('')}</tbody></table>`),
+  st2110: () => head('ST 2110', '1 flux') + card('waves', 'Flux', `<table class="user-table"><thead><tr><th>Flux</th><th>Sens</th><th>Multicast</th><th>Carte</th></tr></thead><tbody><tr><td><strong>Régie 2</strong></td><td>Entrée</td><td class="mono">239.10.2.1:5004</td><td class="mono">ens2f0</td></tr></tbody></table>`),
+  network: () => head('Réseau', '3 interfaces') + card('ethernet-port', 'Cartes réseau', `<table class="user-table"><thead><tr><th>Interface</th><th>Adresse</th><th>Débit</th><th>Rôle</th></tr></thead><tbody>${[['eno1', '10.0.0.20/24', '1 Gb/s', 'Gestion'], ['ens2f0', '192.168.110.20/24', '25 Gb/s', 'ST 2110 · rouge'], ['ens2f1', '192.168.120.20/24', '25 Gb/s', 'ST 2110 · bleu']].map((r) => `<tr><td class="mono">${r[0]}</td><td class="mono">${r[1]}</td><td>${r[2]}</td><td style="width:200px">${dd(r[3])}</td></tr>`).join('')}</tbody></table>`),
+  clock: () => head('Horloge', 'PTP verrouillé') + card('clock', 'PTP', lines([['État', '<span class="badge ok">Verrouillé</span>'], ['Grand maître', '<span class="mono">00:1d:c1:ff:fe:0a:12:34</span>'], ['Décalage', '<span class="mono">± 42 ns</span>']].map(([k, v]) => `<div class="mk-line"><span class="grow muted">${k}</span>${v}</div>`))),
+  logs: () => head('Journaux', CTX.name) + `<div class="log-box" style="height:auto;min-height:0">${[['14:46:38', 'INFO', 'core', 'session opened for c.martin (via strata01)'], ['14:46:12', CTX.alerts ? 'WARN' : 'INFO', 'livecut', CTX.alerts ? 'SDI 2: no signal' : 'recorder "Plateau 2" started'], ['14:30:44', 'INFO', 'core', 'ptp: locked'], ['14:12:09', 'INFO', 'core', CTX.master ? 'member strata02 connected' : 'connected to master strata01']].map(([t, l, g, m]) => `<div class="log-line"><span class="log-at">${t}</span><span class="log-lvl ${l}">${l}</span><span class="log-target">${g}</span><span class="log-msg">${m}</span></div>`).join('')}</div>`,
+  alerts: () => head('Alertes', CTX.alerts ? `${CTX.alerts} alerte en cours` : 'Aucune alerte') + card('bell', 'Destinations', `<table class="user-table"><tbody><tr><td>${ic('webhook', 13)} Teams</td><td class="mono">https://exemple.webhook.office.com/…</td></tr><tr><td>${ic('mail', 13)} E-mail</td><td class="mono">regie-tech@exemple.fr</td></tr></tbody></table>`) +
+    card('triangle-alert', 'Évènements', `<div class="set-grid">${['Entrée sans signal', 'Image noire ou figée', 'Silence', 'Disque presque plein', 'Horloge PTP perdue', 'Appli arrêtée', 'Carte DeckLink absente', 'Maître injoignable'].map((e) => sw(e)).join('')}</div>`),
+  snmp: () => head('SNMP', 'Actif · v2c') + card('radio', 'SNMP', `${sw('Exposer l’état du serveur')}<div class="set-grid">${field('Version', seg(['v2c', 'v3']))}${field('Communauté', '<input value="regie-ro" />')}${field('Port', '<input value="161" />')}</div>`),
 };
-PAGES.video = () => {
-  const t = S.tab || 'sdi';
-  return head('Vidéo', 'DeckLink · NDI · ST 2110') + `<div class="mk-tabbar">${tabsHtml([['sdi', 'monitor', 'SDI'], ['ndi', 'radio-tower', 'NDI'], ['st2110', 'waves', 'ST 2110']], t, 'data-tab')}</div>` + PAGES[t]();
-};
-const TITLES = { sdi: ['Cartes SDI', '1 carte · 4 connecteurs'], ndi: ['NDI', '3 sources'], st2110: ['ST 2110', '3 flux'], network: ['Réseau', '4 interfaces'], clock: ['Horloge', 'PTP verrouillé'] };
-for (const k of Object.keys(TITLES)) { const f = PAGES[k]; PAGES[k + ':page'] = () => head(...TITLES[k]) + f(); }
-
-function libCard(a) {
-  const f = a.state === 'active'
-    ? `${sw('Active')}<div class="spacer"></div><button class="btn small">${ic('arrow-up-right', 13)} Ouvrir</button><button class="icon-btn ghost" title="Plus">${ic('ellipsis')}</button>`
-    : a.state === 'inactive'
-      ? `${sw('Active', false)}<div class="spacer"></div><button class="icon-btn ghost" title="Plus">${ic('ellipsis')}</button>`
-      : `<div class="spacer"></div><button class="btn small primary">${ic('cloud-download', 13)} Installer</button>`;
-  return `<div class="mk-libcard ${a.state === 'active' ? '' : 'off'}"><div class="mk-libcard-h"><span class="mk-ico sm ${a.state === 'active' ? '' : 'off'}">${ic(a.icon, 18)}</span><div><strong>${a.name}</strong><span class="muted mono">${a.ver}</span></div>${a.state === 'none' ? stateBadge(a) : ''}</div><div class="mk-libcard-f">${f}</div></div>`;
-}
-function meters() {
-  return `<div class="mk-meters">${meter('Processeur', '34 %', 34, '32 cœurs')}${meter('Mémoire', '21 Go', 33, 'sur 64 Go')}${meter('Disque des données', '67 %', 67, '2,6 To libres sur 8 To', 'warn')}${meter('Réseau', '1,2 Gb/s', 24, 'ens2f0 · 25 Gb/s')}</div>`;
-}
-const alertLines = () => `<div class="mk-lines"><div class="mk-line"><span class="nav-dot warn"></span><span class="grow">SDI 2 sans signal</span><span class="muted mono">00:12:40</span></div><div class="mk-line"><span class="nav-dot"></span><span class="grow muted">Disque à 67 %</span><span class="muted">surveillé</span></div></div>`;
-const hwLines = () => `<div class="mk-lines">${[['ok', 'SDI', '3 sur 4 avec signal'], ['ok', 'NDI', '3 sources'], ['ok', 'ST 2110', '3 flux'], ['ok', 'PTP', 'verrouillé']].map(([d, k, v]) => `<div class="mk-line"><span class="nav-dot ${d}"></span><span class="grow">${k}</span><span class="muted">${v}</span></div>`).join('')}</div>`;
-function logs() {
-  const L = [['14:46:38', 'INFO', 'core', 'session opened for c.martin (sso)'], ['14:46:12', 'WARN', 'livecut', 'SDI 2: no signal'], ['14:45:01', 'INFO', 'graphics', 'channel 1: template "Bandeau" on air'],
-    ['14:44:59', 'INFO', 'core', 'update check: livecut 0.3.1 available'], ['14:40:17', 'INFO', 'multiview', 'layout "Régie A" loaded'], ['14:31:02', 'ERROR', 'livecut', 'srt://0.0.0.0:9001: connection lost'],
-    ['14:30:44', 'INFO', 'core', 'ptp: locked to 00:1d:c1:ff:fe:0a:12:34'], ['14:12:09', 'INFO', 'core', 'app multiview started']];
-  return `<div class="media-toolbar log-tools"><label class="search">${ic('search')}<input placeholder="Rechercher" /></label><div style="width:200px">${dd('Toutes les sources')}</div><div class="log-level">${dd('Info et plus')}</div><div class="spacer"></div><button class="btn">${ic('cloud-download')} Exporter pour le support</button></div>
-    <div class="log-box" style="height:auto;min-height:0">${L.map(([t, l, g, m]) => `<div class="log-line"><span class="log-at">${t}</span><span class="log-lvl ${l}">${l}</span><span class="log-target">${g}</span><span class="log-msg">${m}</span></div>`).join('')}</div>`;
-}
-function appPage(id) {
-  const a = appById(id);
-  const active = a.state === 'active';
-  return `<div class="mk-apphead"><span class="mk-ico ${active ? '' : 'off'}">${ic(a.icon, 26)}</span><div><h1>${a.name}</h1><p class="muted" style="margin:4px 0 0">${active ? `https://${appUrl(a)}` : 'Installée · inactive'}</p></div><div class="spacer"></div>${active ? `<button class="btn primary" data-open-app="${a.id}">${ic('arrow-up-right')} Ouvrir</button>` : ''}</div>` +
+function appPage(a) {
+  const i = INST.find((x) => x.sv === CTX.id && x.app === a);
+  const active = i.state === 'active';
+  return `<div class="mk-apphead"><span class="mk-ico ${active ? '' : 'off'}">${ic(APPS[a].icon, 26)}</span><div><h1>${APPS[a].name}</h1><p class="muted" style="margin:4px 0 0">${active ? `https://${instUrl(i)}` : 'Installée · inactive'}</p></div><div class="spacer"></div>${active ? `<button class="btn primary" data-inst="${instKey(i)}">${ic('arrow-up-right')} Ouvrir</button>` : ''}</div>` +
     card('power', 'État', `<div class="mk-sub">${sw('Active', active)}${active ? '<span class="badge ok">En marche</span>' : '<span class="badge">Arrêtée</span>'}<div class="spacer"></div>${active ? `<button class="btn">${ic('rotate-ccw')} Redémarrer</button>` : ''}</div>`) +
-    card('cloud-download', 'Version', `<div class="mk-sub"><span class="update-version">${a.ver}</span><div class="spacer"></div>${a.next ? (a.needs ? `<span class="badge warn">${a.next} demande le Core ${a.needs}</span>` : `<span class="mono">${a.next}</span><button class="btn primary">${ic('cloud-download')} Mettre à jour</button>`) : '<span class="badge ok">À jour</span>'}</div>`) +
-    (active ? card('activity', 'Ressources', `<div class="set-grid two"><div class="mk-meter"><div class="mk-meter-h"><span>Processeur</span><b>${a.cpu} %</b></div>${bar(a.cpu)}</div><div class="mk-meter"><div class="mk-meter-h"><span>Mémoire</span><b>${a.mem}</b></div>${bar(15)}</div></div>`) +
-      card('scroll-text', 'Journal', `<div class="log-box" style="height:auto;min-height:0">${[['14:46:12', 'WARN', 'SDI 2: no signal'], ['14:31:02', 'ERROR', 'srt://0.0.0.0:9001: connection lost'], ['14:12:09', 'INFO', 'started']].map(([t, l, m]) => `<div class="log-line"><span class="log-at">${t}</span><span class="log-lvl ${l}">${l}</span><span class="log-msg">${m}</span></div>`).join('')}</div>`) : '') +
+    card('cloud-download', 'Version', `<div class="mk-sub"><span class="update-version">${i.ver}</span><div class="spacer"></div>${i.next ? (i.needs ? `<span class="badge warn">${i.next} demande le Core ${i.needs}</span>` : `<span class="mono">${i.next}</span><button class="btn primary">${ic('cloud-download')} Mettre à jour</button>`) : '<span class="badge ok">À jour</span>'}</div>`) +
+    (active ? card('activity', 'Ressources', `<div class="set-grid two"><div class="mk-meter"><div class="mk-meter-h"><span>Processeur</span><b>${i.cpu} %</b></div>${bar(i.cpu)}</div><div class="mk-meter"><div class="mk-meter-h"><span>Mémoire</span><b>${i.mem}</b></div>${bar(15)}</div></div>`) : '') +
     `<div><button class="btn danger">${ic('trash-2')} Désinstaller</button></div>`;
 }
 
-// ------------------------------------------------------------------ navigation des réglages, par proposition
-const NAV = {
-  A: [
-    ['Supervision', [['state', 'gauge', 'Ressources'], ['logs', 'scroll-text', 'Journaux'], ['alerts', 'bell', 'Alertes', '1'], ['snmp', 'radio', 'SNMP']]],
-    ['Matériel', [['video', 'monitor', 'Vidéo'], ['network:page', 'ethernet-port', 'Réseau'], ['clock:page', 'clock', 'Horloge']]],
-    ['Applis', [['library', 'package', 'Bibliothèque', '6']]],
-    ['Comptes', [['users', 'users', 'Utilisateurs', '5'], ['groups', 'users-round', 'Groupes', '4'], ['sso', 'key-round', 'Annuaire']]],
-    ['Serveur', [['general', 'server', 'Nom et adresses'], ['https', 'lock', 'HTTPS'], ['updates', 'cloud-download', 'Mises à jour', '2']]],
-  ],
-  Badm: [
-    ['Comptes', [['users', 'users', 'Utilisateurs', '5'], ['groups', 'users-round', 'Groupes', '4'], ['sso', 'key-round', 'Annuaire']]],
-    ['Applis', [['library', 'package', 'Bibliothèque', '6'], ['updates', 'cloud-download', 'Mises à jour', '2']]],
-    ['Serveur', [['general', 'server', 'Nom et adresses'], ['https', 'lock', 'HTTPS']]],
-  ],
-  C: () => [
-    ['Ce serveur', [['overview', 'layout-dashboard', 'Vue d’ensemble'], ['general', 'globe', 'Nom et adresses'], ['https', 'lock', 'HTTPS'], ['updates', 'cloud-download', 'Mises à jour', '2']]],
-    ['Applis', [...APPS.filter((a) => a.state !== 'none').map((a) => ['app:' + a.id, a.icon, a.name, null, a.state === 'active' ? 'ok' : 'off']), ['library', 'plus', 'Ajouter une appli']]],
-    ['Personnes', [['users', 'users', 'Utilisateurs', '5'], ['groups', 'users-round', 'Groupes', '4'], ['sso', 'key-round', 'Annuaire']]],
-    ['Matériel', [['sdi:page', 'monitor', 'Cartes SDI'], ['ndi:page', 'radio-tower', 'NDI'], ['st2110:page', 'waves', 'ST 2110'], ['network:page', 'ethernet-port', 'Réseau'], ['clock:page', 'clock', 'Horloge']]],
-    ['Surveillance', [['logs', 'scroll-text', 'Journaux'], ['alerts', 'bell', 'Alertes', '1'], ['snmp', 'radio', 'SNMP']]],
-  ],
-};
-function sidePage(groups, cur) {
-  const nav = groups.map(([title, items]) => `<div class="lib-nav-section"><span class="grow">${title}</span></div>` + items.map(([id, icon, label, count, dot]) =>
-    `<div class="lib-nav-item ${cur === id ? 'on' : ''}" data-page="${id}">${ic(icon, 15)}<span class="grow">${label}</span>${count ? `<span class="count">${count}</span>` : ''}${dot ? `<span class="nav-dot ${dot === 'ok' ? 'ok' : ''}"></span>` : ''}</div>`).join('')).join('');
-  const body = cur.startsWith('app:') ? appPage(cur.slice(4)) : (PAGES[cur] || PAGES.general)();
-  return `<section class="projects-page"><aside class="lib-nav">${nav}</aside><main class="library"><div class="library-inner">${body}</div></main></section>`;
-}
-
-// ------------------------------------------------------------------ accueils
-function homeA() {
-  const apps = visibleApps();
-  return `<section class="library"><div class="library-inner wide">${head(SERVER, `${apps.length} applis`)}
-    ${isAdmin() ? `<div><span class="mk-alert-chip" data-go="settings" data-page-go="alerts">${ic('triangle-alert', 13)} SDI 2 sans signal depuis 00:12:40</span></div>` : ''}
-    <div class="project-grid">${apps.map((a) => `<article class="project-card mk-click" data-open-app="${a.id}"><div class="mk-app-head"><span class="mk-ico">${ic(a.icon, 28)}</span></div>
-      <div class="project-body"><strong style="font-size:15px">${a.name}</strong><span class="mk-addr">${appUrl(a)}</span></div>
-      <div class="mk-foot"><span class="nav-dot ok"></span>En marche<div class="spacer"></div><button class="btn small">${ic('arrow-up-right', 13)} Ouvrir</button></div></article>`).join('')}</div></div></section>`;
-}
-function homeB() {
-  const apps = visibleApps();
-  return `<section class="library"><div class="library-inner wide">${head(SERVER, isAdmin() ? `${DOMAIN} · Core 1.0.0` : `${apps.length} applis`)}
-    <div class="mk-sec">Applis</div>
-    <div class="mk-tiles">${apps.map((a) => `<div class="mk-tile" data-open-app="${a.id}"><span class="mk-ico sm">${ic(a.icon, 18)}</span><div><strong>${a.name}</strong><small><span class="nav-dot ok"></span>En marche</small></div></div>`).join('')}</div>
-    ${isAdmin() ? `<div class="mk-sec">Serveur</div>${meters()}<div class="mk-cols">${card('triangle-alert', 'Alertes', alertLines(), '<span class="badge warn">1</span>')}${card('monitor', 'Matériel', hwLines())}${card('cloud-download', 'Mises à jour', `<div class="mk-lines"><div class="mk-line"><span class="grow">LiveCut</span><span class="mono muted">0.3.0 → 0.3.1</span></div><div class="mk-line"><span class="grow">Network</span><span class="badge warn">Demande le Core 1.1</span></div></div>`)}</div>` : ''}
-  </div></section>`;
-}
-function homeC() {
-  const apps = visibleApps();
-  return `<section class="mk-launch-page"><div class="mk-launch-head"><h1>${SERVER}</h1><p class="muted">${DOMAIN}</p></div>
-    <div class="mk-launch">${apps.map((a) => `<div class="mk-big" data-open-app="${a.id}"><span class="mk-ico">${ic(a.icon, 28)}</span><strong>${a.name}</strong></div>`).join('')}</div>
-    ${isAdmin() ? `<span class="mk-alert-chip" data-go="settings" data-page-go="alerts">${ic('triangle-alert', 13)} SDI 2 sans signal depuis 00:12:40</span>` : ''}</section>`;
-}
-
-// ------------------------------------------------------------------ corps fictif d'une appli
-function appBody(a) {
+// ------------------------------------------------------------------ une appli ouverte (contenu fictif)
+function appView(t) {
+  const i = inst(t.key), A = APPS[i.app];
   const pics = ['p1', 'p2', 'p4', 'p3'];
-  const t = a.tabs[0][1];
-  return `<section class="library mk-appbody"><div class="library-inner wide">${head(t, `4 ${t.toLowerCase()}`, `<button class="btn primary">${ic('plus')} Nouveau</button>`)}
-    <div class="project-grid">${pics.map((p, i) => `<article class="project-card"><div class="sc-thumb"><div class="sc-pic ${p}"></div></div><div class="project-body"><strong>${['Plateau 1', 'Duplex SRT', 'Régie 2', 'Antenne'][i]}</strong><span class="muted">${['SDI 1', 'SRT', 'ST 2110', 'UDP'][i]}</span></div><div class="mk-foot"><span class="nav-dot ok"></span>En marche</div></article>`).join('')}</div>
-  </div></section>`;
-}
-
-// ------------------------------------------------------------------ barres du haut
-function switchMenuA(cur) {
-  return `<div class="menu mk-switch">
-    <button class="ux1-mi" data-go="home">${ic('house')} ${SERVER}</button>
-    <div class="menu-sep"></div>
-    ${visibleApps().map((a) => `<button class="ux1-mi" data-open-app="${a.id}">${ic(a.icon)} ${a.name}${a.id === cur ? `<span style="margin-left:auto;color:var(--accent-2)">${ic('check')}</span>` : ''}</button>`).join('')}
-    ${isAdmin() ? `<div class="menu-sep"></div><button class="ux1-mi" data-go="settings">${ic('settings')} Réglages du serveur</button>` : ''}
-  </div>`;
-}
-function launcherC(cur) {
-  return `<div class="menu mk-launcher"><div class="mk-l-head"><span>${SERVER}</span><button class="btn small ghost" data-go="home">${ic('house', 13)} Cockpit</button></div>
-    <div class="mk-l-grid">${visibleApps().map((a) => `<button class="mk-l-item ${a.id === cur ? 'on' : ''}" data-open-app="${a.id}"><span class="mk-ico xs">${ic(a.icon, 15)}</span>${a.name}</button>`).join('')}</div></div>`;
-}
-function topbar() {
-  const a = S.where === 'app' ? appById(S.app) : null;
-  if (S.prop === 'A') {
-    if (a) return `<nav class="topbar"><div class="mk-anchor"><button class="mk-brand-btn ${S.menu === 'switch' ? 'on' : ''}" data-menu="switch">${brand(a.name)}${ic('chevron-down', 13)}</button>${S.menu === 'switch' ? switchMenuA(a.id) : ''}</div>${tabsHtml(a.tabs.map(([i, l]) => [l, i, l]), a.tabs[0][1], 'data-x')}${right()}</nav>`;
-    const tabs = [['home', 'layout-grid', 'Applis']].concat(isAdmin() ? [['settings', 'settings', 'Réglages']] : []);
-    return `<nav class="topbar">${brand('Core')}${tabsHtml(tabs, S.where, 'data-go')}${right()}</nav>`;
-  }
-  if (S.prop === 'B') {
-    if (a) return `<nav class="topbar">${brand(a.name)}${tabsHtml(a.tabs.map(([i, l]) => [l, i, l]), a.tabs[0][1], 'data-x')}${right()}</nav>`;
-    const ctx = { home: null, hw: [['sdi', 'monitor', 'SDI'], ['ndi', 'radio-tower', 'NDI'], ['st2110', 'waves', 'ST 2110'], ['network', 'ethernet-port', 'Réseau'], ['clock', 'clock', 'Horloge']], sup: [['state', 'gauge', 'Ressources'], ['logs', 'scroll-text', 'Journaux'], ['alerts', 'bell', 'Alertes'], ['snmp', 'radio', 'SNMP']], adm: null }[S.where];
-    const mod = { home: 'Core', hw: 'Matériel', sup: 'Supervision', adm: 'Administration' }[S.where];
-    return `<nav class="topbar">${brand(mod, { lead: false })}${ctx ? tabsHtml(ctx, S.tab, 'data-tab') : ''}${right()}</nav>`;
-  }
-  // C
-  const lb = `<div class="mk-anchor"><button class="mk-sq ${S.menu === 'launch' ? 'on' : ''}" data-menu="launch" title="Applis">${ic('grid-3x3', 17)}</button>${S.menu === 'launch' ? launcherC(a && a.id) : ''}</div>`;
-  if (a) return `<nav class="topbar">${lb}${brand(a.name)}${tabsHtml(a.tabs.map(([i, l]) => [l, i, l]), a.tabs[0][1], 'data-x')}${right()}</nav>`;
-  return `<nav class="topbar">${lb}${brand(S.where === 'settings' ? 'Réglages' : 'Core')}${right()}</nav>`;
-}
-function rail() {
-  const apps = visibleApps();
-  const b = (go, icon, title, on, extra = '') => `<button class="mk-rail-btn ${on ? 'on' : ''}" ${go} title="${title}">${ic(icon, 19)}${extra}</button>`;
-  return `<nav class="mk-rail"><div class="mk-rail-logo">${fLogo(26)}</div>
-    ${b('data-go="home"', 'house', 'Accueil', S.where === 'home')}
-    <div class="mk-rail-sep"></div>
-    ${apps.map((a) => b(`data-open-app="${a.id}"`, a.icon, a.name, S.where === 'app' && S.app === a.id)).join('')}
-    <div class="spacer"></div>
-    ${isAdmin() ? `${b('data-go="hw"', 'monitor-cog', 'Matériel', S.where === 'hw')}${b('data-go="sup"', 'activity', 'Supervision', S.where === 'sup')}${b('data-go="adm"', 'settings', 'Administration', S.where === 'adm')}` : ''}
-  </nav>`;
+  const top = `<nav class="topbar">${launchBtn(t.key)}${brand(A.name)}<div class="tabs home-tabs">${A.tabs.map(([icon, l], n) => `<button class="${n === 0 ? 'on' : ''}">${ic(icon)} <span>${l}</span></button>`).join('')}</div>${right({ gear: i.sv })}</nav>`;
+  const body = `<section class="library mk-appbody"><div class="library-inner wide">${head(A.tabs[0][1], sv(i.sv).name, `<button class="btn primary">${ic('plus')} Nouveau</button>`)}
+    <div class="project-grid">${pics.map((p, n) => `<article class="project-card"><div class="sc-thumb"><div class="sc-pic ${p}"></div></div><div class="project-body"><strong>${['Plateau 1', 'Duplex SRT', 'Régie 2', 'Antenne'][n]}</strong><span class="muted">${['SDI 1', 'SRT', 'ST 2110', 'UDP'][n]}</span></div><div class="mk-foot"><span class="nav-dot ok"></span>En marche</div></article>`).join('')}</div></div></section>`;
+  return `<div class="app">${top}<div class="content">${body}</div></div>`;
 }
 
 // ------------------------------------------------------------------ rendu
-function body() {
-  if (S.where === 'app') return appBody(appById(S.app));
-  if (S.prop === 'A') return S.where === 'settings' ? sidePage(NAV.A, S.page || 'state') : homeA();
-  if (S.prop === 'B') {
-    if (S.where === 'hw') return `<section class="library"><div class="library-inner wide">${head(...TITLES[S.tab || 'sdi'])}${PAGES[S.tab || 'sdi']()}</div></section>`;
-    if (S.where === 'sup') return `<section class="library"><div class="library-inner wide">${PAGES[S.tab || 'state']()}</div></section>`;
-    if (S.where === 'adm') return sidePage(NAV.Badm, S.page || 'users');
-    return homeB();
-  }
-  return S.where === 'settings' ? sidePage(NAV.C(), S.page || 'overview') : homeC();
+function page(t) {
+  if (t.kind === 'app') return appView(t);
+  CTX = t.kind === 'settings' ? sv(t.sv) : MASTER;
+  if (t.kind === 'cockpit' && t.view === 'home') return `<div class="app"><nav class="topbar">${launchBtn()}${brand('Core')}${right({ gear: MASTER.id })}</nav><div class="content">${cockpit()}</div></div>`;
+  return `<div class="app"><nav class="topbar">${launchBtn()}${brand('Réglages')}<span class="mk-srv-badge">${ic('server', 12)} ${CTX.name} · ${CTX.id}</span>${right({ gear: 'on' })}</nav><div class="content">${settingsView(t)}</div></div>`;
+}
+function modal() {
+  if (S.modal !== 'invite') return '';
+  return `<div class="modal-back" data-close-modal><div class="modal"><header><h2>Ajouter un serveur</h2><button class="icon-btn ghost" data-close-modal title="Fermer">${ic('x', 16)}</button></header>
+    <div class="mk-modal-body">${field('Adresse du maître', `<input value="${host(MASTER)}" readonly />`)}<div class="mk-code">K7Q-4XM-92P</div><span class="muted" style="text-align:center">Valable 10 min</span></div>
+    <footer><button class="btn">${ic('rotate-ccw')} Nouveau code</button><button class="btn primary" data-close-modal>Fermer</button></footer></div></div>`;
 }
 function render() {
-  const app = `<div class="app">${topbar()}<div class="content">${body()}</div></div>`;
-  document.getElementById('root').innerHTML = S.prop === 'B' ? `<div class="mk-shell">${rail()}${app}</div>` : app;
-  document.querySelectorAll('#mock [data-prop]').forEach((b) => b.classList.toggle('on', b.dataset.prop === S.prop));
+  const t = tab();
+  const [h, path] = tabUrl(t);
+  document.getElementById('root').innerHTML = `<div class="mk-browser"><div class="mk-tabs">${S.tabs.map((x) => `<div class="mk-btab ${x.id === S.active ? 'on' : ''}" data-tab-id="${x.id}"><span class="mk-fav">${ic(tabIcon(x), 11)}</span><span class="mk-btab-t">${tabTitle(x)}</span>${x.id === 'cockpit' ? '' : `<button class="mk-x" data-close-tab="${x.id}" title="Fermer l’onglet">${ic('x', 12)}</button>`}</div>`).join('')}</div>
+    <div class="mk-url">${ic('lock', 12)}<span><b>${h}</b>${path === '/' ? '' : path}</span></div></div>
+    <div class="mk-page">${page(t)}</div>${modal()}`;
   document.querySelectorAll('#mock [data-role]').forEach((b) => b.classList.toggle('on', b.dataset.role === S.role));
-  try { localStorage.setItem('mk.state', JSON.stringify({ prop: S.prop, role: S.role })); } catch { /* */ }
+  try { localStorage.setItem('mkc.role', S.role); } catch { /* */ }
 }
 const theme = () => (document.documentElement.dataset.theme === 'light' ? 'light' : 'dark');
 function setTheme(t) { if (t === 'light') document.documentElement.dataset.theme = 'light'; else delete document.documentElement.dataset.theme; }
 
 document.addEventListener('click', (e) => {
-  const t = e.target;
-  const m = t.closest('[data-menu]');
-  const inMenu = t.closest('.menu');
-  if (t.closest('[data-prop]')) { Object.assign(S, { prop: t.closest('[data-prop]').dataset.prop, where: 'home', page: null, tab: null, app: null, menu: null }); return render(); }
-  if (t.closest('[data-role]')) { Object.assign(S, { role: t.closest('[data-role]').dataset.role, where: 'home', page: null, tab: null, app: null, menu: null }); return render(); }
-  if (t.closest('[data-mtheme]')) { setTheme(theme() === 'light' ? 'dark' : 'light'); return render(); }
-  const ts = t.closest('[data-theme-set]'); if (ts) { setTheme(ts.dataset.themeSet); return render(); }
-  if (m) { S.menu = S.menu === m.dataset.menu ? null : m.dataset.menu; return render(); }
-  const oa = t.closest('[data-open-app]'); if (oa) { Object.assign(S, { where: 'app', app: oa.dataset.openApp, menu: null }); return render(); }
-  const g = t.closest('[data-go]'); if (g) { const pg = t.closest('[data-page-go]'); Object.assign(S, { where: g.dataset.go, page: pg ? pg.dataset.pageGo : null, tab: null, app: null, menu: null }); if (S.prop === 'B' && pg) Object.assign(S, { where: 'sup', tab: 'alerts' }); if (S.where === 'hw' && !S.tab) S.tab = 'sdi'; if (S.where === 'sup' && !S.tab) S.tab = 'state'; return render(); }
-  const p = t.closest('[data-page]'); if (p) { Object.assign(S, { page: p.dataset.page, tab: null, menu: null }); return render(); }
-  const tb = t.closest('[data-tab]'); if (tb) { S.tab = tb.dataset.tab; return render(); }
-  const sg = t.closest('.segmented button'); if (sg) { sg.parentElement.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === sg)); return; }
-  const ch = t.closest('.asr-chip'); if (ch) { ch.parentElement.querySelectorAll('.asr-chip').forEach((b) => b.classList.toggle('on', b === ch)); return; }
-  if (S.menu && !inMenu) { S.menu = null; render(); }
+  const q = (sel) => e.target.closest(sel);
+  let el;
+  if ((el = q('[data-role]'))) { Object.assign(S, { role: el.dataset.role }, fresh()); return render(); }
+  if (q('[data-reset]')) { Object.assign(S, fresh()); return render(); }
+  if (q('[data-mtheme]')) { setTheme(theme() === 'light' ? 'dark' : 'light'); return render(); }
+  if ((el = q('[data-theme-set]'))) { setTheme(el.dataset.themeSet); return render(); }
+  if ((el = q('[data-close-tab]'))) { const id = el.dataset.closeTab; const n = S.tabs.findIndex((t) => t.id === id); S.tabs.splice(n, 1); if (S.active === id) S.active = S.tabs[Math.max(0, n - 1)].id; return render(); }
+  if ((el = q('[data-close-modal]')) && (el.dataset.closeModal !== undefined) && (e.target === el || q('button[data-close-modal]'))) { S.modal = null; return render(); }
+  if ((el = q('[data-modal]'))) { S.modal = el.dataset.modal; return render(); }
+  if ((el = q('[data-menu]'))) { S.menu = S.menu === el.dataset.menu ? null : el.dataset.menu; return render(); }
+  if ((el = q('[data-inst]'))) { openApp(el.dataset.inst); return render(); }
+  if (q('[data-home]')) { S.tabs[0].view = 'home'; activate('cockpit'); return render(); }
+  if ((el = q('[data-settings]'))) { if (el.dataset.settings) openSettings(el.dataset.settings); return render(); }
+  if ((el = q('[data-tab-id]'))) { activate(el.dataset.tabId); return render(); }
+  if ((el = q('[data-page]'))) { tab().page = el.dataset.page; return render(); }
+  if ((el = q('.segmented button'))) { el.parentElement.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === el)); return; }
+  if (S.menu && !q('.menu')) { S.menu = null; render(); }
 });
-try { const s = JSON.parse(localStorage.getItem('mk.state') || '{}'); if (s.prop) S.prop = s.prop; if (s.role) S.role = s.role; } catch { /* */ }
-// Thème : celui que la page reçoit (data-theme), sinon celui du système.
+try { const r = localStorage.getItem('mkc.role'); if (r === 'admin' || r === 'user') S.role = r; } catch { /* */ }
 if (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: light)').matches) setTheme('light');
 if (document.documentElement.dataset.theme === 'dark') delete document.documentElement.dataset.theme;
-const h = location.hash.slice(1); if (/^[ABC]$/.test(h)) S.prop = h;
 render();
 </script>
 </body>
