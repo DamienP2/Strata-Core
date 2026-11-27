@@ -128,6 +128,10 @@ impl Ctx {
             self.log(&format!("$ {} {}", bin.display(), all.join(" ")));
             return exec(self, &bin.display().to_string(), &all, input);
         }
+        // Le Core tourne sous son compte : le dossier des données doit être à lui avant qu'il y
+        // écrive (créé ici par root à la première installation).
+        std::fs::create_dir_all(&data).map_err(|e| format!("cannot create {}: {e}", data.display()))?;
+        self.chown(paths::DATA, false)?;
         let mut with_user = vec!["-u", paths::USER, "--", paths::BIN];
         with_user.extend(all);
         self.log(&format!("$ runuser {}", with_user.join(" ")));
@@ -181,13 +185,27 @@ fn exec(ctx: &Ctx, prog: &str, args: &[&str], input: Option<&str>) -> Result<Str
     if out.status.success() {
         Ok(stdout)
     } else {
-        // Le Core dit « Error: … » ; sinon, la dernière ligne.
-        if let Some(e) = stderr.lines().find_map(|l| l.strip_prefix("Error: ")) {
-            return Err(e.to_string());
+        if let Some(e) = core_error(&stderr) {
+            return Err(e);
         }
         let last = stderr.lines().chain(stdout.lines()).rfind(|l| !l.trim().is_empty()).unwrap_or("failed").to_string();
         Err(format!("{prog}: {last}"))
     }
+}
+
+/// L'erreur du Core : « Error: … », puis ses causes (« Caused by: »), sur une ligne.
+fn core_error(stderr: &str) -> Option<String> {
+    let e = stderr.lines().find_map(|l| l.strip_prefix("Error: "))?;
+    let causes: Vec<&str> = stderr
+        .lines()
+        .skip_while(|l| !l.starts_with("Caused by:"))
+        .skip(1)
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        // « 0: … », « 1: … » quand il y en a plusieurs.
+        .map(|l| l.split_once(": ").filter(|(n, _)| n.chars().all(|c| c.is_ascii_digit())).map_or(l, |(_, r)| r))
+        .collect();
+    Some(if causes.is_empty() { e.to_string() } else { format!("{e}: {}", causes.join(": ")) })
 }
 
 fn now() -> String {
@@ -486,7 +504,6 @@ pub fn steps(plan: &Plan) -> Vec<Step> {
             v.push(step("Strata Core", false, move |ctx, say| put_core(ctx, &p, say)));
             let (n, d, tz) = (plan.name.clone(), plan.dns_name.clone(), plan.timezone.clone());
             v.push(step("Réglages du serveur", false, move |ctx, _| {
-                std::fs::create_dir_all(ctx.p(paths::DATA)).map_err(|e| e.to_string())?;
                 let out = ctx.core(&["config", "--name", &n, "--dns-name", &d, "--timezone", &tz], None)?;
                 Ok(out.trim().to_string())
             }));
@@ -619,6 +636,17 @@ pub fn run(ctx: &Ctx, steps: &[Step], on: &(dyn Fn(Event) + Sync)) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn core_errors_keep_their_cause() {
+        assert_eq!(
+            core_error("Error: cannot save config.json\n\nCaused by:\n    Permission denied (os error 13)\n").unwrap(),
+            "cannot save config.json: Permission denied (os error 13)"
+        );
+        assert_eq!(core_error("Error: a\n\nCaused by:\n    0: b\n    1: c\n").unwrap(), "a: b: c");
+        assert_eq!(core_error("Error: alone\n").unwrap(), "alone");
+        assert!(core_error("panic").is_none());
+    }
     use super::*;
 
     #[test]
