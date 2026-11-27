@@ -229,6 +229,32 @@ impl Sink {
         }
     }
 
+    /// Une image v210 (10 bits, `stride` octets par ligne), telle que la carte la donne : copiée
+    /// dans MXL, sans conversion. Sans MXL (le partage, en 8 bits), elle est convertie.
+    pub(crate) fn publish_v210(&mut self, info: &FrameInfo, data: &[u8], stride: usize, scratch: &mut Vec<u8>) -> Result<(), String> {
+        match self {
+            Sink::Mxl { mxl, id, label, writer, published, .. } => {
+                let v = strata_mxl::Video { width: info.width, height: info.height, rate: info.rate, interlaced: info.interlaced };
+                if writer.as_ref().is_none_or(|w| w.video() != v) {
+                    *writer = None;
+                    *writer = Some(mxl.video_writer(*id, label, &v)?);
+                }
+                writer.as_mut().unwrap().write_v210(data, stride)?;
+                *published += 1;
+                Ok(())
+            }
+            Sink::Share(_) => {
+                let (w, h) = (info.width as usize, info.height as usize);
+                scratch.resize(w * 2 * h, 0);
+                for y in 0..h {
+                    strata_mxl::v210_to_uyvy(&data[y * stride..(y + 1) * stride], &mut scratch[y * w * 2..(y + 1) * w * 2], w);
+                }
+                let uyvy = FrameInfo { stride: info.width * 2, ..*info };
+                self.publish(&uyvy, scratch)
+            }
+        }
+    }
+
     /// Le son arrivé avec la dernière image (entrelacé, `channels` canaux) : posé en MXL pour
     /// finir avec le son de cette image (`last` : ses échantillons), calé sur elle.
     pub(crate) fn publish_audio(&mut self, pcm: &[f32], channels: usize, last: usize) -> Result<(), String> {
@@ -404,11 +430,13 @@ fn capture(writer: &mut Sink, device: u32, stop: &AtomicBool, status: &Mutex<Sta
             s.error = None;
         }
         let mut buf = Vec::new();
+        let mut scratch = Vec::new();
         let mut seq = 0u64;
         let mut meter = Meter::new();
         while !stop.load(Ordering::Relaxed) {
             if input.wait(seq, 200) {
-                if let Some((w, h)) = input.take(&mut buf, &mut seq) {
+                if let Some(t) = input.take(&mut buf, &mut seq) {
+                    let (w, h) = (t.width, t.height);
                     let m = input.current_mode();
                     let (num, den) = (m.timescale.max(1) as u64, m.duration.max(1) as u64);
                     let g = gcd(num, den).max(1);
@@ -423,13 +451,15 @@ fn capture(writer: &mut Sink, device: u32, stop: &AtomicBool, status: &Mutex<Sta
                     let info = FrameInfo {
                         width: w,
                         height: h,
-                        stride: w * 2,
+                        stride: t.stride as u32,
                         format: Format::Uyvy,
                         rate: ((num / g) as u32, (den / g) as u32),
                         interlaced: m.interlaced(),
                         timecode: tc,
                     };
-                    let published = writer.publish(&info, &buf).is_ok();
+                    // 10 bits : copiée telle quelle dans MXL ; une carte qui ne donne que du 8 bits :
+                    // convertie.
+                    let published = if t.v210 { writer.publish_v210(&info, &buf, t.stride, &mut scratch) } else { writer.publish(&info, &buf) }.is_ok();
                     // Le son embarqué de cette image, calé sur elle.
                     if let Some((pcm, ch, last)) = input.audio() {
                         let _ = writer.publish_audio(&pcm, ch, last);

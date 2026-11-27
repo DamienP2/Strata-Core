@@ -547,8 +547,11 @@ class Input final : public IDeckLinkInputCallback {
 
     std::mutex m;
     std::condition_variable arrived; // a frame (or the loss of the signal) came
-    std::vector<uint8_t> frame; // newest UYVY frame, rows packed
+    std::vector<uint8_t> frame; // newest frame (v210, else UYVY), `rowbytes` per row
     int width = 0, height = 0;
+    long rowbytes = 0;
+    // 10-bit 4:2:2 (v210, what MXL keeps) when the card captures it, else 8-bit UYVY.
+    BMDPixelFormat format = bmdFormat10BitYUV;
     uint64_t seq = 0;
     int signal = -1; // -1 unknown, 0 no input source, 1 locked
     uint32_t mode = 0; // the BMDDisplayMode captured (the detected one once the signal is known)
@@ -592,14 +595,14 @@ class Input final : public IDeckLinkInputCallback {
         if (!mode || !(events & (bmdVideoInputDisplayModeChanged | bmdVideoInputFieldDominanceChanged))) {
             return S_OK;
         }
-        // Follow the incoming signal; frames stay 8-bit 4:2:2 (the card
-        // converts an RGB signal).
+        // Follow the incoming signal; frames stay in their 4:2:2 format (the
+        // card converts an RGB signal).
         {
             std::lock_guard<std::mutex> lk(m);
             this->mode = (uint32_t)mode->GetDisplayMode();
         }
         in->PauseStreams();
-        in->EnableVideoInput(mode->GetDisplayMode(), bmdFormat8BitYUV,
+        in->EnableVideoInput(mode->GetDisplayMode(), format,
                              detection ? bmdVideoInputEnableFormatDetection : bmdVideoInputFlagDefault);
         in->FlushStreams();
         in->StartStreams();
@@ -662,7 +665,7 @@ class Input final : public IDeckLinkInputCallback {
                 tc_ok = 0;
             }
         }
-        if (f->GetPixelFormat() != bmdFormat8BitYUV) {
+        if (f->GetPixelFormat() != format) {
             return S_OK;
         }
         void *bytes = NULL;
@@ -670,19 +673,18 @@ class Input final : public IDeckLinkInputCallback {
             return S_OK;
         }
         long w = f->GetWidth(), h = f->GetHeight(), row = f->GetRowBytes();
-        if (w <= 0 || h <= 0 || row < w * 2) {
+        if (w <= 0 || h <= 0 || row < (format == bmdFormat10BitYUV ? (w + 47) / 48 * 128 : w * 2)) {
             return S_OK;
         }
         {
+            // One copy, as the card gives it (v210 rows already have the
+            // stride MXL wants).
             std::lock_guard<std::mutex> lk(m);
-            size_t line = (size_t)w * 2;
-            frame.resize(line * (size_t)h);
-            const uint8_t *src = (const uint8_t *)bytes;
-            for (long y = 0; y < h; y++) {
-                std::memcpy(&frame[(size_t)y * line], src + (size_t)y * (size_t)row, line);
-            }
+            frame.resize((size_t)row * (size_t)h);
+            std::memcpy(frame.data(), bytes, frame.size());
             width = (int)w;
             height = (int)h;
+            rowbytes = row;
             seq++;
             signal = 1;
         }
@@ -1111,8 +1113,9 @@ void dl_output_close(void *h) {
     o->Release();
 }
 
-// Opens a device's input in `mode`, capturing 8-bit 4:2:2 (UYVY). The
-// input follows the signal's format when the card can detect it.
+// Opens a device's input in `mode`, capturing 10-bit 4:2:2 (v210) when the
+// card takes it, else 8-bit (UYVY). The input follows the signal's format when
+// the card can detect it.
 void *dl_input_open(int index, uint32_t mode, char *err, int errlen) {
     set_err(err, errlen, "");
     IDeckLink *dev = device_at(index, err, errlen);
@@ -1129,12 +1132,20 @@ void *dl_input_open(int index, uint32_t mode, char *err, int errlen) {
     }
     in->detection = flag_attribute(dev, BMDDeckLinkSupportsInputFormatDetection);
     {
-        BMDDisplayMode actual = m;
-        dl_bool supported = false;
-        if (in->in->DoesSupportVideoMode(bmdVideoConnectionUnspecified, m, bmdFormat8BitYUV,
-                                         bmdNoVideoInputConversion, bmdSupportedVideoModeDefault, &actual,
-                                         &supported) != S_OK ||
-            !supported) {
+        // 10-bit when the card takes it in this mode, else 8-bit.
+        bool ok = false;
+        for (BMDPixelFormat pf : {bmdFormat10BitYUV, bmdFormat8BitYUV}) {
+            BMDDisplayMode actual = m;
+            dl_bool supported = false;
+            if (in->in->DoesSupportVideoMode(bmdVideoConnectionUnspecified, m, pf, bmdNoVideoInputConversion,
+                                             bmdSupportedVideoModeDefault, &actual, &supported) == S_OK &&
+                supported) {
+                in->format = pf;
+                ok = true;
+                break;
+            }
+        }
+        if (!ok) {
             set_err(err, errlen, "the device cannot capture this video mode");
             goto fail;
         }
@@ -1146,7 +1157,7 @@ void *dl_input_open(int index, uint32_t mode, char *err, int errlen) {
         set_err(err, errlen, "cannot set the input callback");
         goto fail;
     }
-    if (in->in->EnableVideoInput(m, bmdFormat8BitYUV, flags) != S_OK) {
+    if (in->in->EnableVideoInput(m, in->format, flags) != S_OK) {
         set_err(err, errlen, "cannot enable the video input (device in use by another application?)");
         goto fail;
     }
@@ -1175,9 +1186,11 @@ fail:
     return NULL;
 }
 
-// Copies the newest captured frame (UYVY, rows packed) when newer than
-// *seq. 1 copied, 0 nothing new, -n: `cap` too small, n bytes needed.
-int64_t dl_input_take(void *h, uint8_t *out, int64_t cap, int *width, int *height, uint64_t *seq) {
+// Copies the newest captured frame when newer than *seq: `rowbytes` per
+// row, v210 (`ten_bit`) or UYVY. 1 copied, 0 nothing new, -n: `cap` too
+// small, n bytes needed.
+int64_t dl_input_take(void *h, uint8_t *out, int64_t cap, int *width, int *height, int64_t *rowbytes, int *ten_bit,
+                      uint64_t *seq) {
     Input *in = (Input *)h;
     std::lock_guard<std::mutex> lk(in->m);
     if (in->seq == *seq || in->frame.empty()) {
@@ -1190,6 +1203,8 @@ int64_t dl_input_take(void *h, uint8_t *out, int64_t cap, int *width, int *heigh
     std::memcpy(out, in->frame.data(), in->frame.size());
     *width = in->width;
     *height = in->height;
+    *rowbytes = in->rowbytes;
+    *ten_bit = in->format == bmdFormat10BitYUV ? 1 : 0;
     *seq = in->seq;
     return 1;
 }

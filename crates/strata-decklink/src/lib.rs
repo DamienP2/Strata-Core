@@ -215,7 +215,16 @@ mod ffi {
         pub fn dl_reference_locked(h: *mut c_void) -> c_int;
         pub fn dl_output_close(h: *mut c_void);
         pub fn dl_input_open(index: c_int, mode: u32, err: *mut c_char, errlen: c_int) -> *mut c_void;
-        pub fn dl_input_take(h: *mut c_void, out: *mut u8, cap: i64, width: *mut c_int, height: *mut c_int, seq: *mut u64) -> i64;
+        pub fn dl_input_take(
+            h: *mut c_void,
+            out: *mut u8,
+            cap: i64,
+            width: *mut c_int,
+            height: *mut c_int,
+            rowbytes: *mut i64,
+            ten_bit: *mut c_int,
+            seq: *mut u64,
+        ) -> i64;
         pub fn dl_input_signal(h: *mut c_void) -> c_int;
         pub fn dl_input_mode(h: *mut c_void) -> u32;
         pub fn dl_input_wait(h: *mut c_void, seq: u64, timeout_ms: c_int) -> c_int;
@@ -583,6 +592,16 @@ pub struct InputTimecode {
 }
 
 /// An open DeckLink input capturing 8-bit 4:2:2 (UYVY). Closed when dropped.
+/// A captured frame: its size, its bytes per row, and its format.
+#[derive(Debug, Clone, Copy)]
+pub struct Taken {
+    pub width: u32,
+    pub height: u32,
+    pub stride: usize,
+    /// v210 (10-bit 4:2:2); else UYVY (8-bit).
+    pub v210: bool,
+}
+
 pub struct InputHandle {
     #[cfg(decklink_shim)]
     raw: *mut std::ffi::c_void,
@@ -641,25 +660,25 @@ impl InputHandle {
         self.mode.clone()
     }
 
-    /// The newest frame (UYVY, rows packed) into `buf` when newer than
-    /// `*seq`: its (width, height).
-    pub fn take(&self, buf: &mut Vec<u8>, seq: &mut u64) -> Option<(u32, u32)> {
+    /// The newest frame into `buf` when newer than `*seq`: v210 (10-bit,
+    /// MXL's format) when the card captures it, else UYVY.
+    pub fn take(&self, buf: &mut Vec<u8>, seq: &mut u64) -> Option<Taken> {
         #[cfg(decklink_shim)]
         {
             if buf.capacity() == 0 {
-                buf.reserve(self.mode.width as usize * self.mode.height as usize * 2);
+                buf.reserve(self.mode.width.div_ceil(48) as usize * 128 * self.mode.height as usize);
             }
             for _ in 0..3 {
-                let (mut w, mut h) = (0, 0);
+                let (mut w, mut h, mut row, mut ten) = (0, 0, 0i64, 0);
                 // SAFETY: `buf` has `capacity` writable bytes; the shim
                 // writes at most that many (else returns the size needed).
-                let r = unsafe { ffi::dl_input_take(self.raw, buf.as_mut_ptr(), buf.capacity() as i64, &mut w, &mut h, seq) };
+                let r = unsafe { ffi::dl_input_take(self.raw, buf.as_mut_ptr(), buf.capacity() as i64, &mut w, &mut h, &mut row, &mut ten, seq) };
                 match r {
                     1 => {
-                        let len = w.max(0) as usize * h.max(0) as usize * 2;
+                        let len = row.max(0) as usize * h.max(0) as usize;
                         // SAFETY: the shim wrote `len` <= capacity bytes.
                         unsafe { buf.set_len(len.min(buf.capacity())) };
-                        return Some((w as u32, h as u32));
+                        return Some(Taken { width: w as u32, height: h as u32, stride: row as usize, v210: ten != 0 });
                     }
                     0 => return None,
                     need => {

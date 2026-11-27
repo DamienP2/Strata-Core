@@ -308,6 +308,8 @@ fn send_audio(f: &FlowPlan, a: &strata_mtl::Audio, mtl: &Mtl, mxl: &Mxl, stop: &
     let ch = a.channels as usize;
     let mut reader: Option<strata_mxl::AudioReader> = None;
     let (mut blocks, mut heard) = (0u64, 0u64);
+    // L'état chaque seconde, comme à la réception : les deux compteurs se comparent.
+    let mut tick = Instant::now();
     while !stop.load(Ordering::Relaxed) {
         if mxl.is_active(id) {
             if reader.is_none() {
@@ -328,7 +330,8 @@ fn send_audio(f: &FlowPlan, a: &strata_mtl::Audio, mtl: &Mtl, mxl: &Mxl, stop: &
         if tx.send(&pcm) {
             blocks += 1;
         }
-        if blocks.is_multiple_of(100) {
+        if tick.elapsed() >= Duration::from_secs(1) {
+            tick = Instant::now();
             let on = heard > 0;
             set(&|s| {
                 s.state = if on { IoState::Running } else { IoState::Idle };
@@ -421,6 +424,7 @@ fn send(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: &At
     let mut fresh = Instant::now() - Duration::from_secs(10);
     let mut frames = 0u64;
     let mut second = false;
+    let mut tick = Instant::now();
     let period = Duration::from_secs_f64(v.rate.1 as f64 / v.rate.0.max(1) as f64);
     while !stop.load(Ordering::Relaxed) {
         // Le flux de l'appli : pris s'il a la taille du flux envoyé (la cadence de l'appli peut
@@ -466,7 +470,8 @@ fn send(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: &At
         if v.interlaced {
             second = !second;
         }
-        if frames.is_multiple_of(25) {
+        if tick.elapsed() >= Duration::from_secs(1) {
+            tick = Instant::now();
             let on = frame.is_some();
             set(&|s| {
                 s.state = if on { IoState::Running } else { IoState::Idle };
