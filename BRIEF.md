@@ -29,7 +29,7 @@ Le Core ne contient **rien de métier** : pas de rendu graphique, pas d'enregist
 
 Une spec du design et des fonctions de base existe déjà, tirée de CG : `Strata-Network/docs/design.md`. Strata-Cut et Strata-Network ont été construits à partir d'elle. C'est la base de travail du Core.
 
-## 3. Les six briques du Core
+## 3. Les briques du Core
 
 ### 3.1 DESIGN — le design commun
 
@@ -72,9 +72,17 @@ Sources : `hardware.rs`, `sync.rs`, `decklink.rs`, `ndi.rs` (CG), `settings/Hard
 L'endroit où l'on choisit **ce que fait ce serveur physique**.
 
 - Liste des applis Strata disponibles (Graphics, LiveCut, Multiview, Network, Media, Call…), avec leur description et leur version.
-- **Installer / désinstaller / activer / désactiver** une appli sur ce serveur.
-- Pour chaque appli installée : sa version, son état (en marche, arrêtée, en erreur), le lien pour l'ouvrir.
-- Une appli installée apparaît dans la navigation commune, dans les autorisations (§ 3.2), dans la santé (§ 3.5) et dans les mises à jour (§ 3.6).
+- **Installée et active sont deux choses distinctes.** Une appli peut être installée sans être active : elle est sur le disque, à jour, mais son service ne tourne pas et elle ne consomme rien. On l'**active à la demande** (et on la désactive) depuis la Bibliothèque, sans réinstaller.
+
+  | État | Sur le disque | Service | Mises à jour | Navigation, autorisations, santé |
+  | --- | --- | --- | --- | --- |
+  | Non installée | non | — | — | absente |
+  | Installée, inactive | oui | arrêté, ne démarre pas avec le serveur | oui | grisée dans la Bibliothèque seulement |
+  | Active | oui | en marche, démarre avec le serveur | oui | présente partout |
+
+- Actions : **Installer**, **Activer**, **Désactiver**, **Désinstaller** (les données de l'appli sont gardées, sauf demande expresse).
+- Pour chaque appli installée : sa version, son état (active, inactive, en erreur), le lien pour l'ouvrir.
+- Une appli **active** apparaît dans la navigation commune, dans les autorisations (§ 3.2), dans la santé (§ 3.5). Toute appli **installée** apparaît dans les mises à jour (§ 3.6).
 
 ### 3.5 SANTÉ — surveiller le serveur
 
@@ -94,6 +102,29 @@ Sources : `health.rs`, `logs.rs` (CG et Cut), `perf.rs` (CG), `resources.rs`, `a
 
 Sources : `update.rs` (CG le plus complet : archive hors ligne, jeton), `service.rs`, `tls.rs`, `paths.rs`, `config.rs`, `system.rs`.
 
+### 3.7 INSTALLATEUR — l'installation sur Linux
+
+Un **installateur en ligne de commande, mais graphique** : un écran plein terminal, au design Strata (mêmes couleurs : fond sombre, accent pervenche, vert ok, orange attention, rouge erreur ; mêmes règles : français, libellés courts, rien d'inutile). On le lance en SSH, d'une seule commande, et on se déplace au clavier.
+
+**Les étapes :**
+
+1. **Accueil** : la marque Strata, la version qui va être installée.
+2. **Vérification du système** : distribution, processeur, mémoire, disque, accès internet, chacun ✓ ou ✗. Un ✗ bloquant arrête là, avec la raison.
+3. **Applis** : la liste des applis Strata ; pour chacune, *installer* et *activer maintenant* (une appli peut être installée sans être activée, § 3.4).
+4. **Matériel** :
+   - **DeckLink** : les cartes Blackmagic présentes sont détectées. Le pilote **Desktop Video** (qui contient la bibliothèque du SDK DeckLink) n'est pas redistribuable : Blackmagic le donne après un formulaire. L'installateur montre les étapes (télécharger sur son ordinateur, copier sur le serveur par `scp`, avec la commande exacte pour ce serveur), **attend l'archive**, la vérifie, l'installe et construit le module du noyau. Possible de passer.
+   - **NDI** : le **SDK NDI** pour Linux est téléchargé, sa licence est affichée et doit être acceptée, puis la bibliothèque `libndi` est installée. Possible de passer.
+5. **Réglages** : port de l'interface web (8080), dossier des données, disque dédié éventuel, ports à ouvrir dans le pare-feu.
+6. **Compte administrateur** : nom et mot de passe.
+7. **Récapitulatif**, puis **Installer** : une ligne par étape, avec sa progression et son résultat.
+8. **Fin** : l'adresse de l'interface web, et ce qui reste à faire s'il y en a (redémarrer pour le pilote Blackmagic, par exemple).
+
+**Relancé sur un serveur déjà installé**, il propose : *Mettre à jour*, *Ajouter ou retirer des applis*, *Installer DeckLink / NDI*, *Réparer*, *Désinstaller* (données gardées, sauf demande expresse).
+
+**Sans écran** (automatisation) : les mêmes choix passent en options (`--apps`, `--admin`, `--ndi`, `--desktop-video <archive>`, `--yes`…), sans aucune question.
+
+Sources : `Strata-Cut/scripts/install-ubuntu.sh` (1 100 lignes : dépendances, pilote Desktop Video avec attente de l'archive, SDK NDI, service systemd, disque des données, pare-feu, désinstallation) ; `CG/packaging/ndi/fetch-runtime.sh` (licence et mention NDI).
+
 ## 4. Ce qui reste dans chaque appli
 
 Tout le métier : le moteur de rendu, le designer et l'opérateur de CG ; l'enregistrement, les extraits et le streamer de LiveCut ; et pour les autres applis, leur propre domaine. Une appli s'appuie sur le Core, jamais l'inverse.
@@ -101,6 +132,8 @@ Tout le métier : le moteur de rendu, le designer et l'opérateur de CG ; l'enre
 ## 5. Questions ouvertes
 
 - **Une seule adresse ou une par appli** : tout derrière le port du Core (`/graphics`, `/livecut`…) ou chaque appli sur son port ? (Cela joue aussi sur le thème et la langue d'une appli à l'autre : voir l'inventaire du design, § 6.)
+- **Distributions Linux** : Ubuntu Server 22.04 et 24.04 LTS (comme LiveCut aujourd'hui), ou d'autres aussi (Debian, Rocky…) ?
+- **Technique de l'installateur** : un script bash avec un affichage maison, ou un petit programme Rust (affichage plein terminal) téléchargé par la commande d'installation ? Le programme Rust donne un rendu plus soigné et réutilise le code du Core ; le script n'a besoin de rien.
 - **Attribution du matériel** : une carte DeckLink ou un flux 2110 peut-il être partagé entre deux applis, ou est-il réservé à une seule ?
 - **Migration** : comment reprendre les comptes, groupes et réglages des installations CG et LiveCut existantes.
 - **Versions** : comment une appli déclare la version du Core dont elle a besoin.
@@ -110,4 +143,4 @@ Tout le métier : le moteur de rendu, le designer et l'opérateur de CG ; l'enre
 1. ~~Renommer le dépôt en `Strata-Core`.~~ Fait.
 2. ~~Trancher l'architecture.~~ Option A.
 3. **Premier lot : DESIGN.** ~~Inventaire.~~ Fait ([`docs/design/INVENTAIRE.md`](docs/design/INVENTAIRE.md)). Puis : décisions de l'inventaire, maquette de la coquille commune, paquet `@strata/ui`.
-4. Puis, dans l'ordre à définir : UTILISATEURS, SERVEUR, SANTÉ, HARDWARE, BIBLIOTHÈQUE.
+4. Puis, dans l'ordre à définir : UTILISATEURS, SERVEUR, SANTÉ, HARDWARE, BIBLIOTHÈQUE, INSTALLATEUR.
