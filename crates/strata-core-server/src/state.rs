@@ -33,6 +33,8 @@ pub struct AppState {
     pub captures: crate::hardware::capture::Captures,
     /// Les relevés des ressources (Santé).
     pub resources: crate::resources::Resources,
+    /// Les alertes (Santé).
+    pub alerts: crate::alerts::Alerts,
     /// Les mises à jour du Core et des applis.
     pub updates: Updates,
     /// Le HTTPS : certificat et écoute.
@@ -60,6 +62,7 @@ impl AppState {
             clock: Default::default(),
             captures: Default::default(),
             resources: Default::default(),
+            alerts: crate::alerts::Alerts::new(&data_dir),
             restart: AtomicBool::new(false),
             restart_signal: tokio::sync::Notify::new(),
             started_at: Instant::now(),

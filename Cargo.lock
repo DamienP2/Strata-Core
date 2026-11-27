@@ -1779,6 +1779,7 @@ dependencies = [
  "rpassword",
  "rust-embed",
  "rustls",
+ "rustls-platform-verifier",
  "semver",
  "serde",
  "serde_json",

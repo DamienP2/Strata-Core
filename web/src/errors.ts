@@ -50,6 +50,8 @@ const SHAPED: [RegExp, string, string[]][] = [
   [/^cannot replace (.+): (.+)$/, 'Cannot replace {path}: {why}', ['path', 'why']],
   [/^cannot keep the current Core: (.+)$/, 'Cannot keep the current Core: {why}', ['why']],
   [/^release (.+) has no Core archive$/, 'Release {tag} has no Core archive', ['tag']],
+  // Alertes
+  [/^the webhook answered HTTP (\d+)$/, 'the webhook answered HTTP {code}', ['code']],
   // Horloge
   [/^not an NTP server: (.+)$/, 'not an NTP server: {name}', ['name']],
   [/^cannot write (.+): (.+)$/, 'cannot write {path}: {why}', ['path', 'why']],

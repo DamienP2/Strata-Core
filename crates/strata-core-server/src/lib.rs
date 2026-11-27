@@ -4,6 +4,7 @@
 //! les groupes, les préférences des utilisateurs, la Bibliothèque, le lancement des applis et le
 //! relais vers elles, l'interface web embarquée. À venir (brief) : installer une appli, matériel,
 //! santé, mises à jour, plusieurs serveurs.
+pub mod alerts;
 pub mod api;
 pub mod apps;
 pub mod auth;
@@ -107,6 +108,7 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
     apps::reconcile(&s).await;
     reconcile_inputs(&s).await;
     resources::start(&s);
+    alerts::start(&s);
     let keeper = {
         let s = s.clone();
         tokio::spawn(async move {

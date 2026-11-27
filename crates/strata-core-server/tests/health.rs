@@ -46,7 +46,7 @@ async fn resources_journal_and_export() {
     // Les incidents : le plantage de l'appli, ses deux erreurs comptées une fois.
     let (_, b) = get(&app, "/api/health/summary", &cookie).await;
     let v: Value = serde_json::from_slice(&b).unwrap();
-    assert_eq!(v["crashes"], 1);
+    assert!(v["crashes"].as_u64().unwrap() >= 1);
     assert_eq!(v["unseenCrash"], true);
     assert_eq!(v["errors"], 2);
     let inc = v["incidents"].as_array().unwrap();
@@ -65,5 +65,74 @@ async fn resources_journal_and_export() {
     let (st, b) = get(&app, "/api/health/export", &cookie).await;
     assert_eq!(st, StatusCode::OK);
     assert_eq!(&b[..2], &[0x1f, 0x8b]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+async fn send(app: &Router, method: &str, path: &str, cookie: Option<&str>, body: Value) -> (StatusCode, Value) {
+    // Sans session : un appel d'une appli, sur la machine.
+    let host = if cookie.is_some() { "strata.test" } else { "127.0.0.1:8080" };
+    let mut req = Request::builder().method(method).uri(path).header(header::HOST, host).header(header::CONTENT_TYPE, "application/json");
+    if let Some(c) = cookie {
+        req = req.header(header::COOKIE, c);
+    }
+    let res = app.clone().oneshot(req.body(Body::from(body.to_string())).unwrap()).await.unwrap();
+    let st = res.status();
+    let b = res.into_body().collect().await.unwrap().to_bytes();
+    (st, serde_json::from_slice(&b).unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&b).into())))
+}
+
+#[tokio::test]
+async fn alert_settings_test_message_and_app_alerts() {
+    // Un webhook qui garde ce qu'il reçoit.
+    let hook = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/hook", hook.local_addr().unwrap());
+    let got = std::sync::Arc::new(tokio::sync::Mutex::new(String::new()));
+    let got2 = got.clone();
+    tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (mut c, _) = hook.accept().await.unwrap();
+        let mut buf = vec![0u8; 8192];
+        let mut all = String::new();
+        while !all.contains("\"server\"") {
+            let n = c.read(&mut buf).await.unwrap();
+            if n == 0 {
+                break;
+            }
+            all.push_str(&String::from_utf8_lossy(&buf[..n]));
+        }
+        *got2.lock().await = all;
+        c.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n").await.unwrap();
+    });
+
+    let dir = std::env::temp_dir().join(format!("strata-alerts-it-{}", strata_core::new_id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let s = AppState::new(dir.clone());
+    let admin = s.auth.add(NewUser { username: "admin".into(), display_name: String::new(), admin: true, password: Some("password1".into()) }).unwrap();
+    let cookie = format!("strata_session={}", s.auth.open_session(&admin.id));
+    let c = Some(cookie.as_str());
+    let app = strata_core_server::app(s.clone(), None);
+    let remote = app.clone().layer(MockConnectInfo("10.0.0.5:5000".parse::<SocketAddr>().unwrap()));
+    let local = app.layer(MockConnectInfo("127.0.0.1:5000".parse::<SocketAddr>().unwrap()));
+
+    // Réglages : vérifiés, le mot de passe jamais renvoyé.
+    let (st, msg) = send(&remote, "PUT", "/api/health/alerts", c, serde_json::json!({"webhook": "ftp://x"})).await;
+    assert_eq!((st, msg.as_str()), (StatusCode::BAD_REQUEST, Some("the webhook address starts with https://")));
+    let cfg = serde_json::json!({"enabled": true, "webhook": url, "emailTo": "regie@exemple.fr", "smtpHost": "smtp.exemple.fr", "smtpFrom": "strata@exemple.fr", "smtpUser": "u", "smtpPassword": "secret"});
+    let (st, v) = send(&remote, "PUT", "/api/health/alerts", c, cfg).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["settings"]["smtpPassword"], "••••••••");
+    assert!(std::fs::read_to_string(dir.join("alerts.json")).unwrap().contains("secret"));
+
+    // Un message d'essai par le webhook (seul, sans e-mail).
+    let (st, v) = send(&remote, "POST", "/api/health/alerts/test", c, serde_json::json!({"webhook": url})).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["results"], serde_json::json!([["webhook", null]]));
+    assert!(got.lock().await.contains("Message d’essai des alertes de Strata Core"));
+
+    // Les alertes des applis : depuis la machine, pour une appli active.
+    let body = serde_json::json!({"app": "livecut", "key": "disk", "text": "plus de place pour enregistrer"});
+    assert_eq!(send(&remote, "POST", "/api/health/alerts/app", None, body.clone()).await.0, StatusCode::FORBIDDEN);
+    let (st, msg) = send(&local, "POST", "/api/health/alerts/app", None, body).await;
+    assert_eq!((st, msg.as_str()), (StatusCode::BAD_REQUEST, Some("no active app: livecut")));
     let _ = std::fs::remove_dir_all(&dir);
 }

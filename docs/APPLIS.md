@@ -210,6 +210,21 @@ loop {
   en 1080i50.
 - Pas encore d'audio : le pont DeckLink du Core ne capte que la vidéo et le timecode.
 
+## Déclarer une alerte
+
+Une appli signale un problème au Core, qui l'envoie avec les autres (*Santé › Alertes* : webhook,
+e-mail) quand il a duré le délai réglé, puis dit quand il est fini. Depuis la machine, sans session :
+
+```
+POST $STRATA_CORE_URL/api/health/alerts/app
+{"app": "livecut", "key": "rec-full", "text": "plus de place pour la boucle de SDI 2",
+ "over": "de nouveau de la place pour la boucle"}
+```
+
+- `key` : une par problème (64 caractères au plus) ; renvoyer la même clé ne fait rien de plus.
+- Problème fini : la même requête avec `"active": false`.
+- Les alertes d'une appli tombent quand elle est désactivée.
+
 ## Ce que l'appli garde pour elle
 
 - **Les droits** : qui peut faire quoi dans ses écrans, par groupe ou par personne, en s'appuyant sur

@@ -1,8 +1,8 @@
 // Les réglages du serveur (administrateurs), rangés par objet comme dans la maquette C : Ce serveur
 // (vue d'ensemble, nom et adresses, HTTPS), Applis (la Bibliothèque, puis une page par appli installée)
 // et Personnes (Utilisateurs, Groupes, Annuaire). Les autres sections viendront avec leurs briques
-// Matériel (Cartes SDI, NDI, ST 2110, Réseau, Horloge) ; Santé (Ressources, Journal).
-import { Activity, Clock, CloudDownload, ScrollText, EthernetPort as Ethernet, Globe, KeyRound, LayoutDashboard, LayoutGrid, Lock, MonitorPlay, Radio, Users as UsersIcon, UsersRound, Waves } from 'lucide-react';
+// Matériel (Cartes SDI, NDI, ST 2110, Réseau, Horloge) ; Santé (Ressources, Journal, Alertes).
+import { Activity, BellRing, Clock, CloudDownload, ScrollText, EthernetPort as Ethernet, Globe, KeyRound, LayoutDashboard, LayoutGrid, Lock, MonitorPlay, Radio, Users as UsersIcon, UsersRound, Waves } from 'lucide-react';
 import { Suspense, lazy, useEffect, useState } from 'react';
 import { NavItem, NavSection, SidePage, t } from '@strata/ui';
 import { appIcon } from '../icons';
@@ -22,6 +22,7 @@ const NetworkPage = lazy(() => hw().then((m) => ({ default: m.NetworkPage })));
 const ClockPage = lazy(() => hw().then((m) => ({ default: m.ClockPage })));
 // La santé (et ses courbes) aussi.
 const ResourcesPage = lazy(() => import('./health/Resources').then((m) => ({ default: m.ResourcesPage })));
+const AlertsPage = lazy(() => import('./health/Alerts').then((m) => ({ default: m.AlertsPage })));
 const JournalPage = lazy(() => import('./health/Journal').then((m) => ({ default: m.JournalPage })));
 import { api } from '../api';
 
@@ -30,9 +31,14 @@ export function Settings({ path }: { path: string }) {
   const { apps, core, jobs, reload, setActive, restart, dismiss } = useApps();
   // Le nombre de mises à jour qui attendent (dernière recherche), relu à chaque page.
   const [pending, setPending] = useState(0);
+  // Les problèmes en cours (Santé › Alertes).
+  const [problems, setProblems] = useState(0);
   useEffect(() => {
     api<{ count: number }>('GET', '/api/updates')
       .then((u) => setPending(u.count))
+      .catch(() => {});
+    api<{ active: unknown[] }>('GET', '/api/health/alerts')
+      .then((a) => setProblems(a.active.length))
       .catch(() => {});
   }, [path]);
   const appId = path.startsWith('applis/') ? path.slice('applis/'.length) : null;
@@ -40,7 +46,7 @@ export function Settings({ path }: { path: string }) {
 
   let page: React.ReactNode = null;
   const hardware = ['sdi', 'ndi', 'st2110', 'reseau', 'horloge'];
-  const health = ['ressources', 'journal'];
+  const health = ['ressources', 'journal', 'alertes'];
   const fixed = [...hardware, ...health, 'serveur', 'adresses', 'https', 'mises-a-jour', 'utilisateurs', 'groupes', 'annuaire'].includes(path);
   if (path === 'serveur') page = <Overview apps={apps} />;
   else if (path === 'adresses') page = <Addresses />;
@@ -52,6 +58,7 @@ export function Settings({ path }: { path: string }) {
   else if (path === 'horloge') page = <ClockPage />;
   else if (path === 'ressources') page = <ResourcesPage />;
   else if (path === 'journal') page = <JournalPage />;
+  else if (path === 'alertes') page = <AlertsPage onCount={setProblems} />;
   else if (path === 'mises-a-jour') page = <Updates apps={apps} jobs={jobs} reloadApps={reload} onCount={setPending} />;
   else if (path === 'utilisateurs') page = <Users />;
   else if (path === 'groupes') page = <Groups />;
@@ -87,6 +94,7 @@ export function Settings({ path }: { path: string }) {
         <NavSection title={t('Health')} />
         <NavItem icon={Activity} label={t('Resources')} on={path === 'ressources'} onClick={() => navigate('/reglages/ressources')} />
         <NavItem icon={ScrollText} label={t('Journal')} on={path === 'journal'} onClick={() => navigate('/reglages/journal')} />
+        <NavItem icon={BellRing} label={t('Alerts')} on={path === 'alertes'} onClick={() => navigate('/reglages/alertes')} count={problems || undefined} />
       </div>
       <div>
         <NavSection title={t('People')} />
