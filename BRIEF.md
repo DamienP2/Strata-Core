@@ -22,7 +22,9 @@ Le Core ne contient **rien de métier** : pas de rendu graphique, pas d'enregist
 | Sujet | Décision |
 | --- | --- |
 | Langage du serveur | **Rust** |
-| Plateforme | **Linux uniquement** |
+| Plateforme | **Linux uniquement** : **Ubuntu Server 24.04 LTS**, x86-64, version Server (sans bureau). **26.04 LTS** ajoutée une fois validée (pilote Desktop Video de Blackmagic disponible pour son noyau). **Pas de 22.04** (support standard terminé en avril 2027) |
+| Compilation | binaires construits sur **Ubuntu 24.04** (ils tournent aussi sur 26.04) par GitHub Actions, publiés en **releases GitHub** ; jamais compilés sur les serveurs |
+| Installateur | **programme Rust** plein terminal (§ 3.7) |
 | Forme | un **crate Rust** + un **paquet web** (React / TypeScript), consommés par les applis |
 | Premier lot | **le design** — inventaire : [`docs/design/INVENTAIRE.md`](docs/design/INVENTAIRE.md) |
 | Architecture | **option A** : le Core est un service à part (`strata-core`) ; chaque appli est son propre service, installé et mis à jour par le Core, qui lui délègue la connexion |
@@ -123,6 +125,17 @@ Un **installateur en ligne de commande, mais graphique** : un écran plein termi
 
 **Sans écran** (automatisation) : les mêmes choix passent en options (`--apps`, `--admin`, `--ndi`, `--desktop-video <archive>`, `--yes`…), sans aucune question.
 
+**Comment il est fait :**
+
+1. **`install.sh`**, une trentaine de lignes, celui de la commande `curl … | sudo bash` : vérifie Ubuntu et x86-64, télécharge `strata-install` depuis les releases GitHub de Strata-Core, vérifie son empreinte SHA-256, le lance (en lui rendant le terminal).
+2. **`strata-install`**, un binaire Rust **statique** (rien à installer avant), affichage plein terminal avec **ratatui**, aux couleurs Strata.
+3. Il installe des **binaires déjà compilés**, pris dans les releases GitHub : pas de Rust ni de Node.js sur les serveurs, installation en quelques minutes, la version installée est exactement celle qui a été testée. Serveur sans internet : `--package <archive>`.
+4. Il utilise **le même code que le Core** (téléchargement et vérification des releases, compte administrateur, service systemd, dossiers) : l'installation et les mises à jour OTA (§ 3.6) ne font qu'une seule et même chose.
+5. **Pilote DeckLink et noyau** : le module Desktop Video est enregistré dans **DKMS**, pour être reconstruit à chaque mise à jour du noyau. La Santé (§ 3.5) alerte si une carte n'est plus vue.
+6. **Journal complet** de chaque installation : `/var/log/strata-install.log`.
+
+**Préalable : la chaîne de releases.** Le Core et chaque appli doivent être compilés par GitHub Actions (sur Ubuntu 24.04) et publiés en releases, avec leurs empreintes. Sans elle, ni l'installateur ni les mises à jour OTA ne fonctionnent. Modèle : `CG/.github/workflows/release.yml`.
+
 Sources : `Strata-Cut/scripts/install-ubuntu.sh` (1 100 lignes : dépendances, pilote Desktop Video avec attente de l'archive, SDK NDI, service systemd, disque des données, pare-feu, désinstallation) ; `CG/packaging/ndi/fetch-runtime.sh` (licence et mention NDI).
 
 ## 4. Ce qui reste dans chaque appli
@@ -132,8 +145,8 @@ Tout le métier : le moteur de rendu, le designer et l'opérateur de CG ; l'enre
 ## 5. Questions ouvertes
 
 - **Une seule adresse ou une par appli** : tout derrière le port du Core (`/graphics`, `/livecut`…) ou chaque appli sur son port ? (Cela joue aussi sur le thème et la langue d'une appli à l'autre : voir l'inventaire du design, § 6.)
-- **Distributions Linux** : Ubuntu Server 22.04 et 24.04 LTS (comme LiveCut aujourd'hui), ou d'autres aussi (Debian, Rocky…) ?
-- **Technique de l'installateur** : un script bash avec un affichage maison, ou un petit programme Rust (affichage plein terminal) téléchargé par la commande d'installation ? Le programme Rust donne un rendu plus soigné et réutilise le code du Core ; le script n'a besoin de rien.
+- **Serveurs existants en 22.04** : en reste-t-il (LiveCut s'installe aujourd'hui sur 22.04) ? Ils devront passer en 24.04 avant de recevoir le Core.
+- **Configuration minimale** du serveur (processeurs, mémoire, disque) : à fixer pour le README.
 - **Attribution du matériel** : une carte DeckLink ou un flux 2110 peut-il être partagé entre deux applis, ou est-il réservé à une seule ?
 - **Migration** : comment reprendre les comptes, groupes et réglages des installations CG et LiveCut existantes.
 - **Versions** : comment une appli déclare la version du Core dont elle a besoin.
@@ -143,4 +156,5 @@ Tout le métier : le moteur de rendu, le designer et l'opérateur de CG ; l'enre
 1. ~~Renommer le dépôt en `Strata-Core`.~~ Fait.
 2. ~~Trancher l'architecture.~~ Option A.
 3. **Premier lot : DESIGN.** ~~Inventaire.~~ Fait ([`docs/design/INVENTAIRE.md`](docs/design/INVENTAIRE.md)). Puis : décisions de l'inventaire, maquette de la coquille commune, paquet `@strata/ui`.
-4. Puis, dans l'ordre à définir : UTILISATEURS, SERVEUR, SANTÉ, HARDWARE, BIBLIOTHÈQUE, INSTALLATEUR.
+4. **Chaîne de releases** (GitHub Actions sur Ubuntu 24.04), juste après le design : préalable de l'installateur et des mises à jour OTA.
+5. Puis, dans l'ordre à définir : UTILISATEURS, SERVEUR, SANTÉ, HARDWARE, BIBLIOTHÈQUE, INSTALLATEUR.

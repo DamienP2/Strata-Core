@@ -7,7 +7,7 @@ Le socle des serveurs Strata. Il gère le serveur (utilisateurs, matériel, sant
 ## Prérequis
 
 **Serveur**
-- Ubuntu Server 22.04 ou 24.04 LTS, 64 bits (x86-64)
+- Ubuntu Server 24.04 LTS, 64 bits (x86-64)
 - 4 cœurs et 8 Go de mémoire au minimum ; davantage selon les applis activées
 - 20 Go libres pour le système et les applis, plus l'espace des médias
 - Un compte avec `sudo`
