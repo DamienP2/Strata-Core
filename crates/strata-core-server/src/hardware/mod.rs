@@ -18,6 +18,7 @@
 //!   qu'on regarde (`preview.rs`, `st2110.rs`).
 //!
 //! Gardé dans `hardware.json`. Les applis le lisent par `GET /api/hardware/shared` (docs/APPLIS.md).
+pub mod capacity;
 pub mod capture;
 pub mod clock;
 pub mod decklink;
@@ -507,6 +508,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/hardware/outputs/{card}/{n}/preview.jpg", get(output_preview))
         .route("/api/hardware/flows", get(flows))
         .route("/api/hardware/nmos", get(nmos_status))
+        .route("/api/hardware/ports", get(ports))
         .route("/api/hardware/flows/{id}/preview.jpg", get(flow_preview))
 }
 
@@ -764,6 +766,13 @@ async fn flow_preview(State(s): State<Shared>, CurrentUser(me): CurrentUser, Url
     .await?
     .map_err(|e| (StatusCode::NOT_FOUND, e))?;
     Ok(jpeg_response(jpeg))
+}
+
+/// Les ports média : débit mesuré et prévu, place restante par format.
+async fn ports(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<capacity::Capacity>> {
+    require(me.admin)?;
+    let s2 = s.clone();
+    Ok(Json(blocking(move || capacity::evaluate(&s2)).await?))
 }
 
 /// NMOS : marche-t-il, où, et ce qui est branché.

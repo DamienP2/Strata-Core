@@ -53,6 +53,7 @@ mod ffi {
         pub fn smtl_load(path: *const c_char, err: *mut c_char, errlen: c_int) -> c_int;
         pub fn smtl_open(ports: *const Port, n: c_int, tai_offset: u32, lcores: *const c_char, err: *mut c_char, errlen: c_int) -> *mut c_void;
         pub fn smtl_close(h: *mut c_void);
+        pub fn smtl_port_stats(h: *mut c_void, port: c_int, rx_bytes: *mut u64, tx_bytes: *mut u64, rx_dropped: *mut u64) -> c_int;
         pub fn smtl_rx_open(
             h: *mut c_void,
             name: *const c_char,
@@ -336,6 +337,33 @@ impl Mtl {
 #[cfg(mtl_shim)]
 fn legs_of(legs: &[Leg]) -> (Vec<c_int>, Vec<[u8; 4]>, Vec<u16>) {
     (legs.iter().map(|l| l.port as c_int).collect(), legs.iter().map(|l| l.ip.octets()).collect(), legs.iter().map(|l| l.udp).collect())
+}
+
+/// Les compteurs d'un port média vus par MTL.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PortStats {
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
+    /// Paquets jetés par la carte (files pleines).
+    pub rx_dropped: u64,
+}
+
+impl Mtl {
+    /// Les compteurs du port `port` (0 : port 1), si cette version de MTL les donne.
+    pub fn port_stats(&self, port: usize) -> Option<PortStats> {
+        #[cfg(mtl_shim)]
+        {
+            let mut p = PortStats::default();
+            // SAFETY: `h` is open; the out-pointers are valid for the call.
+            let r = unsafe { ffi::smtl_port_stats(self.h, port as c_int, &mut p.rx_bytes, &mut p.tx_bytes, &mut p.rx_dropped) };
+            (r == 0).then_some(p)
+        }
+        #[cfg(not(mtl_shim))]
+        {
+            let _ = port;
+            None
+        }
+    }
 }
 
 impl Drop for Mtl {

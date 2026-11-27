@@ -43,6 +43,8 @@ F(st30p_tx_free);
 F(st30p_tx_set_block_timeout);
 F(st30_calculate_framebuff_size);
 #undef F
+// Facultative : les compteurs d'un port (le débit mesuré, surtout en DPDK).
+static __typeof__(&mtl_get_port_stats) p_mtl_get_port_stats;
 
 static void set_err(char *err, int len, const char *msg) {
     if (err && len > 0) {
@@ -96,6 +98,7 @@ int smtl_load(const char *path, char *err, int errlen) {
     SYM(st30p_tx_free);
     SYM(st30p_tx_set_block_timeout);
     SYM(st30_calculate_framebuff_size);
+    p_mtl_get_port_stats = (__typeof__(p_mtl_get_port_stats))dlsym(lib, "mtl_get_port_stats");
     return 0;
 }
 
@@ -183,6 +186,24 @@ void *smtl_open(const smtl_port *ports, int n, uint32_t tai_offset, const char *
         return NULL;
     }
     return s;
+}
+
+// Les compteurs du port `port` (0 ou 1) : octets reçus, envoyés, paquets perdus par la
+// carte. 0, ou -1 sans eux.
+int smtl_port_stats(void *h, int port, uint64_t *rx_bytes, uint64_t *tx_bytes, uint64_t *rx_dropped) {
+    smtl *s = (smtl *)h;
+    struct mtl_port_status st;
+    if (!s || !p_mtl_get_port_stats) {
+        return -1;
+    }
+    memset(&st, 0, sizeof(st));
+    if (p_mtl_get_port_stats(s->mt, (enum mtl_port)port, &st) != 0) {
+        return -1;
+    }
+    *rx_bytes = st.rx_bytes;
+    *tx_bytes = st.tx_bytes;
+    *rx_dropped = st.rx_hw_dropped_packets;
+    return 0;
 }
 
 void smtl_close(void *h) {

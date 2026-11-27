@@ -52,7 +52,7 @@ const pct = (v: number) => `${Math.round(v)} %`;
 const num = (v: number, d: number) => v.toLocaleString(locale(), { minimumFractionDigits: d, maximumFractionDigits: d });
 
 /** Une barre de remplissage (couleur d'état seulement au-delà des seuils, avec le texte à côté). */
-function Meter({ value, warn = 80, bad = 95 }: { value: number; warn?: number; bad?: number }) {
+export function Meter({ value, warn = 80, bad = 95 }: { value: number; warn?: number; bad?: number }) {
   const tone = value >= bad ? 'bad' : value >= warn ? 'warn' : '';
   return (
     <span className={`core-meter ${tone}`}>

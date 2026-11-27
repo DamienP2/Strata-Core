@@ -41,6 +41,8 @@ pub struct AppState {
     pub streams: crate::streams::engine::Engine,
     /// NMOS (IS-04, IS-05) : l'API du nœud et son annonce.
     pub nmos: crate::nmos::Nmos,
+    /// Les relevés des ports média ST 2110 (débits).
+    pub port_meter: crate::hardware::capacity::Meter,
     /// MTL : chargée au démarrage si elle est installée (sinon la raison).
     pub mtl: std::sync::OnceLock<Result<std::path::PathBuf, String>>,
     /// MXL : ouvert au démarrage s'il est installé (sinon la raison).
@@ -86,6 +88,7 @@ impl AppState {
             st2110: Default::default(),
             streams: Default::default(),
             nmos: Default::default(),
+            port_meter: Default::default(),
             mtl: Default::default(),
             resources: Default::default(),
             alerts: crate::alerts::Alerts::new(&data_dir),

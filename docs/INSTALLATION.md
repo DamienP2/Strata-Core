@@ -68,6 +68,12 @@ Le Core réserve lui-même les hugepages (2 Go, plus 512 Mo par flux HD et 2 Go 
 plus la moitié de la mémoire) et les rend quand on repasse à « Non ». Si la mémoire est trop
 morcelée pour les réserver, redémarrez le serveur.
 
+La carte **Charge des ports média** (même page) suit chaque port en direct : débit reçu et envoyé
+mesuré (compteurs du noyau, ou de MTL en DPDK), ce que demandent les flux réglés, la vitesse du
+lien, et combien de flux de chaque format y tiennent encore (marge de 10 % ; en 2022-7 le port le
+plus chargé décide). Une alerte part si un port dépasse 90 %, si son lien tombe, ou si les flux
+réglés demandent plus que le lien.
+
 ## NMOS (Bitfocus Buttons, sans registre)
 
 *Réglages › Matériel › Réseau*, carte **NMOS** : le Core s'annonce en mDNS

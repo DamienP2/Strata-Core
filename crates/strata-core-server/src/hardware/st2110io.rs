@@ -258,6 +258,13 @@ impl Engine {
         self.running.lock().unwrap().is_some()
     }
 
+    /// Les compteurs de chaque port ouvert par MTL (dans l'ordre : port 1, port 2).
+    pub fn port_stats(&self) -> Vec<Option<strata_mtl::PortStats>> {
+        let run = self.running.lock().unwrap();
+        let Some(r) = run.as_ref() else { return Vec::new() };
+        (0..r.ports.0.len()).map(|i| r.mtl.port_stats(i)).collect()
+    }
+
     pub fn status_of(&self, id: &str) -> Option<IoStatus> {
         self.status.lock().unwrap().get(id).cloned()
     }

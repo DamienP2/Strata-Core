@@ -1,14 +1,15 @@
 // Réglages › Matériel : Cartes SDI, NDI, ST 2110, Réseau, Horloge. Les réglages sont partagés par
 // les cinq pages (store.ts) et enregistrés d'un coup.
 import { useState } from 'react';
-import { Cable, MonitorPlay, Network as NetIcon, Pencil, Plus, Radio, RefreshCw, Search, Trash2, Waves } from 'lucide-react';
+import { Cable, Gauge, MonitorPlay, Network as NetIcon, Pencil, Plus, Radio, RefreshCw, Search, Trash2, Waves } from 'lucide-react';
 import { Badge, Card, Dropdown, Empty, Field, FieldGrid, Modal, NumberField, PageHead, Segmented, Switch, confirmDialog, t, tn, toast, type DropOption } from '@strata/ui';
 import { api } from '../../api';
 import { friendly } from '../../errors';
 import { HwSaveBar, useHardware } from './common';
+import { Meter } from '../health/Resources';
 import { FlowsCard, InputsCard, OutputsCard, usePoll } from './Inputs';
 import { DeckLink3D, Pcie3D, SDI_COLOR, nicLook, printedOf, type Jack } from './Card3D';
-import { cardOf, editCard, editHw, loadHw, type DetectedCard, type Flow, type Fn, type HwConfig, type Nic, type NmosStatus, type Port, type Snapshot } from './store';
+import { cardOf, editCard, editHw, loadHw, type DetectedCard, type Flow, type Fn, type Capacity, type HwConfig, type Nic, type NmosStatus, type Port, type Snapshot } from './store';
 
 function Rescan() {
   const [busy, setBusy] = useState(false);
@@ -287,6 +288,82 @@ function NicRow({ n, cfg, sel, onClick }: { n: Nic; cfg: HwConfig; sel?: boolean
   );
 }
 
+/** Un débit en Mb/s, lisible. */
+function rate(mbps: number): string {
+  return mbps >= 1000 ? `${(mbps / 1000).toLocaleString(undefined, { maximumFractionDigits: 1 })} Gb/s` : `${Math.round(mbps)} Mb/s`;
+}
+
+/** La charge des ports média en direct, et les flux qui y tiennent encore. */
+function PortsLoadCard({ cap }: { cap: Capacity | null }) {
+  if (!cap || cap.ports.length === 0) return null;
+  const margin = Math.round(cap.headroom * 100);
+  const side = (p: Capacity['ports'][number], dir: 'rx' | 'tx') => {
+    const used = p.used[dir];
+    const pctOf = p.speed ? (used / p.speed) * 100 : 0;
+    return (
+      <div className="core-use" title={p.measured ? t('Measured {m} · planned {p}', { m: rate(p.measured[dir]), p: rate(p.planned[dir]) }) : t('Planned {p}', { p: rate(p.planned[dir]) })}>
+        {p.speed ? <Meter value={pctOf} warn={margin - 10} bad={margin} /> : null}
+        <span className="st-mono">{rate(used)}</span>
+        {p.speed ? <span className="st-muted">{Math.round(pctOf)} %</span> : null}
+      </div>
+    );
+  };
+  return (
+    <Card icon={<Gauge size={16} />} title={t('Media ports load')}>
+      <table className="st-table">
+        <thead>
+          <tr>
+            <th>{t('Port')}</th>
+            <th>{t('Link')}</th>
+            <th>{t('Received')}</th>
+            <th>{t('Sent')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {cap.ports.map((p) => (
+            <tr key={p.iface}>
+              <td>
+                <strong>{cap.redundant ? (p.n === 1 ? t('Port 1 · red') : t('Port 2 · blue')) : t('Port {n}', { n: p.n })}</strong> <span className="st-mono st-muted">{p.iface}</span>
+              </td>
+              <td>
+                {p.up === false ? <Badge tone="bad">{t('Down')}</Badge> : p.speed ? rate(p.speed) : <span className="st-muted">{t('Unknown')}</span>}
+                {p.dropped ? <span className="st-muted"> · {tn(Math.round(p.dropped), '{n} packet dropped/s', '{n} packets dropped/s')}</span> : null}
+              </td>
+              <td>{side(p, 'rx')}</td>
+              <td>{side(p, 'tx')}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="st-muted core-note">
+        {cap.redundant
+          ? t('Used: the larger of the measured rate and what the flows set need. Margin: {m} % of the link. In SMPTE 2022-7 each flow uses both ports.', { m: margin })
+          : t('Used: the larger of the measured rate and what the flows set need. Margin: {m} % of the link.', { m: margin })}
+      </p>
+      <table className="st-table">
+        <thead>
+          <tr>
+            <th>{t('Format')}</th>
+            <th>{t('Rate')}</th>
+            <th>{t('Still room to receive')}</th>
+            <th>{t('Still room to send')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {cap.formats.map((f) => (
+            <tr key={f.name}>
+              <td>{f.name}</td>
+              <td className="st-mono">{rate(f.mbps)}</td>
+              <td>{f.rx ?? '—'}</td>
+              <td>{f.tx ?? '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Card>
+  );
+}
+
 /** NMOS : le Core annoncé en mDNS (sans registre) et branché par un contrôleur (Buttons…). */
 function NmosCard({ draft, opts, status }: { draft: HwConfig; opts: DropOption<string>[]; status: NmosStatus | null }) {
   const n = draft.nmos ?? { enabled: false, port: 3212, interface: '' };
@@ -328,6 +405,7 @@ function NmosCard({ draft, opts, status }: { draft: HwConfig; opts: DropOption<s
 
 export function NetworkPage() {
   const nmos = usePoll<NmosStatus>('/api/hardware/nmos');
+  const cap = usePoll<Capacity>('/api/hardware/ports');
   const hw = useHardware();
   if (!hw) return null;
   const [snap, draft] = hw;
@@ -400,6 +478,7 @@ export function NetworkPage() {
           </FieldGrid>
         )}
       </Card>
+      <PortsLoadCard cap={cap} />
       <NmosCard draft={draft} opts={opts} status={nmos} />
       <Card icon={<NetIcon size={16} />} title={t('Roles')}>
         <FieldGrid>

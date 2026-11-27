@@ -242,6 +242,9 @@ impl Alerts {
 
 // ---------- Ce qui va mal ----------
 
+/// Un port média au-delà de cette charge (en % du lien) est signalé.
+const HEADROOM_PERCENT: f64 = hardware::capacity::HEADROOM * 100.0;
+
 /// Les problèmes vus maintenant (bloquant : lit le matériel et l'horloge).
 fn look(s: &AppState) -> Vec<Problem> {
     let a = s.alerts.settings.load_full();
@@ -342,6 +345,55 @@ fn look(s: &AppState) -> Vec<Problem> {
                     say(format!("{name} : REF de nouveau verrouillée"), format!("{name}: REF locked again")),
                 ),
                 _ => {}
+            }
+        }
+        // Les ports média ST 2110 : lien tombé, trop chargés, ou des réglages qui demandent plus.
+        if cfg.flows.iter().any(|f| f.enabled) {
+            for p in hardware::capacity::evaluate(s).ports {
+                let name = format!("{} {} ({})", say("Port média".into(), "Media port".into()), p.n, p.iface);
+                if p.up == Some(false) {
+                    push(
+                        format!("media-link:{}", p.iface),
+                        "hardware",
+                        now,
+                        false,
+                        say(format!("{name} : lien tombé"), format!("{name}: link down")),
+                        say(format!("{name} : lien revenu"), format!("{name}: link back")),
+                    );
+                    continue;
+                }
+                let Some(speed) = p.speed.filter(|v| *v > 0) else { continue };
+                let budget = speed as f64 * hardware::capacity::HEADROOM;
+                if p.planned.rx > budget || p.planned.tx > budget {
+                    push(
+                        format!("media-plan:{}", p.iface),
+                        "hardware",
+                        now,
+                        false,
+                        say(
+                            format!(
+                                "{name} : les flux réglés demandent plus que le lien ({:.1} Gb/s sur {:.0})",
+                                p.planned.rx.max(p.planned.tx) / 1000.0,
+                                speed as f64 / 1000.0
+                            ),
+                            format!(
+                                "{name}: the flows set need more than the link ({:.1} Gb/s of {:.0})",
+                                p.planned.rx.max(p.planned.tx) / 1000.0,
+                                speed as f64 / 1000.0
+                            ),
+                        ),
+                        say(format!("{name} : les flux réglés tiennent"), format!("{name}: the flows set fit")),
+                    );
+                } else if let Some(pct) = p.percent.filter(|x| *x >= HEADROOM_PERCENT) {
+                    push(
+                        format!("media-load:{}", p.iface),
+                        "hardware",
+                        now,
+                        false,
+                        say(format!("{name} : chargé à {pct:.0} %"), format!("{name}: {pct:.0} % used")),
+                        say(format!("{name} : charge revenue sous {HEADROOM_PERCENT:.0} %"), format!("{name}: load back under {HEADROOM_PERCENT:.0} %")),
+                    );
+                }
             }
         }
         for i in s.captures.list() {

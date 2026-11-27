@@ -219,3 +219,29 @@ export function editCard(d: DetectedCard, fn: (c: Card) => void) {
     else draft.cards.push(c);
   });
 }
+
+/** L'évaluation des ports média (`GET /api/hardware/ports`), en Mb/s. */
+export interface Both {
+  rx: number;
+  tx: number;
+}
+
+export interface PortLoad {
+  n: number;
+  iface: string;
+  speed?: number | null;
+  up?: boolean | null;
+  measured?: Both | null;
+  dropped?: number | null;
+  planned: Both;
+  used: Both;
+  free?: Both | null;
+  percent?: number | null;
+}
+
+export interface Capacity {
+  redundant: boolean;
+  headroom: number;
+  ports: PortLoad[];
+  formats: { name: string; mbps: number; rx?: number | null; tx?: number | null }[];
+}
