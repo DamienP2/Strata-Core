@@ -229,6 +229,6 @@ Chaque appli fournit :
 
 ## 7. Étapes suivantes
 
-1. Maquette HTML du cockpit et de la barre commune (passage d’une appli à l’autre), à valider.
+1. Maquette HTML du cockpit et de la barre commune : trois propositions dans [`docs/maquettes/cockpit.html`](../maquettes/cockpit.html), à choisir.
 2. Comparaison fine, composant par composant, pour confirmer les versions de départ marquées « à vérifier ».
 3. Écriture du paquet `@strata/ui`.

@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Strata Core · cockpit</title>
+<style>
+/*CSS*/
+</style>
+<style>
+/* ===== Maquette : éléments nouveaux du Core, jetons uniquement ===== */
+.mk-sec { font-size: var(--fs-11); font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); margin: 6px 0 -6px; }
+/* Tuiles d'applis (cockpit A) */
+.mk-app-head { height: 118px; display: grid; place-items: center; border-radius: 13px 13px 0 0; border-bottom: 1px solid var(--line); background: radial-gradient(ellipse at 30% 0%, var(--accent-soft), transparent 70%), var(--panel-2); }
+.mk-ico { display: grid; place-items: center; width: 56px; height: 56px; border-radius: 14px; background: var(--accent-soft); color: var(--accent-2); flex: none; }
+.mk-ico.sm { width: 36px; height: 36px; border-radius: 10px; }
+.mk-ico.xs { width: 28px; height: 28px; border-radius: 8px; }
+.mk-ico.off { background: var(--panel-3); color: var(--text-3); }
+.mk-addr { font: 11.5px var(--mono); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mk-foot { display: flex; align-items: center; gap: 8px; padding: 10px 14px 12px; font-size: 12px; color: var(--text-2); }
+.project-card.mk-click { cursor: pointer; }
+/* Tuiles compactes (B) */
+.mk-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.mk-tile { display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; cursor: pointer; transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s; }
+.mk-tile:hover { border-color: var(--line-2); transform: translateY(-2px); box-shadow: 0 14px 34px rgba(0, 0, 0, 0.35); }
+.mk-tile strong { display: block; font-size: 14px; }
+.mk-tile small { display: flex; align-items: center; gap: 6px; color: var(--text-3); font-size: 12px; }
+/* Lanceur (C) */
+.mk-launch-page { height: 100%; overflow: auto; background: radial-gradient(ellipse at top, #141725 0%, #0b0c12 60%); display: flex; flex-direction: column; align-items: center; padding: 9vh 24px 60px; gap: 34px; }
+:root[data-theme='light'] .mk-launch-page { background: var(--bg); }
+.mk-launch-head { text-align: center; }
+.mk-launch-head h1 { margin: 0; font-size: 22px; font-weight: 800; }
+.mk-launch-head p { margin: 4px 0 0; }
+.mk-launch { display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; max-width: 900px; }
+.mk-big { width: 176px; height: 176px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; cursor: pointer; transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s; }
+.mk-big:hover { border-color: var(--line-2); transform: translateY(-2px); box-shadow: 0 14px 34px rgba(0, 0, 0, 0.35); }
+.mk-big strong { font-size: 15px; }
+.mk-alert-chip { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--warn) 50%, transparent); background: color-mix(in srgb, var(--warn) 10%, transparent); color: var(--warn); font-size: 12.5px; cursor: pointer; }
+/* Lanceur dans la barre (C) et menu de la marque (A) */
+.mk-anchor { position: relative; flex: none; }
+.mk-brand-btn { display: flex; align-items: center; gap: 8px; background: none; border: 0; padding: 4px 8px 4px 4px; margin-left: -4px; border-radius: 8px; cursor: pointer; color: var(--text-3); }
+.mk-brand-btn:hover, .mk-brand-btn.on { background: var(--panel-2); }
+.menu.mk-switch { min-width: 240px; }
+.menu.mk-launcher { width: 330px; }
+.mk-l-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px 8px; font-size: 12px; color: var(--text-3); }
+.mk-l-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.mk-l-item { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 4px 10px; border-radius: 10px; border: 0; background: none; color: var(--text); font: inherit; font-size: 12.5px; cursor: pointer; }
+.mk-l-item:hover, .mk-l-item.on { background: var(--accent-soft); }
+.mk-sq { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; border: 0; background: none; color: var(--text-2); cursor: pointer; }
+.mk-sq:hover, .mk-sq.on { background: var(--panel-3); color: var(--text); }
+/* Rail (B) */
+.mk-shell { display: flex; height: 100%; }
+.mk-shell > .app { flex: 1; min-width: 0; }
+.mk-rail { width: 62px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 9px 0 12px; background: var(--panel); border-right: 1px solid var(--line); }
+.mk-rail-sep { width: 28px; height: 1px; background: var(--line); margin: 4px 0; }
+.mk-rail-btn { position: relative; width: 42px; height: 42px; display: grid; place-items: center; border-radius: 11px; border: 0; background: none; color: var(--text-2); cursor: pointer; }
+.mk-rail-btn:hover { background: var(--panel-3); color: var(--text); }
+.mk-rail-btn.on { background: var(--accent-soft); color: var(--accent-2); }
+.mk-rail-btn.on::before { content: ''; position: absolute; left: -10px; top: 9px; bottom: 9px; width: 3px; border-radius: 0 3px 3px 0; background: var(--accent); }
+.mk-rail-logo { width: 42px; height: 34px; display: grid; place-items: center; color: var(--text); margin-bottom: 4px; }
+:root[data-theme='light'] .mk-rail-logo { color: var(--text); }
+/* Mesures */
+.mk-meters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 1100px) { .mk-meters { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.mk-meter { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 9px; }
+.mk-meter-h { display: flex; align-items: baseline; gap: 8px; color: var(--text-2); font-size: 12px; }
+.mk-meter-h b { margin-left: auto; color: var(--text); font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.mk-meter .muted { font-size: 11.5px; }
+.mk-cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 1100px) { .mk-cols { grid-template-columns: 1fr; } }
+.mk-lines { display: flex; flex-direction: column; }
+.mk-line { display: flex; align-items: center; gap: 10px; min-height: 34px; font-size: 12.5px; }
+.mk-line + .mk-line { border-top: 1px solid var(--line); }
+.mk-line .grow { flex: 1; min-width: 0; }
+.mk-line .muted { font-size: 12px; }
+.badge.ok { background: color-mix(in srgb, var(--pvw) 15%, transparent); color: var(--pvw); }
+.badge.acc { background: var(--accent-soft); color: var(--accent-2); }
+.hw-dot.ok { background: var(--pvw); box-shadow: 0 0 0 3px color-mix(in srgb, var(--pvw) 18%, transparent); }
+.hw-dot.warn { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 18%, transparent); }
+.mk-port-name { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.mk-port-name strong { min-width: 52px; }
+.mk-port-name .dd-btn { width: 110px; height: var(--h-control-dense); }
+.hw-port .mono { font: 12px var(--mono); }
+.mk-uses { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.user-table td.r { text-align: right; white-space: nowrap; }
+.user-table .mono { font-family: var(--mono); font-size: 12px; }
+.mk-apphead { display: flex; align-items: center; gap: 14px; }
+.mk-apphead h1 { margin: 0; font-size: 22px; font-weight: 800; }
+.mk-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+.mk-libcard { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+.mk-libcard.off { opacity: 0.85; }
+.mk-libcard-h { display: flex; align-items: center; gap: 12px; }
+.mk-libcard-h div { flex: 1; min-width: 0; }
+.mk-libcard-h strong { display: block; font-size: 14.5px; }
+.mk-libcard-f { display: flex; align-items: center; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
+.mk-libcard .check { font-size: 12.5px; }
+.mk-sso-row { display: flex; align-items: center; gap: 10px; }
+.mk-tabbar { margin: -4px 0 0; }
+.mk-sub { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* Corps d'une appli (fictif) : images de la maquette de LiveCut */
+.sc-pic.p1 { background: radial-gradient(ellipse at 30% 40%, #3a4a7a 0%, transparent 55%), radial-gradient(ellipse at 75% 70%, #6b3a52 0%, transparent 50%), linear-gradient(160deg, #1a1f33, #0a0b12); }
+.sc-pic.p2 { background: radial-gradient(ellipse at 60% 30%, #2f6b62 0%, transparent 55%), radial-gradient(ellipse at 20% 80%, #22304f 0%, transparent 55%), linear-gradient(200deg, #12202a, #07080c); }
+.sc-pic.p3 { background: radial-gradient(ellipse at 50% 55%, #7a5a2a 0%, transparent 50%), linear-gradient(180deg, #23283b, #0b0c12); }
+.sc-pic.p4 { background: radial-gradient(ellipse at 35% 35%, #4b3a7a 0%, transparent 55%), radial-gradient(ellipse at 80% 60%, #2a5a7a 0%, transparent 50%), linear-gradient(140deg, #171a2b, #08090e); }
+.mk-appbody .project-grid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+/* Commandes de la maquette */
+.mock-note { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 9000; display: flex; gap: 6px; align-items: center; padding: 6px 8px; border-radius: 10px; background: #000; color: #fff; font: 11px Inter, system-ui, sans-serif; opacity: 0.9; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4); white-space: nowrap; }
+.mock-note button { border: 1px solid #444; background: #111; color: #ddd; border-radius: 6px; padding: 4px 9px; cursor: pointer; font: inherit; }
+.mock-note button.on { background: #fff; color: #000; }
+.mock-note i { width: 1px; height: 18px; background: #444; margin: 0 4px; }
+.mock-note span { color: #aaa; padding: 0 4px; }
+</style>
+</head>
+<body>
+<div id="root" style="height:100%"></div>
+
+<div class="mock-note" id="mock">
+  <span>Proposition</span>
+  <button data-prop="A">A · Onglets</button><button data-prop="B">B · Rail</button><button data-prop="C">C · Lanceur</button>
+  <i></i>
+  <button data-role="admin">Administrateur</button><button data-role="user">Utilisateur</button>
+  <i></i>
+  <button data-mtheme>Clair / Sombre</button>
+</div>
+
+<script>
+const ICONS = /*ICONS*/{};
+const F = '/*F*/';
+const ic = (n, s = 14) => `<svg class="lucide" xmlns="http://www.w3.org/2000/svg" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n] || ''}</svg>`;
+
+// ------------------------------------------------------------------ données
+const SERVER = 'strata01';
+const DOMAIN = 'strata01.regie.exemple.fr';
+const APPS = [
+  { id: 'livecut', name: 'LiveCut', icon: 'scissors', ver: '0.3.0', next: '0.3.1', state: 'active', user: true, cpu: 22, mem: '9,8 Go', tabs: [['radio-tower', 'Enregistreurs'], ['scissors', 'Extraction'], ['clapperboard', 'Extraits'], ['settings', 'Réglages']] },
+  { id: 'graphics', name: 'Graphics', icon: 'layers', ver: '0.8.0', state: 'active', user: false, cpu: 9, mem: '3,1 Go', tabs: [['layers', 'Projets'], ['package', 'Ressources'], ['activity', 'Données'], ['radio-tower', 'Diffusion'], ['settings', 'Réglages']] },
+  { id: 'multiview', name: 'Multiview', icon: 'layout-grid', ver: '0.5.2', state: 'active', user: true, cpu: 6, mem: '2,4 Go', tabs: [['layout-grid', 'Mosaïques'], ['radio-tower', 'Sources'], ['monitor', 'Sorties'], ['settings', 'Réglages']] },
+  { id: 'network', name: 'Network', icon: 'network', ver: '0.4.1', next: '0.5.0', needs: '1.1', state: 'inactive', tabs: [] },
+  { id: 'media', name: 'Media', icon: 'film', ver: '0.1.0', state: 'none', tabs: [] },
+  { id: 'call', name: 'Call', icon: 'phone', ver: '0.1.0', state: 'none', tabs: [] },
+];
+const ME = { admin: { name: 'Damien', init: 'D', role: 'Administrateur du serveur' }, user: { name: 'Claire Martin', init: 'C', role: 'Utilisateur' } };
+const appUrl = (a) => `${a.id}.${DOMAIN}`;
+
+// ------------------------------------------------------------------ état
+const S = { prop: 'A', role: 'admin', where: 'home', page: null, tab: null, app: null, menu: null };
+const isAdmin = () => S.role === 'admin';
+const visibleApps = () => APPS.filter((a) => a.state === 'active' && (isAdmin() || a.user));
+const appById = (id) => APPS.find((a) => a.id === id);
+
+// ------------------------------------------------------------------ pièces communes
+function brand(module, { lead = true } = {}) {
+  return `<div class="brand" aria-label="Strata ${module}, Le Figaro AudioVisuel"><span class="brand-lockup">${lead ? `<svg class="brand-f-lead" viewBox="93.8 -0.2 52.3 52.95" width="23.7" height="24" aria-hidden="true"><path fill="currentColor" d="${F}"/></svg>` : ''}<span class="brand-name">Strata</span><span class="brand-module">${module}</span></span></div>`;
+}
+const fLogo = (h = 26) => `<svg viewBox="93.8 -0.2 52.3 52.95" width="${(h * 52.3) / 52.95}" height="${h}" aria-hidden="true"><path fill="currentColor" d="${F}"/></svg>`;
+function right() {
+  const me = ME[S.role];
+  return `<div class="spacer"></div>
+  <span class="ux1-pill" title="${SERVER} · Connecté&#10;CPU 34 % · 32 cœurs&#10;Mémoire 21 Go sur 64 Go"><span class="ux1-dot"></span>Connecté</span>
+  <button class="learn-help" title="Aide">${ic('circle-help', 17)}</button>
+  ${S.prop === 'C' && isAdmin() ? `<button class="learn-help ${S.where === 'settings' ? 'on' : ''}" title="Réglages du serveur" data-go="settings">${ic('settings', 17)}</button>` : ''}
+  <div class="ux1-user">
+    <button class="ux1-user-btn named ${S.menu === 'user' ? 'on' : ''}" data-menu="user"><span class="avatar">${me.init}</span><span class="user-name">${me.name}</span>${ic('chevron-down', 13)}</button>
+    ${S.menu === 'user' ? `<div class="menu ux1-umenu">
+      <div class="ux1-who"><span class="avatar">${me.init}</span><div><b>${me.name}</b><small>${me.role}</small></div></div>
+      <div class="menu-sep"></div>
+      <div class="ux1-mrow">${ic('languages')} Langue<div class="lang-switch"><button>EN</button><button class="on">FR</button></div></div>
+      <div class="ux1-mrow">${ic('sun-moon')} Thème<div class="lang-switch"><button data-theme-set="dark" class="${theme() === 'dark' ? 'on' : ''}">Sombre</button><button data-theme-set="light" class="${theme() === 'light' ? 'on' : ''}">Clair</button><button>Système</button></div></div>
+      <button class="ux1-mi">${ic('keyboard')} Raccourcis clavier <span class="ux1-cap">?</span></button>
+      <div class="menu-sep"></div>
+      <button class="ux1-mi danger">${ic('log-out')} Se déconnecter</button>
+    </div>` : ''}
+  </div>`;
+}
+const tabsHtml = (items, cur, attr) => `<div class="tabs home-tabs">${items.map(([id, icon, label]) => `<button class="${cur === id ? 'on' : ''}" ${attr}="${id}">${ic(icon)} <span>${label}</span></button>`).join('')}</div>`;
+const head = (title, sub, actions = '') => `<div class="settings-head"><div><h1>${title}</h1>${sub ? `<p class="muted">${sub}</p>` : ''}</div><div class="spacer"></div>${actions}</div>`;
+const card = (icon, title, body, actions = '') => `<section class="set-card"><header>${ic(icon, 16)}<h2>${title}</h2>${actions ? `<div class="spacer"></div>${actions}` : ''}</header><div class="set-body">${body}</div></section>`;
+const field = (label, input) => `<label class="set-field"><span class="set-label">${label}</span>${input}</label>`;
+const dd = (label, detail = '') => `<button class="dd-btn"><span class="dd-label">${label}</span>${detail ? `<span class="dd-detail">${detail}</span>` : ''}${ic('chevron-down', 12)}</button>`;
+const sw = (label, on = true) => `<label class="check"><input type="checkbox" ${on ? 'checked' : ''} /> ${label}</label>`;
+const seg = (opts, on = 0) => `<div class="segmented">${opts.map((o, i) => `<button class="${i === on ? 'on' : ''}">${o}</button>`).join('')}</div>`;
+const bar = (pct, tone = 'ok') => `<span class="perf-bar tone-${tone}"><span class="perf-bar-fill" style="transform:translateX(${pct - 100}%)"></span></span>`;
+const meter = (label, val, pct, sub, tone = 'ok') => `<div class="mk-meter"><div class="mk-meter-h"><span>${label}</span><b>${val}</b></div>${bar(pct, tone)}<span class="muted">${sub}</span></div>`;
+const stateBadge = (a) => a.state === 'active' ? '<span class="badge ok">Active</span>' : a.state === 'inactive' ? '<span class="badge">Inactive</span>' : '<span class="badge acc">Disponible</span>';
+
+// ------------------------------------------------------------------ pages des réglages (communes aux trois propositions)
+const PAGES = {
+  general: () => head('Nom et adresses', DOMAIN) +
+    card('server', 'Serveur', `<div class="set-grid">${field('Nom du serveur', `<input value="${SERVER}" />`)}${field('Nom DNS', `<input value="${DOMAIN}" />`)}${field('Fuseau horaire', dd('Europe/Paris'))}</div>
+      <div class="mk-sub"><span class="badge ok">${ic('circle-check', 11)} *.${DOMAIN} résolu</span></div>`) +
+    card('globe', 'Adresses', `<table class="user-table"><thead><tr><th>Appli</th><th>Adresse</th><th>État</th></tr></thead><tbody>
+      <tr><td><strong>Cockpit</strong></td><td class="mono">https://${DOMAIN}</td><td><span class="badge ok">En ligne</span></td></tr>
+      ${APPS.filter((a) => a.state !== 'none').map((a) => `<tr><td><strong>${a.name}</strong></td><td class="mono">https://${appUrl(a)}</td><td>${a.state === 'active' ? '<span class="badge ok">En ligne</span>' : '<span class="badge">Inactive</span>'}</td></tr>`).join('')}
+    </tbody></table>`),
+  https: () => head('HTTPS', 'Certificat valable jusqu’au 27/11/2027') +
+    card('lock', 'Certificat', `<div class="set-grid two">${field('Origine', seg(['Fait par Strata', 'Entreprise']))}${field('Expire le', '<input value="27/11/2027" readonly />')}</div>
+      ${field('Noms couverts', `<input value="${DOMAIN}, *.${DOMAIN}" readonly />`)}
+      <div class="mk-sub"><button class="btn">${ic('upload')} Importer un certificat</button><button class="btn ghost">${ic('rotate-ccw')} Renouveler</button></div>`) +
+    card('globe', 'HTTP', field('Requêtes en HTTP', seg(['Rediriger vers HTTPS', 'Refuser']))),
+  updates: () => head('Mises à jour', 'Core 1.0.0 · 2 mises à jour disponibles', `<button class="btn">${ic('rotate-ccw')} Vérifier maintenant</button>`) +
+    card('cloud-download', 'Versions', `<table class="user-table"><thead><tr><th>Composant</th><th>Installée</th><th>Disponible</th><th></th></tr></thead><tbody>
+      <tr><td><strong>Core</strong></td><td class="mono">1.0.0</td><td><span class="badge ok">À jour</span></td><td></td></tr>
+      ${APPS.filter((a) => a.state !== 'none').map((a) => `<tr><td><strong>${a.name}</strong> ${a.state === 'inactive' ? '<span class="badge">Inactive</span>' : ''}</td><td class="mono">${a.ver}</td>
+        <td>${a.next ? `<span class="mono">${a.next}</span> ${a.needs ? `<span class="badge warn">Demande le Core ${a.needs}</span>` : ''}` : '<span class="badge ok">À jour</span>'}</td>
+        <td class="r">${a.next && !a.needs ? `<button class="btn small primary">${ic('cloud-download', 13)} Mettre à jour</button>` : ''}</td></tr>`).join('')}
+    </tbody></table>
+    ${sw('Vérifier chaque jour')}`) +
+    card('key-round', 'Accès GitHub', `<table class="user-table"><thead><tr><th>Dépôt</th><th>Clé</th><th></th></tr></thead><tbody>
+      ${['Strata-Core', 'Strata-Cut', 'CG', 'Strata-Multiview', 'Strata-Network'].map((r) => `<tr><td class="mono">DamienP2/${r}</td><td><span class="badge ok">Enregistrée</span></td><td class="r"><button class="btn small">Remplacer</button></td></tr>`).join('')}
+    </tbody></table>`) +
+    card('upload', 'Hors ligne', `<div class="mk-sub"><button class="btn">${ic('upload')} Envoyer une archive</button><span class="muted">.tar.gz d’une release</span></div>`),
+  library: () => head('Bibliothèque', '6 applis · 3 actives') +
+    `<div class="media-toolbar"><div class="asr-chips"><button class="asr-chip on">Toutes <span class="asr-chip-n">6</span></button><button class="asr-chip">Actives <span class="asr-chip-n">3</span></button><button class="asr-chip">Inactives <span class="asr-chip-n">1</span></button><button class="asr-chip">Disponibles <span class="asr-chip-n">2</span></button></div></div>
+    <div class="mk-cards">${APPS.map(libCard).join('')}</div>`,
+  users: () => head('Utilisateurs', '5 utilisateurs · 2 administrateurs', `<button class="btn primary">${ic('user-plus')} Nouvel utilisateur</button>`) +
+    `<div class="user-grid">${[
+      ['Damien', 'damien', 1, 1, 'Réalisation · Technique'], ['Claire Martin', 'c.martin', 0, 1, 'Montage'], ['Hugo Bernard', 'h.bernard', 0, 1, 'Réalisation'],
+      ['Inès Petit', 'i.petit', 1, 0, 'Technique'], ['Régie B', 'regie-b', 0, 0, '—'],
+    ].map(([n, l, adm, sso, g]) => `<div class="user-card ${adm ? 'role-admin' : 'role-viewer'}"><div class="user-card-head"><span class="avatar">${n[0]}</span><div class="user-card-name"><strong>${n}</strong><span class="user-card-sub muted"><span class="user-card-login">${l}</span>${sso ? '<span class="badge sso">SSO</span>' : ''}</span></div></div>
+      <div>${adm ? '<span class="badge role-admin">Administrateur du serveur</span>' : '<span class="badge role-viewer">Utilisateur</span>'}</div>
+      <div class="muted">${ic('users-round', 12)} ${g}</div>
+      <div class="user-card-actions"><button class="btn small ghost">Modifier</button><div class="spacer"></div><button class="icon-btn ghost" title="Plus">${ic('ellipsis')}</button></div></div>`).join('')}</div>`,
+  groups: () => head('Groupes', '4 groupes', `<button class="btn primary">${ic('plus')} Nouveau groupe</button>`) +
+    `<table class="user-table"><thead><tr><th>Groupe</th><th>Membres</th><th>Origine</th><th></th></tr></thead><tbody>
+      ${[['Réalisation', 6, 'Annuaire'], ['Montage', 4, 'Annuaire'], ['Technique', 3, 'Annuaire'], ['Graphistes', 3, 'Local']].map(([g, n, o]) => `<tr><td><strong>${g}</strong></td><td>${n}</td><td>${o === 'Local' ? '<span class="badge">Local</span>' : '<span class="badge acc">Annuaire</span>'}</td><td class="r"><button class="icon-btn ghost">${ic('ellipsis')}</button></td></tr>`).join('')}
+    </tbody></table>`,
+  sso: () => head('Annuaire', 'OpenID Connect · Okta') +
+    card('key-round', 'OpenID Connect', `${sw('Connexion par l’annuaire')}
+      <div class="set-grid two">${field('Fournisseur', dd('Okta'))}${field('Émetteur', '<input value="https://exemple.okta.com" />')}${field('Identifiant client', '<input value="0oa9strata01" />')}${field('Secret', '<input type="password" value="secret-secret" />')}</div>
+      ${field('Adresse de retour', `<input value="https://${DOMAIN}/api/auth/sso/callback" readonly />`)}
+      ${field('Groupe des administrateurs du serveur', '<input value="strata-admins" />')}
+      <div class="mk-sub"><button class="btn">${ic('send')} Tester</button></div>`),
+  sdi: () => card('monitor', 'DeckLink 8K Pro', `<div class="hw-ports">${[
+      ['SDI 1', 'Entrée', 'ok', '1080i50', ['LiveCut', 'Multiview']], ['SDI 2', 'Entrée', 'warn', 'Sans signal', ['LiveCut']],
+      ['SDI 3', 'Sortie', 'ok', '1080i50', ['Graphics']], ['SDI 4', 'Sortie', '', '—', []],
+    ].map(([n, f, st, fmt, uses]) => `<div class="hw-port"><span class="hw-dot ${st}"></span><span class="mk-port-name"><strong>${n}</strong>${dd(f)}</span><span class="${st === 'warn' ? '' : 'mono'}" style="${st === 'warn' ? 'color:var(--warn)' : ''}">${fmt}</span><span class="mk-uses">${uses.length ? uses.map((u) => `<span class="badge acc">${u}</span>`).join('') : '<span class="muted">Libre</span>'}</span></div>`).join('')}</div>
+      <div class="mk-sub"><span class="badge ok">Référence verrouillée</span><span class="muted">Pilote Desktop Video 14.2</span></div>`, '<span class="badge">4 connecteurs</span>'),
+  ndi: () => card('radio-tower', 'NDI', `<div class="set-grid">${field('Bibliothèque', '<input value="NDI 6.1" readonly />')}${field('Groupes', '<input value="public" />')}${field('Serveur de découverte', '<input placeholder="Aucun" />')}</div>
+      <table class="user-table"><thead><tr><th>Source</th><th>Format</th><th>Utilisée par</th></tr></thead><tbody>
+      ${[['CAM-PTZ-03 (Studio B)', '1080p50', 'LiveCut'], ['REGIE-B (Programme)', '1080i50', 'Multiview'], ['GFX-02 (Habillage)', '1080i50', '—']].map(([s, f, u]) => `<tr><td><strong>${s}</strong></td><td class="mono">${f}</td><td>${u === '—' ? '<span class="muted">—</span>' : `<span class="badge acc">${u}</span>`}</td></tr>`).join('')}
+      </tbody></table>`),
+  st2110: () => card('waves', 'ST 2110', `<table class="user-table"><thead><tr><th>Flux</th><th>Sens</th><th>Multicast</th><th>Format</th><th>Carte</th><th>Utilisé par</th></tr></thead><tbody>
+      ${[['Régie 2', 'Entrée', '239.10.2.1:5004', '1080i50', 'ens2f0', 'LiveCut'], ['Programme fill', 'Sortie', '239.20.1.1:5004', '1080i50', 'ens2f0', 'Graphics'], ['Programme key', 'Sortie', '239.20.1.2:5004', '1080i50', 'ens2f0', 'Graphics']].map((r) => `<tr><td><strong>${r[0]}</strong></td><td>${r[1]}</td><td class="mono">${r[2]}</td><td class="mono">${r[3]}</td><td class="mono">${r[4]}</td><td><span class="badge acc">${r[5]}</span></td></tr>`).join('')}
+      </tbody></table>`, `<button class="btn small">${ic('plus', 13)} Nouveau flux</button>`),
+  network: () => card('ethernet-port', 'Cartes réseau', `<table class="user-table"><thead><tr><th>Interface</th><th>Adresse</th><th>Débit</th><th>Rôle</th><th>État</th></tr></thead><tbody>
+      ${[['eno1', '10.0.0.20/24', '1 Gb/s', 'Gestion', 1], ['ens2f0', '192.168.110.20/24', '25 Gb/s', 'ST 2110 · rouge', 1], ['ens2f1', '192.168.120.20/24', '25 Gb/s', 'ST 2110 · bleu', 1], ['eno2', '—', '—', 'Aucun', 0]].map((r) => `<tr><td class="mono">${r[0]}</td><td class="mono">${r[1]}</td><td>${r[2]}</td><td style="width:200px">${dd(r[3])}</td><td>${r[4] ? '<span class="badge ok">Connectée</span>' : '<span class="badge">Débranchée</span>'}</td></tr>`).join('')}
+      </tbody></table>`),
+  clock: () => `<div class="set-grid two">` +
+    card('clock', 'PTP', `<div class="mk-lines">${[['État', '<span class="badge ok">Verrouillé</span>'], ['Grand maître', '<span class="mono">00:1d:c1:ff:fe:0a:12:34</span>'], ['Domaine', '127'], ['Décalage', '<span class="mono">± 42 ns</span>'], ['Interface', '<span class="mono">ens2f0</span>']].map(([k, v]) => `<div class="mk-line"><span class="grow muted">${k}</span>${v}</div>`).join('')}</div>`) +
+    card('globe', 'NTP', `<div class="mk-lines">${[['État', '<span class="badge ok">Synchronisé</span>'], ['Serveurs', '<span class="mono">ntp1.exemple.fr · ntp2.exemple.fr</span>'], ['Écart', '<span class="mono">0,3 ms</span>']].map(([k, v]) => `<div class="mk-line"><span class="grow muted">${k}</span>${v}</div>`).join('')}</div>`) + `</div>`,
+  state: () => head('Ressources', `${SERVER} · en marche depuis 12 j`) + meters() +
+    card('activity', 'Par appli', `<table class="user-table"><thead><tr><th>Appli</th><th>Processeur</th><th>Mémoire</th><th>État</th></tr></thead><tbody>
+      <tr><td><strong>Core</strong></td><td style="width:260px">${bar(3)}</td><td class="mono">0,4 Go</td><td><span class="badge ok">En marche</span></td></tr>
+      ${APPS.filter((a) => a.state === 'active').map((a) => `<tr><td><strong>${a.name}</strong></td><td>${bar(a.cpu)}</td><td class="mono">${a.mem}</td><td><span class="badge ok">En marche</span></td></tr>`).join('')}
+    </tbody></table>`),
+  logs: () => head('Journaux', '5 000 dernières lignes') + logs(),
+  alerts: () => head('Alertes', '1 alerte en cours') +
+    card('bell', 'Destinations', `<table class="user-table"><thead><tr><th>Destination</th><th>Adresse</th><th></th></tr></thead><tbody>
+      <tr><td>${ic('webhook', 13)} Teams</td><td class="mono">https://exemple.webhook.office.com/…</td><td class="r"><button class="btn small">${ic('send', 13)} Tester</button></td></tr>
+      <tr><td>${ic('mail', 13)} E-mail</td><td class="mono">regie-tech@exemple.fr</td><td class="r"><button class="btn small">${ic('send', 13)} Tester</button></td></tr>
+    </tbody></table>`, `<button class="btn small">${ic('plus', 13)} Ajouter</button>`) +
+    card('triangle-alert', 'Évènements', `<div class="set-grid">${['Entrée sans signal', 'Image noire ou figée', 'Silence', 'Disque presque plein', 'Horloge PTP perdue', 'Appli arrêtée', 'Carte DeckLink absente', 'Redémarrage imprévu'].map((e, i) => sw(e, i !== 2)).join('')}</div>
+      <div class="set-grid">${field('Prévenir après', '<div class="num-field"><input value="10" /><span class="suffix">s</span></div>')}</div>`),
+  snmp: () => head('SNMP', 'Actif · v2c · port 161') +
+    card('radio', 'SNMP', `${sw('Exposer l’état du serveur')}
+      <div class="set-grid">${field('Version', seg(['v2c', 'v3']))}${field('Communauté', '<input value="regie-ro" />')}${field('Port', '<input value="161" />')}</div>
+      ${field('Destination des alertes (traps)', '<input value="10.0.0.5:162" />')}`),
+  overview: () => head(SERVER, `${DOMAIN} · Core 1.0.0 · en marche depuis 12 j`) + meters() +
+    `<div class="mk-cols">${card('triangle-alert', 'Alertes', alertLines())}${card('monitor', 'Matériel', hwLines())}${card('package', 'Applis', APPS.filter((a) => a.state !== 'none').map((a) => `<div class="mk-line"><span class="nav-dot ${a.state === 'active' ? 'ok' : ''}"></span><span class="grow">${a.name}</span>${a.next ? '<span class="badge warn">Mise à jour</span>' : ''}<span class="muted mono">${a.ver}</span></div>`).join('').replace(/^/, '<div class="mk-lines">') + '</div>')}</div>`,
+};
+PAGES.video = () => {
+  const t = S.tab || 'sdi';
+  return head('Vidéo', 'DeckLink · NDI · ST 2110') + `<div class="mk-tabbar">${tabsHtml([['sdi', 'monitor', 'SDI'], ['ndi', 'radio-tower', 'NDI'], ['st2110', 'waves', 'ST 2110']], t, 'data-tab')}</div>` + PAGES[t]();
+};
+const TITLES = { sdi: ['Cartes SDI', '1 carte · 4 connecteurs'], ndi: ['NDI', '3 sources'], st2110: ['ST 2110', '3 flux'], network: ['Réseau', '4 interfaces'], clock: ['Horloge', 'PTP verrouillé'] };
+for (const k of Object.keys(TITLES)) { const f = PAGES[k]; PAGES[k + ':page'] = () => head(...TITLES[k]) + f(); }
+
+function libCard(a) {
+  const f = a.state === 'active'
+    ? `${sw('Active')}<div class="spacer"></div><button class="btn small">${ic('arrow-up-right', 13)} Ouvrir</button><button class="icon-btn ghost" title="Plus">${ic('ellipsis')}</button>`
+    : a.state === 'inactive'
+      ? `${sw('Active', false)}<div class="spacer"></div><button class="icon-btn ghost" title="Plus">${ic('ellipsis')}</button>`
+      : `<div class="spacer"></div><button class="btn small primary">${ic('cloud-download', 13)} Installer</button>`;
+  return `<div class="mk-libcard ${a.state === 'active' ? '' : 'off'}"><div class="mk-libcard-h"><span class="mk-ico sm ${a.state === 'active' ? '' : 'off'}">${ic(a.icon, 18)}</span><div><strong>${a.name}</strong><span class="muted mono">${a.ver}</span></div>${a.state === 'none' ? stateBadge(a) : ''}</div><div class="mk-libcard-f">${f}</div></div>`;
+}
+function meters() {
+  return `<div class="mk-meters">${meter('Processeur', '34 %', 34, '32 cœurs')}${meter('Mémoire', '21 Go', 33, 'sur 64 Go')}${meter('Disque des données', '67 %', 67, '2,6 To libres sur 8 To', 'warn')}${meter('Réseau', '1,2 Gb/s', 24, 'ens2f0 · 25 Gb/s')}</div>`;
+}
+const alertLines = () => `<div class="mk-lines"><div class="mk-line"><span class="nav-dot warn"></span><span class="grow">SDI 2 sans signal</span><span class="muted mono">00:12:40</span></div><div class="mk-line"><span class="nav-dot"></span><span class="grow muted">Disque à 67 %</span><span class="muted">surveillé</span></div></div>`;
+const hwLines = () => `<div class="mk-lines">${[['ok', 'SDI', '3 sur 4 avec signal'], ['ok', 'NDI', '3 sources'], ['ok', 'ST 2110', '3 flux'], ['ok', 'PTP', 'verrouillé']].map(([d, k, v]) => `<div class="mk-line"><span class="nav-dot ${d}"></span><span class="grow">${k}</span><span class="muted">${v}</span></div>`).join('')}</div>`;
+function logs() {
+  const L = [['14:46:38', 'INFO', 'core', 'session opened for c.martin (sso)'], ['14:46:12', 'WARN', 'livecut', 'SDI 2: no signal'], ['14:45:01', 'INFO', 'graphics', 'channel 1: template "Bandeau" on air'],
+    ['14:44:59', 'INFO', 'core', 'update check: livecut 0.3.1 available'], ['14:40:17', 'INFO', 'multiview', 'layout "Régie A" loaded'], ['14:31:02', 'ERROR', 'livecut', 'srt://0.0.0.0:9001: connection lost'],
+    ['14:30:44', 'INFO', 'core', 'ptp: locked to 00:1d:c1:ff:fe:0a:12:34'], ['14:12:09', 'INFO', 'core', 'app multiview started']];
+  return `<div class="media-toolbar log-tools"><label class="search">${ic('search')}<input placeholder="Rechercher" /></label><div style="width:200px">${dd('Toutes les sources')}</div><div class="log-level">${dd('Info et plus')}</div><div class="spacer"></div><button class="btn">${ic('cloud-download')} Exporter pour le support</button></div>
+    <div class="log-box" style="height:auto;min-height:0">${L.map(([t, l, g, m]) => `<div class="log-line"><span class="log-at">${t}</span><span class="log-lvl ${l}">${l}</span><span class="log-target">${g}</span><span class="log-msg">${m}</span></div>`).join('')}</div>`;
+}
+function appPage(id) {
+  const a = appById(id);
+  const active = a.state === 'active';
+  return `<div class="mk-apphead"><span class="mk-ico ${active ? '' : 'off'}">${ic(a.icon, 26)}</span><div><h1>${a.name}</h1><p class="muted" style="margin:4px 0 0">${active ? `https://${appUrl(a)}` : 'Installée · inactive'}</p></div><div class="spacer"></div>${active ? `<button class="btn primary" data-open-app="${a.id}">${ic('arrow-up-right')} Ouvrir</button>` : ''}</div>` +
+    card('power', 'État', `<div class="mk-sub">${sw('Active', active)}${active ? '<span class="badge ok">En marche</span>' : '<span class="badge">Arrêtée</span>'}<div class="spacer"></div>${active ? `<button class="btn">${ic('rotate-ccw')} Redémarrer</button>` : ''}</div>`) +
+    card('cloud-download', 'Version', `<div class="mk-sub"><span class="update-version">${a.ver}</span><div class="spacer"></div>${a.next ? (a.needs ? `<span class="badge warn">${a.next} demande le Core ${a.needs}</span>` : `<span class="mono">${a.next}</span><button class="btn primary">${ic('cloud-download')} Mettre à jour</button>`) : '<span class="badge ok">À jour</span>'}</div>`) +
+    (active ? card('activity', 'Ressources', `<div class="set-grid two"><div class="mk-meter"><div class="mk-meter-h"><span>Processeur</span><b>${a.cpu} %</b></div>${bar(a.cpu)}</div><div class="mk-meter"><div class="mk-meter-h"><span>Mémoire</span><b>${a.mem}</b></div>${bar(15)}</div></div>`) +
+      card('scroll-text', 'Journal', `<div class="log-box" style="height:auto;min-height:0">${[['14:46:12', 'WARN', 'SDI 2: no signal'], ['14:31:02', 'ERROR', 'srt://0.0.0.0:9001: connection lost'], ['14:12:09', 'INFO', 'started']].map(([t, l, m]) => `<div class="log-line"><span class="log-at">${t}</span><span class="log-lvl ${l}">${l}</span><span class="log-msg">${m}</span></div>`).join('')}</div>`) : '') +
+    `<div><button class="btn danger">${ic('trash-2')} Désinstaller</button></div>`;
+}
+
+// ------------------------------------------------------------------ navigation des réglages, par proposition
+const NAV = {
+  A: [
+    ['Supervision', [['state', 'gauge', 'Ressources'], ['logs', 'scroll-text', 'Journaux'], ['alerts', 'bell', 'Alertes', '1'], ['snmp', 'radio', 'SNMP']]],
+    ['Matériel', [['video', 'monitor', 'Vidéo'], ['network:page', 'ethernet-port', 'Réseau'], ['clock:page', 'clock', 'Horloge']]],
+    ['Applis', [['library', 'package', 'Bibliothèque', '6']]],
+    ['Comptes', [['users', 'users', 'Utilisateurs', '5'], ['groups', 'users-round', 'Groupes', '4'], ['sso', 'key-round', 'Annuaire']]],
+    ['Serveur', [['general', 'server', 'Nom et adresses'], ['https', 'lock', 'HTTPS'], ['updates', 'cloud-download', 'Mises à jour', '2']]],
+  ],
+  Badm: [
+    ['Comptes', [['users', 'users', 'Utilisateurs', '5'], ['groups', 'users-round', 'Groupes', '4'], ['sso', 'key-round', 'Annuaire']]],
+    ['Applis', [['library', 'package', 'Bibliothèque', '6'], ['updates', 'cloud-download', 'Mises à jour', '2']]],
+    ['Serveur', [['general', 'server', 'Nom et adresses'], ['https', 'lock', 'HTTPS']]],
+  ],
+  C: () => [
+    ['Ce serveur', [['overview', 'layout-dashboard', 'Vue d’ensemble'], ['general', 'globe', 'Nom et adresses'], ['https', 'lock', 'HTTPS'], ['updates', 'cloud-download', 'Mises à jour', '2']]],
+    ['Applis', [...APPS.filter((a) => a.state !== 'none').map((a) => ['app:' + a.id, a.icon, a.name, null, a.state === 'active' ? 'ok' : 'off']), ['library', 'plus', 'Ajouter une appli']]],
+    ['Personnes', [['users', 'users', 'Utilisateurs', '5'], ['groups', 'users-round', 'Groupes', '4'], ['sso', 'key-round', 'Annuaire']]],
+    ['Matériel', [['sdi:page', 'monitor', 'Cartes SDI'], ['ndi:page', 'radio-tower', 'NDI'], ['st2110:page', 'waves', 'ST 2110'], ['network:page', 'ethernet-port', 'Réseau'], ['clock:page', 'clock', 'Horloge']]],
+    ['Surveillance', [['logs', 'scroll-text', 'Journaux'], ['alerts', 'bell', 'Alertes', '1'], ['snmp', 'radio', 'SNMP']]],
+  ],
+};
+function sidePage(groups, cur) {
+  const nav = groups.map(([title, items]) => `<div class="lib-nav-section"><span class="grow">${title}</span></div>` + items.map(([id, icon, label, count, dot]) =>
+    `<div class="lib-nav-item ${cur === id ? 'on' : ''}" data-page="${id}">${ic(icon, 15)}<span class="grow">${label}</span>${count ? `<span class="count">${count}</span>` : ''}${dot ? `<span class="nav-dot ${dot === 'ok' ? 'ok' : ''}"></span>` : ''}</div>`).join('')).join('');
+  const body = cur.startsWith('app:') ? appPage(cur.slice(4)) : (PAGES[cur] || PAGES.general)();
+  return `<section class="projects-page"><aside class="lib-nav">${nav}</aside><main class="library"><div class="library-inner">${body}</div></main></section>`;
+}
+
+// ------------------------------------------------------------------ accueils
+function homeA() {
+  const apps = visibleApps();
+  return `<section class="library"><div class="library-inner wide">${head(SERVER, `${apps.length} applis`)}
+    ${isAdmin() ? `<div><span class="mk-alert-chip" data-go="settings" data-page-go="alerts">${ic('triangle-alert', 13)} SDI 2 sans signal depuis 00:12:40</span></div>` : ''}
+    <div class="project-grid">${apps.map((a) => `<article class="project-card mk-click" data-open-app="${a.id}"><div class="mk-app-head"><span class="mk-ico">${ic(a.icon, 28)}</span></div>
+      <div class="project-body"><strong style="font-size:15px">${a.name}</strong><span class="mk-addr">${appUrl(a)}</span></div>
+      <div class="mk-foot"><span class="nav-dot ok"></span>En marche<div class="spacer"></div><button class="btn small">${ic('arrow-up-right', 13)} Ouvrir</button></div></article>`).join('')}</div></div></section>`;
+}
+function homeB() {
+  const apps = visibleApps();
+  return `<section class="library"><div class="library-inner wide">${head(SERVER, isAdmin() ? `${DOMAIN} · Core 1.0.0` : `${apps.length} applis`)}
+    <div class="mk-sec">Applis</div>
+    <div class="mk-tiles">${apps.map((a) => `<div class="mk-tile" data-open-app="${a.id}"><span class="mk-ico sm">${ic(a.icon, 18)}</span><div><strong>${a.name}</strong><small><span class="nav-dot ok"></span>En marche</small></div></div>`).join('')}</div>
+    ${isAdmin() ? `<div class="mk-sec">Serveur</div>${meters()}<div class="mk-cols">${card('triangle-alert', 'Alertes', alertLines(), '<span class="badge warn">1</span>')}${card('monitor', 'Matériel', hwLines())}${card('cloud-download', 'Mises à jour', `<div class="mk-lines"><div class="mk-line"><span class="grow">LiveCut</span><span class="mono muted">0.3.0 → 0.3.1</span></div><div class="mk-line"><span class="grow">Network</span><span class="badge warn">Demande le Core 1.1</span></div></div>`)}</div>` : ''}
+  </div></section>`;
+}
+function homeC() {
+  const apps = visibleApps();
+  return `<section class="mk-launch-page"><div class="mk-launch-head"><h1>${SERVER}</h1><p class="muted">${DOMAIN}</p></div>
+    <div class="mk-launch">${apps.map((a) => `<div class="mk-big" data-open-app="${a.id}"><span class="mk-ico">${ic(a.icon, 28)}</span><strong>${a.name}</strong></div>`).join('')}</div>
+    ${isAdmin() ? `<span class="mk-alert-chip" data-go="settings" data-page-go="alerts">${ic('triangle-alert', 13)} SDI 2 sans signal depuis 00:12:40</span>` : ''}</section>`;
+}
+
+// ------------------------------------------------------------------ corps fictif d'une appli
+function appBody(a) {
+  const pics = ['p1', 'p2', 'p4', 'p3'];
+  const t = a.tabs[0][1];
+  return `<section class="library mk-appbody"><div class="library-inner wide">${head(t, `4 ${t.toLowerCase()}`, `<button class="btn primary">${ic('plus')} Nouveau</button>`)}
+    <div class="project-grid">${pics.map((p, i) => `<article class="project-card"><div class="sc-thumb"><div class="sc-pic ${p}"></div></div><div class="project-body"><strong>${['Plateau 1', 'Duplex SRT', 'Régie 2', 'Antenne'][i]}</strong><span class="muted">${['SDI 1', 'SRT', 'ST 2110', 'UDP'][i]}</span></div><div class="mk-foot"><span class="nav-dot ok"></span>En marche</div></article>`).join('')}</div>
+  </div></section>`;
+}
+
+// ------------------------------------------------------------------ barres du haut
+function switchMenuA(cur) {
+  return `<div class="menu mk-switch">
+    <button class="ux1-mi" data-go="home">${ic('house')} ${SERVER}</button>
+    <div class="menu-sep"></div>
+    ${visibleApps().map((a) => `<button class="ux1-mi" data-open-app="${a.id}">${ic(a.icon)} ${a.name}${a.id === cur ? `<span style="margin-left:auto;color:var(--accent-2)">${ic('check')}</span>` : ''}</button>`).join('')}
+    ${isAdmin() ? `<div class="menu-sep"></div><button class="ux1-mi" data-go="settings">${ic('settings')} Réglages du serveur</button>` : ''}
+  </div>`;
+}
+function launcherC(cur) {
+  return `<div class="menu mk-launcher"><div class="mk-l-head"><span>${SERVER}</span><button class="btn small ghost" data-go="home">${ic('house', 13)} Cockpit</button></div>
+    <div class="mk-l-grid">${visibleApps().map((a) => `<button class="mk-l-item ${a.id === cur ? 'on' : ''}" data-open-app="${a.id}"><span class="mk-ico xs">${ic(a.icon, 15)}</span>${a.name}</button>`).join('')}</div></div>`;
+}
+function topbar() {
+  const a = S.where === 'app' ? appById(S.app) : null;
+  if (S.prop === 'A') {
+    if (a) return `<nav class="topbar"><div class="mk-anchor"><button class="mk-brand-btn ${S.menu === 'switch' ? 'on' : ''}" data-menu="switch">${brand(a.name)}${ic('chevron-down', 13)}</button>${S.menu === 'switch' ? switchMenuA(a.id) : ''}</div>${tabsHtml(a.tabs.map(([i, l]) => [l, i, l]), a.tabs[0][1], 'data-x')}${right()}</nav>`;
+    const tabs = [['home', 'layout-grid', 'Applis']].concat(isAdmin() ? [['settings', 'settings', 'Réglages']] : []);
+    return `<nav class="topbar">${brand('Core')}${tabsHtml(tabs, S.where, 'data-go')}${right()}</nav>`;
+  }
+  if (S.prop === 'B') {
+    if (a) return `<nav class="topbar">${brand(a.name)}${tabsHtml(a.tabs.map(([i, l]) => [l, i, l]), a.tabs[0][1], 'data-x')}${right()}</nav>`;
+    const ctx = { home: null, hw: [['sdi', 'monitor', 'SDI'], ['ndi', 'radio-tower', 'NDI'], ['st2110', 'waves', 'ST 2110'], ['network', 'ethernet-port', 'Réseau'], ['clock', 'clock', 'Horloge']], sup: [['state', 'gauge', 'Ressources'], ['logs', 'scroll-text', 'Journaux'], ['alerts', 'bell', 'Alertes'], ['snmp', 'radio', 'SNMP']], adm: null }[S.where];
+    const mod = { home: 'Core', hw: 'Matériel', sup: 'Supervision', adm: 'Administration' }[S.where];
+    return `<nav class="topbar">${brand(mod, { lead: false })}${ctx ? tabsHtml(ctx, S.tab, 'data-tab') : ''}${right()}</nav>`;
+  }
+  // C
+  const lb = `<div class="mk-anchor"><button class="mk-sq ${S.menu === 'launch' ? 'on' : ''}" data-menu="launch" title="Applis">${ic('grid-3x3', 17)}</button>${S.menu === 'launch' ? launcherC(a && a.id) : ''}</div>`;
+  if (a) return `<nav class="topbar">${lb}${brand(a.name)}${tabsHtml(a.tabs.map(([i, l]) => [l, i, l]), a.tabs[0][1], 'data-x')}${right()}</nav>`;
+  return `<nav class="topbar">${lb}${brand(S.where === 'settings' ? 'Réglages' : 'Core')}${right()}</nav>`;
+}
+function rail() {
+  const apps = visibleApps();
+  const b = (go, icon, title, on, extra = '') => `<button class="mk-rail-btn ${on ? 'on' : ''}" ${go} title="${title}">${ic(icon, 19)}${extra}</button>`;
+  return `<nav class="mk-rail"><div class="mk-rail-logo">${fLogo(26)}</div>
+    ${b('data-go="home"', 'house', 'Accueil', S.where === 'home')}
+    <div class="mk-rail-sep"></div>
+    ${apps.map((a) => b(`data-open-app="${a.id}"`, a.icon, a.name, S.where === 'app' && S.app === a.id)).join('')}
+    <div class="spacer"></div>
+    ${isAdmin() ? `${b('data-go="hw"', 'monitor-cog', 'Matériel', S.where === 'hw')}${b('data-go="sup"', 'activity', 'Supervision', S.where === 'sup')}${b('data-go="adm"', 'settings', 'Administration', S.where === 'adm')}` : ''}
+  </nav>`;
+}
+
+// ------------------------------------------------------------------ rendu
+function body() {
+  if (S.where === 'app') return appBody(appById(S.app));
+  if (S.prop === 'A') return S.where === 'settings' ? sidePage(NAV.A, S.page || 'state') : homeA();
+  if (S.prop === 'B') {
+    if (S.where === 'hw') return `<section class="library"><div class="library-inner wide">${head(...TITLES[S.tab || 'sdi'])}${PAGES[S.tab || 'sdi']()}</div></section>`;
+    if (S.where === 'sup') return `<section class="library"><div class="library-inner wide">${PAGES[S.tab || 'state']()}</div></section>`;
+    if (S.where === 'adm') return sidePage(NAV.Badm, S.page || 'users');
+    return homeB();
+  }
+  return S.where === 'settings' ? sidePage(NAV.C(), S.page || 'overview') : homeC();
+}
+function render() {
+  const app = `<div class="app">${topbar()}<div class="content">${body()}</div></div>`;
+  document.getElementById('root').innerHTML = S.prop === 'B' ? `<div class="mk-shell">${rail()}${app}</div>` : app;
+  document.querySelectorAll('#mock [data-prop]').forEach((b) => b.classList.toggle('on', b.dataset.prop === S.prop));
+  document.querySelectorAll('#mock [data-role]').forEach((b) => b.classList.toggle('on', b.dataset.role === S.role));
+  try { localStorage.setItem('mk.state', JSON.stringify({ prop: S.prop, role: S.role, theme: theme() })); } catch { /* */ }
+}
+const theme = () => (document.documentElement.dataset.theme === 'light' ? 'light' : 'dark');
+function setTheme(t) { if (t === 'light') document.documentElement.dataset.theme = 'light'; else delete document.documentElement.dataset.theme; }
+
+document.addEventListener('click', (e) => {
+  const t = e.target;
+  const m = t.closest('[data-menu]');
+  const inMenu = t.closest('.menu');
+  if (t.closest('[data-prop]')) { Object.assign(S, { prop: t.closest('[data-prop]').dataset.prop, where: 'home', page: null, tab: null, app: null, menu: null }); return render(); }
+  if (t.closest('[data-role]')) { Object.assign(S, { role: t.closest('[data-role]').dataset.role, where: 'home', page: null, tab: null, app: null, menu: null }); return render(); }
+  if (t.closest('[data-mtheme]')) { setTheme(theme() === 'light' ? 'dark' : 'light'); return render(); }
+  const ts = t.closest('[data-theme-set]'); if (ts) { setTheme(ts.dataset.themeSet); return render(); }
+  if (m) { S.menu = S.menu === m.dataset.menu ? null : m.dataset.menu; return render(); }
+  const oa = t.closest('[data-open-app]'); if (oa) { Object.assign(S, { where: 'app', app: oa.dataset.openApp, menu: null }); return render(); }
+  const g = t.closest('[data-go]'); if (g) { const pg = t.closest('[data-page-go]'); Object.assign(S, { where: g.dataset.go, page: pg ? pg.dataset.pageGo : null, tab: null, app: null, menu: null }); if (S.prop === 'B' && pg) Object.assign(S, { where: 'sup', tab: 'alerts' }); if (S.where === 'hw' && !S.tab) S.tab = 'sdi'; if (S.where === 'sup' && !S.tab) S.tab = 'state'; return render(); }
+  const p = t.closest('[data-page]'); if (p) { Object.assign(S, { page: p.dataset.page, tab: null, menu: null }); return render(); }
+  const tb = t.closest('[data-tab]'); if (tb) { S.tab = tb.dataset.tab; return render(); }
+  const sg = t.closest('.segmented button'); if (sg) { sg.parentElement.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === sg)); return; }
+  const ch = t.closest('.asr-chip'); if (ch) { ch.parentElement.querySelectorAll('.asr-chip').forEach((b) => b.classList.toggle('on', b === ch)); return; }
+  if (S.menu && !inMenu) { S.menu = null; render(); }
+});
+try { const s = JSON.parse(localStorage.getItem('mk.state') || '{}'); if (s.prop) S.prop = s.prop; if (s.role) S.role = s.role; if (s.theme) setTheme(s.theme); } catch { /* */ }
+const h = location.hash.slice(1); if (/^[ABC]$/.test(h)) S.prop = h;
+render();
+</script>
+</body>
+</html>
