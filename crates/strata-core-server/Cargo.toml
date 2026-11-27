@@ -42,7 +42,10 @@ ureq = { version = "3", default-features = false, features = ["rustls", "platfor
 ring = "0.17"
 sha2 = "0.10"
 base64 = "0.22"
+# Installer une appli : archive .tar.gz, envoi depuis le navigateur.
+tar = "0.4"
+flate2 = "1"
+http-body-util = "0.1"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
-http-body-util = "0.1"

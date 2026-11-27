@@ -87,7 +87,12 @@ impl Apps {
         list
     }
 
-    fn forget(&self) {
+    /// Le dossier des applis installées.
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    pub(crate) fn forget(&self) {
         *self.cache.lock().unwrap() = None;
     }
 
@@ -97,7 +102,8 @@ impl Apps {
         let mut out = Vec::new();
         let Ok(entries) = std::fs::read_dir(&self.dir) else { return out };
         for e in entries.flatten() {
-            if !e.path().is_dir() {
+            // `.staging-…`, `.old-…` : une installation en cours ou une version qu'on efface.
+            if !e.path().is_dir() || e.file_name().to_string_lossy().starts_with('.') {
                 continue;
             }
             match AppManifest::read(&e.path()) {
@@ -202,7 +208,7 @@ pub fn routes() -> Router<Shared> {
 
 /// Une appli telle que les réglages la montrent, avec son service : lancé par le Core
 /// (`managed`, son état) ou à part, et si son port répond.
-async fn app_json(s: &Shared, a: &Installed, cfg: &ServerConfig, at: Option<&str>) -> Value {
+pub async fn app_json(s: &Shared, a: &Installed, cfg: &ServerConfig, at: Option<&str>) -> Value {
     let m = &a.manifest;
     let mut run = serde_json::to_value(s.supervisor.status(&m.id)).unwrap_or_default();
     run["managed"] = json!(m.run.is_some());
@@ -219,6 +225,8 @@ async fn app_json(s: &Shared, a: &Installed, cfg: &ServerConfig, at: Option<&str
         "url": cfg.app_url_at(&m.id, at),
         "public": m.relay.public,
         "run": run,
+        // D'où elle vient (sans sa clé, jamais envoyée au navigateur).
+        "source": s.installer.source(&m.id).map(|x| json!({"repo": x.repo, "key": !x.key.is_empty()})),
     })
 }
 
@@ -238,7 +246,7 @@ async fn list(State(s): State<Shared>, CurrentUser(me): CurrentUser, headers: He
     for a in s.apps.list() {
         apps.push(app_json(&s, &a, &cfg, host(&headers)).await);
     }
-    Ok(Json(json!({ "core": strata_core::VERSION, "apps": apps })))
+    Ok(Json(json!({ "core": strata_core::VERSION, "apps": apps, "jobs": s.installer.jobs() })))
 }
 
 #[derive(Deserialize)]

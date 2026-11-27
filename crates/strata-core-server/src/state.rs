@@ -9,7 +9,7 @@ use std::{
     time::Instant,
 };
 
-use crate::{apps::Apps, auth::Auth, config::ServerConfig, groups::Groups, relay, supervisor::Supervisor};
+use crate::{apps::Apps, auth::Auth, config::ServerConfig, groups::Groups, install::Installer, relay, supervisor::Supervisor};
 
 pub type Shared = Arc<AppState>;
 
@@ -21,6 +21,8 @@ pub struct AppState {
     pub groups: Groups,
     /// Les applis lancées par le Core.
     pub supervisor: Supervisor,
+    /// Les installations et mises à jour d'applis.
+    pub installer: Installer,
     /// Le client du relais vers les applis.
     pub relay: relay::HttpClient,
     /// Le port où le Core écoute (donné aux applis : `STRATA_CORE_URL`).
@@ -37,6 +39,7 @@ impl AppState {
             apps: Apps::new(&data_dir),
             groups: Groups::load(&data_dir),
             supervisor: Supervisor::default(),
+            installer: Installer::new(&data_dir),
             relay: relay::client(),
             core_port: AtomicU16::new(8080),
             started_at: Instant::now(),

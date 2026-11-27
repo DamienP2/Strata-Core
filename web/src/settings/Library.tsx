@@ -1,11 +1,12 @@
 // Réglages › Applis : la Bibliothèque (toutes les applis du serveur) et la page de chaque appli.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowUpRight, Cloud, LayoutGrid, Power, RotateCw, ScrollText, Server } from 'lucide-react';
+import { ArrowUpRight, Cloud, LayoutGrid, PackagePlus, Power, RotateCw, ScrollText, Server } from 'lucide-react';
 import { Badge, Card, Empty, Field, FieldGrid, PageHead, Switch, formatDuration, openAppTab, t, tn, toast } from '@strata/ui';
 import { api } from '../api';
 import { friendly } from '../errors';
 import { appIcon } from '../icons';
 import { navigate } from '../router';
+import { InstallModal, JobLine, RemoveCard, SourceCard, running, type Job } from './Install';
 
 export interface AppInfo {
   id: string;
@@ -20,6 +21,8 @@ export interface AppInfo {
   /** Les chemins servis sans connexion. */
   public: string[];
   run: RunInfo;
+  /** Son dépôt GitHub (et s'il a une clé), ou rien : installée depuis une archive, ou à la main. */
+  source: { repo: string; key: boolean } | null;
 }
 
 /** Le service de l'appli : lancé par le Core (`managed`) ou à part ; `answers` : son port répond. */
@@ -52,11 +55,24 @@ export function serviceTone(a: AppInfo): 'ok' | 'warn' | 'bad' | null {
 export function useApps() {
   const [apps, setApps] = useState<AppInfo[] | null>(null);
   const [core, setCore] = useState('');
+  const [jobs, setJobs] = useState<Job[]>([]);
+  // L'étape vue de chaque installation : sa fin est dite une seule fois.
+  const seen = useRef(new Map<string, Job['step']>());
   const reload = useCallback(async () => {
     try {
-      const r = await api<{ core: string; apps: AppInfo[] }>('GET', '/api/apps');
+      const r = await api<{ core: string; apps: AppInfo[]; jobs: Job[] }>('GET', '/api/apps');
+      for (const j of r.jobs) {
+        const before = seen.current.get(j.repo);
+        if (before && before !== j.step) {
+          const name = r.apps.find((a) => a.id === j.app)?.name ?? j.app ?? j.repo;
+          if (j.step === 'done') toast(t('{app} {version} installed', { app: name, version: j.version ?? '' }));
+          if (j.step === 'failed') toast(friendly(j.error ?? ''), 'error');
+        }
+        seen.current.set(j.repo, j.step);
+      }
       setApps(r.apps);
       setCore(r.core);
+      setJobs(r.jobs);
     } catch (e) {
       toast(friendly(e), 'error');
     }
@@ -64,6 +80,17 @@ export function useApps() {
   useEffect(() => {
     void reload();
   }, [reload]);
+  // Pendant une installation : relu chaque seconde.
+  const busy = jobs.some(running);
+  useEffect(() => {
+    if (!busy) return;
+    const timer = setInterval(() => void reload(), 1000);
+    return () => clearInterval(timer);
+  }, [busy, reload]);
+  const dismiss = async (j: Job) => {
+    await api('POST', '/api/apps/jobs/dismiss', { repo: j.repo }).catch(() => {});
+    await reload();
+  };
   /** Active ou désactive une appli ; la liste suit. */
   const setActive = async (a: AppInfo, on: boolean) => {
     try {
@@ -84,7 +111,7 @@ export function useApps() {
       toast(friendly(e), 'error');
     }
   };
-  return { apps, core, reload, setActive, restart };
+  return { apps, core, jobs, reload, setActive, restart, dismiss };
 }
 
 const open = (a: AppInfo) => openAppTab(a.url, `${a.id}@local`);
@@ -105,11 +132,31 @@ function StateBadge({ a }: { a: AppInfo }) {
   return a.active ? <Badge tone="ok">{t('Active')}</Badge> : <Badge>{t('Inactive')}</Badge>;
 }
 
-export function Library({ apps, setActive }: { apps: AppInfo[]; setActive: (a: AppInfo, on: boolean) => void }) {
+export function Library({ apps, jobs, setActive, reload, dismiss }: {
+  apps: AppInfo[];
+  jobs: Job[];
+  setActive: (a: AppInfo, on: boolean) => void;
+  reload: () => Promise<void>;
+  dismiss: (j: Job) => Promise<void>;
+}) {
   const active = apps.filter((a) => a.active).length;
+  const [installing, setInstalling] = useState(false);
+  const shown = jobs.filter((j) => running(j) || j.step === 'failed');
   return (
     <>
-      <PageHead title={t('Library')} sub={`${tn(apps.length, '{n} app', '{n} apps')} · ${tn(active, '{n} active', '{n} actives')}`} />
+      <PageHead title={t('Library')} sub={`${tn(apps.length, '{n} app', '{n} apps')} · ${tn(active, '{n} active', '{n} actives')}`}>
+        <button type="button" className="st-btn primary" onClick={() => setInstalling(true)}>
+          <PackagePlus size={14} /> {t('Install an app')}
+        </button>
+      </PageHead>
+      {shown.length > 0 && (
+        <div className="core-jobs">
+          {shown.map((j) => (
+            <JobLine key={j.repo} job={j} name={apps.find((a) => a.id === j.app)?.name} onDismiss={() => void dismiss(j)} />
+          ))}
+        </div>
+      )}
+      {installing && <InstallModal onClose={() => setInstalling(false)} onStarted={() => void reload()} />}
       {apps.length === 0 ? (
         <div className="core-empty">
           <Empty icon={LayoutGrid} text={t('No app installed')} />
@@ -194,15 +241,18 @@ function AppLog({ id }: { id: string }) {
   );
 }
 
-export function AppPage({ app: a, core, setActive, restart, reload }: {
+export function AppPage({ app: a, core, job, setActive, restart, reload }: {
   app: AppInfo;
   core: string;
+  /** Sa mise à jour en cours, s'il y en a une. */
+  job?: Job;
   setActive: (a: AppInfo, on: boolean) => void;
   restart: (a: AppInfo) => Promise<void>;
   reload: () => Promise<void>;
 }) {
   const Icon = appIcon(a.icon);
   const [restarting, setRestarting] = useState(false);
+  const [sending, setSending] = useState(false);
   // L'état du service bouge tout seul (démarrage, relance) : relu toutes les 2 s.
   useEffect(() => {
     const timer = setInterval(() => void reload(), 2000);
@@ -294,6 +344,9 @@ export function AppPage({ app: a, core, setActive, restart, reload }: {
           </Field>
         </FieldGrid>
       </Card>
+      <SourceCard app={a} job={job} reload={reload} onUpload={() => setSending(true)} />
+      <RemoveCard app={a} reload={reload} />
+      {sending && <InstallModal from="file" onClose={() => setSending(false)} onStarted={() => void reload()} />}
     </>
   );
 }

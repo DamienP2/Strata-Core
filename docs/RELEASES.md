@@ -58,6 +58,15 @@ Une appli publie la même fiche, avec dans `requires` la plage de versions du Co
 
 Le Core refuse d'installer, d'activer ou de mettre à jour une appli dont la plage n'inclut pas sa version.
 
+Pour une appli, le script prend son identifiant et sa fiche, et classe son archive
+(`<id>-<version>-linux-x86_64.tar.gz`) en `app-linux-x86_64` :
+
+```bash
+node scripts/release-manifest.mjs dist 0.3.0 livecut strata-app.toml
+```
+
+Ce que le Core vérifie à l'installation : [APPLIS.md](APPLIS.md#publier-une-release-installable).
+
 ## Utiliser `@strata/ui` dans une appli
 
 Dans le `package.json` de l'appli, le paquet est référencé par l'adresse de son fichier dans la release :

@@ -33,3 +33,16 @@
 .core-log-t { color: var(--text-3); flex: none; }
 .core-log-line.err > span:last-child { color: var(--warn); }
 .core-log-line.core > span:last-child { color: var(--accent-2); }
+.core-progress { height: 4px; border-radius: 999px; background: var(--panel-3); overflow: hidden; }
+.core-progress > span { display: block; height: 100%; background: var(--accent); border-radius: inherit; transition: width .3s; }
+.core-progress.busy > span { width: 30%; animation: core-busy 1.2s ease-in-out infinite; }
+@keyframes core-busy { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+.core-jobs { display: flex; flex-direction: column; gap: 8px; }
+.core-job { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; font-size: var(--fs-13); }
+.core-job.failed { border-color: color-mix(in srgb, var(--t-red) 45%, var(--line)); color: var(--t-red); }
+.core-job-row { display: flex; align-items: center; gap: 8px; }
+.core-job-row > span { flex: 1; }
+.core-file { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.core-file .st-muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.core-link { color: var(--accent-2); text-decoration: none; font-size: var(--fs-12); }
+.core-link:hover { text-decoration: underline; }

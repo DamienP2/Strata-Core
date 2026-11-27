@@ -1,15 +1,36 @@
 // Les erreurs du serveur (texte court en anglais) dans la langue de l'interface.
 import { t } from '@strata/ui';
 
+/** Les erreurs qui portent un nom ou un nombre : leur forme, et le texte à traduire. */
+const SHAPED: [RegExp, string, string[]][] = [
+  [/^(.+) needs the Core (.+) \(this one is (.+)\)$/, '{app} needs the Core {range} (this one is {core})', ['app', 'range', 'core']],
+  [/^(.+) uses port (\d+) too: deactivate it first$/, '{app} uses port {port} too: deactivate it first', ['app', 'port']],
+  [/^port (\d+) is the Core's own$/, 'Port {port} is the Core’s own', ['port']],
+  [/^(.+) is started apart from the Core$/, '{app} is started apart from the Core', ['app']],
+  // Installer une appli
+  [/^no release of (.+) accepts the Core (.+) \(the latest, (.+), needs (.+)\)$/, 'No release of {repo} accepts the Core {core} (the latest, {version}, needs {range})', ['repo', 'core', 'version', 'range']],
+  [/^(.+) has no Strata release$/, '{repo} has no Strata release', ['repo']],
+  [/^(.+) was not found on GitHub \(a private repository needs a key\)$/, '{repo} was not found on GitHub (a private repository needs a key)', ['repo']],
+  [/^GitHub refused the key of (.+)$/, 'GitHub refused the key of {repo}', ['repo']],
+  [/^cannot reach GitHub: (.+)$/, 'Cannot reach GitHub: {why}', ['why']],
+  [/^GitHub answered HTTP (\d+)$/, 'GitHub answered HTTP {code}', ['code']],
+  [/^(.+) already uses port (\d+)$/, '{app} already uses port {port}', ['app', 'port']],
+  [/^(.+) is already installed from (.+)$/, '{app} is already installed from {repo}', ['app', 'repo']],
+  [/^(.+) is already being installed$/, '{repo} is already being installed', ['repo']],
+  [/^(.+) is active: deactivate it first$/, '{app} is active: deactivate it first', ['app']],
+  [/^not a GitHub repository: (.*)$/, 'Not a GitHub repository: {repo}', ['repo']],
+  [/^the release is (.+) but its archive holds (.+)$/, 'The release is {release} but its archive holds {archive}', ['release', 'archive']],
+  [/^(.+) now publishes (.+) instead of (.+)$/, '{repo} now publishes {other} instead of {app}', ['repo', 'other', 'app']],
+  [/^(.+) was not installed from GitHub$/, '{app} was not installed from GitHub', ['app']],
+  [/^cannot unpack the archive: (.+)$/, 'Cannot unpack the archive: {why}', ['why']],
+  [/^the download was cut: (.+)$/, 'The download was cut: {why}', ['why']],
+];
+
 export function friendly(e: unknown): string {
-  const raw = (e as Error)?.message ?? String(e);
-  const m = /^(.+) needs the Core (.+) \(this one is (.+)\)$/.exec(raw);
-  if (m) return t('{app} needs the Core {range} (this one is {core})', { app: m[1], range: m[2], core: m[3] });
-  const port = /^(.+) uses port (\d+) too: deactivate it first$/.exec(raw);
-  if (port) return t('{app} uses port {port} too: deactivate it first', { app: port[1], port: port[2] });
-  const own = /^port (\d+) is the Core's own$/.exec(raw);
-  if (own) return t('Port {port} is the Core’s own', { port: own[1] });
-  const apart = /^(.+) is started apart from the Core$/.exec(raw);
-  if (apart) return t('{app} is started apart from the Core', { app: apart[1] });
+  const raw = ((e as Error)?.message ?? String(e)).trim();
+  for (const [re, text, names] of SHAPED) {
+    const m = re.exec(raw);
+    if (m) return t(text, Object.fromEntries(names.map((n, i) => [n, m[i + 1]])));
+  }
   return t(raw);
 }

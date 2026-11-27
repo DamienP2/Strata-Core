@@ -55,3 +55,20 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
   const text = await res.text();
   return (text ? JSON.parse(text) : undefined) as T;
 }
+
+/** Envoie un fichier tel quel (une archive d'appli), avec sa progression (0 à 1). */
+export function upload<T = unknown>(path: string, file: File, onProgress: (part: number) => void): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', path);
+    xhr.withCredentials = true;
+    xhr.setRequestHeader('Content-Type', 'application/gzip');
+    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
+    xhr.onerror = () => reject(new ApiError(0, 'the server does not answer'));
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve((xhr.responseText ? JSON.parse(xhr.responseText) : undefined) as T);
+      else reject(new ApiError(xhr.status, xhr.responseText || xhr.statusText));
+    };
+    xhr.send(file);
+  });
+}

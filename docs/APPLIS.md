@@ -37,6 +37,37 @@ public = ["/output/"]   # débuts de chemin servis SANS connexion (sorties pour 
   avec `cargo run`) et le Core ne fait que la relayer.
 - Deux applis actives ne peuvent pas avoir le même port.
 
+## Publier une release installable
+
+Le Core installe et met à jour une appli depuis les **releases GitHub** de son dépôt (*Réglages ›
+Bibliothèque › Installer une appli*), ou depuis la même archive envoyée à la main (serveur sans
+internet). Une release d'appli contient :
+
+| Fichier | Contenu |
+| --- | --- |
+| `<id>-<version>-linux-x86_64.tar.gz` | `strata-app.toml` et les fichiers de l'appli (binaire, interface…), à la racine ou dans un seul dossier |
+| `release.json` | la fiche de la release : `name` = l'id, `version`, `requires.core`, et l'empreinte de chaque fichier |
+| `SHA256SUMS` | les empreintes, pour un humain |
+
+`release.json` et `SHA256SUMS` s'écrivent avec le script du Core, en lui donnant la fiche de l'appli :
+
+```bash
+node scripts/release-manifest.mjs dist 0.3.0 livecut strata-app.toml
+```
+
+Ce que fait le Core :
+
+- il prend **la release la plus récente qui accepte sa version** (`requires.core`), hors brouillons et
+  préversions (`v0.4.0-rc.1`) ;
+- il télécharge l'archive et **refuse une empreinte différente** de celle de `release.json` ;
+- il vérifie que l'archive contient bien l'appli et la version annoncées, qu'elle accepte le Core, et
+  que son port n'est pas déjà pris par une autre appli ;
+- il la met en place d'un coup, à la place de l'ancienne version, et **relance** l'appli si elle est
+  active. Ses données (`STRATA_APP_DATA`) ne sont pas touchées.
+
+Un dépôt privé demande **une clé** : un jeton GitHub en lecture seule sur ce dépôt, donné à
+l'installation, gardé sur le serveur et jamais renvoyé au navigateur ; les mises à jour s'en servent.
+
 ## Lancement
 
 Quand l'appli est **active**, le Core la lance : la commande `[run]`, dans le dossier de l'appli, avec
@@ -108,4 +139,4 @@ Garanties du Core :
 - L'appli dira au Core si un utilisateur y a accès, pour que le cockpit ne montre que les applis
   permises.
 - Les entrées DeckLink et le reste du matériel partagé passeront par le Core (brief § 5.3).
-- Installer et mettre à jour une appli depuis la Bibliothèque.
+- Une liste des applis Strata dans la Bibliothèque, quand chacune publiera des releases à ce format.

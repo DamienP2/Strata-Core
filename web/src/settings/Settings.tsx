@@ -13,7 +13,7 @@ import { Users } from './Users';
 
 /** `path` : ce qui suit /reglages/ (« bibliotheque », « applis/livecut », « utilisateurs », « groupes », « annuaire »). */
 export function Settings({ path }: { path: string }) {
-  const { apps, core, reload, setActive, restart } = useApps();
+  const { apps, core, jobs, reload, setActive, restart, dismiss } = useApps();
   const appId = path.startsWith('applis/') ? path.slice('applis/'.length) : null;
   const app = appId ? apps?.find((a) => a.id === appId) : undefined;
 
@@ -22,8 +22,8 @@ export function Settings({ path }: { path: string }) {
   if (path === 'utilisateurs') page = <Users />;
   else if (path === 'groupes') page = <Groups />;
   else if (path === 'annuaire') page = <Directory />;
-  else if (apps && app) page = <AppPage app={app} core={core} setActive={setActive} restart={restart} reload={reload} />;
-  else if (apps) page = <Library apps={apps} setActive={setActive} />;
+  else if (apps && app) page = <AppPage app={app} core={core} job={jobs.find((j) => j.app === app.id)} setActive={setActive} restart={restart} reload={reload} />;
+  else if (apps) page = <Library apps={apps} jobs={jobs} setActive={setActive} reload={reload} dismiss={dismiss} />;
 
   const nav = (
     <>
