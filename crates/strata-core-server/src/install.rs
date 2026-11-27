@@ -522,6 +522,22 @@ pub fn start(s: &Shared, repo: &str, key: Option<String>, only: Option<String>) 
     Ok(job)
 }
 
+/// Installe (ou met à jour) une appli depuis son dépôt, tout de suite (la ligne de commande,
+/// l'installateur).
+pub fn install_now(s: &Shared, repo: &str, key: Option<&str>) -> Result<Installed, String> {
+    let repo = parse_repo(repo)?;
+    let key = key.map(|k| k.trim().to_string()).unwrap_or_else(|| s.installer.key_of(&repo));
+    fetch_and_commit(s, &repo, &key, None)
+}
+
+/// Installe une appli depuis son archive `.tar.gz` (serveur sans internet).
+pub fn install_archive(s: &Shared, archive: &Path) -> Result<Installed, String> {
+    let apps_dir = s.apps.dir().to_path_buf();
+    std::fs::create_dir_all(&apps_dir).map_err(|e| e.to_string())?;
+    let st = unpack(archive, &apps_dir)?;
+    commit(s, st, None, None)
+}
+
 fn fetch_and_commit(s: &Shared, repo: &str, key: &str, only: Option<&str>) -> Result<Installed, String> {
     let agent = agent();
     let api = s.installer.api();

@@ -183,7 +183,7 @@ function SystemFiles({ files }: { files: ClockStatus['files'] }) {
       </details>
       {files.ptp4l && (
         <details className="core-files">
-          <summary>/etc/linuxptp/strata-ptp4l.conf</summary>
+          <summary>/etc/strata/ptp4l.conf</summary>
           <pre>{files.ptp4l}</pre>
         </details>
       )}

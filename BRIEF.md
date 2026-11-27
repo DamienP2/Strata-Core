@@ -193,7 +193,7 @@ Fait : le crate `strata-share` (un fichier `/dev/shm/strata-sdi-<carte>-<n>` par
 **L'horloge du site** (*Matériel › Horloge*). Un leader unique fournit BB, PTP, TC et WC.
 
 - **BB** (ou tri-level) vers la REF de chaque DeckLink, genlock activé : les DeckLink SDI ne se calent pas sur le PTP.
-- **PTP** vers **tous** les serveurs. ptp4l (profil ST 2059-2, esclave) tient l'horloge de la carte réseau PTP ; **chrony** règle l'heure du serveur sur cette horloge, les serveurs NTP en secours (ou le NTP seul). Un seul service règle l'heure : un phc2sys qui la règle aussi est signalé. Le Core écrit `/etc/chrony/conf.d/strata.conf`, `/etc/linuxptp/strata-ptp4l.conf` et le service `strata-ptp4l`, et relance ce qui change ; sans droits, il le dit (l'installateur les donnera).
+- **PTP** vers **tous** les serveurs. ptp4l (profil ST 2059-2, esclave) tient l'horloge de la carte réseau PTP ; **chrony** règle l'heure du serveur sur cette horloge, les serveurs NTP en secours (ou le NTP seul). Un seul service règle l'heure : un phc2sys qui la règle aussi est signalé. Le Core écrit `/etc/chrony/conf.d/strata.conf` et `/etc/strata/ptp4l.conf`, puis relance chrony et le service `strata-ptp4l` (posé par l’installateur, qui donne ces droits au compte du service).
 - **TC** : pas de câble LTC. Le **timecode maison** se calcule depuis l'heure du serveur (`strata_core::timecode`) : heure locale, UTC ou décalage fixe, comme l'LTC du leader ; en 29,97 / 23,98, recalage quotidien (ST 2059-1) et drop frame.
 - **WC** : pour les appareils audio, pas pour les serveurs (l'audio SDI suit la carte, l'audio 2110 le PTP).
 - **Cadence maison** (25, 29,97, 30, 24, 23,98) : celle de toutes les images du site.
@@ -270,6 +270,8 @@ Un **installateur en ligne de commande, mais graphique** : un écran plein termi
 5. **Journal complet** : `/var/log/strata-install.log`.
 
 **Préalable : la chaîne de releases.** Le Core et chaque appli sont compilés par GitHub Actions sur Ubuntu 24.04 et publiés en releases, avec leurs empreintes. Modèle : `CG/.github/workflows/release.yml`.
+
+Fait : `strata-install` (crate `crates/strata-install`, binaire statique musl), `scripts/install.sh`, publiés avec chaque release ; écran plein terminal (ratatui) et mode sans écran, essai à blanc (`--root`). Le Core tourne sous le compte `strata` (port 80/443/161 par capacité), relance chrony et ptp4l grâce à une règle polkit ; l'installateur s'appuie sur ses commandes (`strata-core config`, `user add`, `app install`, `ptp4l-unit`). Mode d'emploi : [docs/INSTALLATION.md](docs/INSTALLATION.md). Reste : essayer sur un vrai serveur (DKMS, NDI, ufw) ; faire des applis des services systemd à part (`strata-app@<id>`) ; le disque dédié aux données.
 
 Sources : `Strata-Cut/scripts/install-ubuntu.sh` (dépendances, pilote Desktop Video avec attente de l'archive, SDK NDI, service systemd, disque des données, pare-feu, désinstallation) ; `CG/packaging/ndi/fetch-runtime.sh` (licence et mention NDI).
 

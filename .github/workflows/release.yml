@@ -4,12 +4,13 @@ name: Release
 #   - strata-core-<version>-linux-x86_64.tar.gz : le serveur strata-core, interface comprise ;
 #   - strata-ui-<version>.tgz : le paquet web, que les applis référencent par son adresse ;
 #   - release.json : la fiche de la release (version, fichiers, empreintes), lue par le Core ;
+#   - strata-install-<version>-linux-x86_64 : l'installateur (binaire statique) ;
+#   - install.sh : la commande d'installation (curl … | sudo bash), qui le télécharge et le vérifie ;
 #   - SHA256SUMS : les empreintes de chaque fichier.
 # Lancée à la main (workflow_dispatch) : avec une version (« 0.1.0 »), elle publie la release v<version>
 # sur le commit choisi (l'étiquette est créée par la publication) ; sans version, elle construit les
 # mêmes fichiers sans rien publier.
 # Tout est construit sur Ubuntu 24.04, la plateforme des serveurs (voir docs/RELEASES.md).
-# À ajouter quand il existera : l'installateur strata-install.
 on:
   push:
     tags: ['v*']
@@ -84,6 +85,15 @@ jobs:
           cp packages/ui/src/styles/fonts/OFL.txt "build/$NAME/OFL-Inter.txt"
           "build/$NAME/strata-core" --version
           tar -C build -czf "dist/$NAME.tar.gz" "$NAME"
+
+      - name: Installateur (binaire statique)
+        run: |
+          sudo apt-get install -y -q musl-tools
+          rustup target add x86_64-unknown-linux-musl
+          cargo build --release --locked --target x86_64-unknown-linux-musl -p strata-install
+          cp target/x86_64-unknown-linux-musl/release/strata-install "dist/strata-install-$VERSION-linux-x86_64"
+          "dist/strata-install-$VERSION-linux-x86_64" --version
+          cp scripts/install.sh dist/install.sh
 
       - name: Fiche et empreintes
         run: node scripts/release-manifest.mjs dist "$VERSION"

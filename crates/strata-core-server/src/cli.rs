@@ -62,6 +62,62 @@ pub enum AppCmd {
         #[arg(long)]
         data_dir: Option<PathBuf>,
     },
+    /// Installe ou met à jour une appli : depuis son dépôt GitHub (`owner/repo`) ou son archive
+    /// (`.tar.gz`, serveur sans internet).
+    Install {
+        source: String,
+        /// La clé d'un dépôt privé (jeton GitHub en lecture seule).
+        #[arg(long)]
+        key: Option<String>,
+        /// L'active une fois installée.
+        #[arg(long)]
+        activate: bool,
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
+    },
+}
+
+/// Les réglages du serveur (l'installateur s'en sert avant le premier démarrage).
+#[derive(clap::Args)]
+pub struct ConfigArgs {
+    /// Le nom d'usage du serveur (« Régie A »).
+    #[arg(long)]
+    pub name: Option<String>,
+    /// Son nom DNS (« strata01.regie.exemple.fr »).
+    #[arg(long)]
+    pub dns_name: Option<String>,
+    /// Son fuseau horaire (« Europe/Paris »).
+    #[arg(long)]
+    pub timezone: Option<String>,
+    #[arg(long)]
+    pub data_dir: Option<PathBuf>,
+}
+
+pub fn config(a: ConfigArgs) -> anyhow::Result<()> {
+    let dir = data_dir(a.data_dir)?;
+    let mut cfg = crate::config::ServerConfig::load(&dir);
+    if let Some(n) = a.name {
+        let n = n.trim().to_string();
+        if n.is_empty() || n.chars().count() > 64 {
+            bail!("the server name has 1 to 64 characters");
+        }
+        cfg.name = n;
+    }
+    if let Some(d) = a.dns_name {
+        let d = d.trim().trim_end_matches('.').to_lowercase();
+        crate::server::valid_dns(&d).map_err(|e| anyhow!(e))?;
+        cfg.dns_name = d;
+    }
+    if let Some(tz) = a.timezone {
+        if jiff::tz::TimeZone::get(tz.trim()).is_err() {
+            bail!("not a time zone: {tz}");
+        }
+        cfg.timezone = tz.trim().to_string();
+    }
+    cfg.save(&dir).context("cannot save config.json")?;
+    give_back(&dir, "config.json");
+    println!("{} · {} · {}", cfg.name, cfg.dns_name, cfg.timezone);
+    Ok(())
 }
 
 /// Demande un nouveau mot de passe deux fois (au terminal ; sur l'entrée standard, un par ligne).
@@ -188,6 +244,18 @@ pub fn app(cmd: AppCmd) -> anyhow::Result<()> {
             let a = Apps::new(&dir).set_active(&id, true).map_err(|e| anyhow!(e))?;
             give_back(&dir, "apps.json");
             println!("{} active", a.manifest.name);
+        }
+        AppCmd::Install { source, key, activate, data_dir: d } => {
+            let dir = data_dir(d)?;
+            let s = crate::state::AppState::new(dir.clone());
+            let path = Path::new(&source);
+            let app = if path.is_file() { crate::install::install_archive(&s, path) } else { crate::install::install_now(&s, &source, key.as_deref()) }
+                .map_err(|e| anyhow!(e))?;
+            println!("{} {} installed", app.manifest.name, app.manifest.version);
+            if activate {
+                s.apps.set_active(&app.manifest.id, true).map_err(|e| anyhow!(e))?;
+                println!("{} active", app.manifest.name);
+            }
         }
         AppCmd::Deactivate { id, data_dir: d } => {
             let dir = data_dir(d)?;

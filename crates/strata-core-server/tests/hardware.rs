@@ -172,7 +172,7 @@ async fn hardware_settings_and_what_apps_read() {
     let chrony = std::fs::read_to_string(srv.dir.join("root/etc/chrony/conf.d/strata.conf")).unwrap();
     assert!(chrony.contains("refclock PHC /dev/ptp1 poll 0 dpoll -2 offset -37 prefer refid PTP"), "{chrony}");
     assert!(chrony.contains("server 10.0.0.1 iburst\nserver ntp.regie.lan iburst"));
-    let ptp4l = std::fs::read_to_string(srv.dir.join("root/etc/linuxptp/strata-ptp4l.conf")).unwrap();
+    let ptp4l = std::fs::read_to_string(srv.dir.join("root/etc/strata/ptp4l.conf")).unwrap();
     assert!(ptp4l.contains("domainNumber            127") && ptp4l.ends_with("[ens2f0]\n"));
     assert!(srv.dir.join("root/etc/systemd/system/strata-ptp4l.service").exists());
     // Rien de changé pour l'heure : rien n'est réécrit.
@@ -183,7 +183,7 @@ async fn hardware_settings_and_what_apps_read() {
     ntp_only["clock"]["source"] = json!("ntp");
     let (st, _) = call(&srv.remote, "PUT", "/api/hardware", host, c, Some(ntp_only)).await;
     assert_eq!(st, StatusCode::OK);
-    assert!(!srv.dir.join("root/etc/linuxptp/strata-ptp4l.conf").exists());
+    assert!(!srv.dir.join("root/etc/strata/ptp4l.conf").exists());
     assert!(!std::fs::read_to_string(srv.dir.join("root/etc/chrony/conf.d/strata.conf")).unwrap().contains("refclock"));
     let mut bad = cfg.clone();
     bad["clock"]["ntpServers"] = json!(["pas un serveur"]);

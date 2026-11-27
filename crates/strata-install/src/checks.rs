@@ -1,0 +1,228 @@
+//! Ce que l'installateur regarde avant d'installer : le système (Ubuntu 24.04, processeur, mémoire,
+//! disque, internet), le nom du serveur, les cartes Blackmagic et leur pilote, la bibliothèque NDI,
+//! et une installation déjà là.
+use std::{
+    net::{IpAddr, ToSocketAddrs},
+    path::{Path, PathBuf},
+    process::Command,
+    time::Duration,
+};
+
+use crate::paths;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Level {
+    Ok,
+    /// Possible, mais à savoir.
+    Warn,
+    /// Bloquant : l'installation s'arrête là.
+    Bad,
+}
+
+#[derive(Clone, Debug)]
+pub struct Check {
+    pub label: String,
+    pub level: Level,
+    pub detail: String,
+}
+
+fn check(label: &str, level: Level, detail: impl Into<String>) -> Check {
+    Check { label: label.into(), level, detail: detail.into() }
+}
+
+/// `/etc/os-release` : (ID, VERSION_ID, PRETTY_NAME).
+pub fn os_release(text: &str) -> (String, String, String) {
+    let get = |k: &str| text.lines().find_map(|l| l.strip_prefix(&format!("{k}="))).map(|v| v.trim().trim_matches('"').to_string()).unwrap_or_default();
+    (get("ID"), get("VERSION_ID"), get("PRETTY_NAME"))
+}
+
+/// Mémoire totale (Go) d'après `/proc/meminfo`.
+pub fn mem_gb(meminfo: &str) -> f64 {
+    meminfo
+        .lines()
+        .find_map(|l| l.strip_prefix("MemTotal:"))
+        .and_then(|v| v.split_whitespace().next()?.parse::<f64>().ok())
+        .map_or(0.0, |kb| kb / 1024.0 / 1024.0)
+}
+
+/// Place libre (Go) sur le disque qui porte `path` (ou son premier parent existant).
+pub fn free_gb(path: &Path) -> Option<f64> {
+    let mut p = path.to_path_buf();
+    while !p.exists() {
+        p = p.parent()?.to_path_buf();
+    }
+    let c = std::ffi::CString::new(p.as_os_str().to_string_lossy().as_bytes()).ok()?;
+    // SAFETY: `st` est rempli par statvfs ; le chemin est une chaîne C valide.
+    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+        return None;
+    }
+    Some(st.f_bavail as f64 * st.f_frsize as f64 / 1e9)
+}
+
+fn internet() -> Result<(), String> {
+    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(8))).build().into();
+    agent.get("https://api.github.com/").header("user-agent", "strata-install").call().map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Le système : ✓, ! ou ✗ pour chaque point. `offline` : une archive du Core est donnée.
+pub fn system(offline: bool) -> Vec<Check> {
+    let mut out = Vec::new();
+    let (id, ver, pretty) = os_release(&std::fs::read_to_string("/etc/os-release").unwrap_or_default());
+    out.push(match (id.as_str(), ver.as_str()) {
+        ("ubuntu", "24.04") => check("Système", Level::Ok, pretty),
+        ("ubuntu", _) => check("Système", Level::Warn, format!("{pretty} : prévu pour Ubuntu 24.04")),
+        _ => check("Système", Level::Bad, format!("{} : Strata s'installe sur Ubuntu 24.04", if pretty.is_empty() { "inconnu".into() } else { pretty })),
+    });
+    out.push(if std::env::consts::ARCH == "x86_64" {
+        check("Processeur", Level::Ok, format!("x86-64, {} cœurs", cores()))
+    } else {
+        check("Processeur", Level::Bad, format!("{} : x86-64 seulement", std::env::consts::ARCH))
+    });
+    if cores() < 4 {
+        out.last_mut().unwrap().level = Level::Warn;
+        out.last_mut().unwrap().detail = format!("{} cœurs : 4 au moins conseillés", cores());
+    }
+    let mem = mem_gb(&std::fs::read_to_string("/proc/meminfo").unwrap_or_default());
+    out.push(match mem {
+        m if m >= 7.5 => check("Mémoire", Level::Ok, format!("{m:.0} Go")),
+        m if m >= 3.5 => check("Mémoire", Level::Warn, format!("{m:.0} Go : 8 Go au moins conseillés")),
+        m => check("Mémoire", Level::Bad, format!("{m:.1} Go : 4 Go au moins")),
+    });
+    out.push(match free_gb(Path::new(paths::DATA)) {
+        Some(g) if g >= 20.0 => check("Disque", Level::Ok, format!("{g:.0} Go libres")),
+        Some(g) if g >= 5.0 => check("Disque", Level::Warn, format!("{g:.0} Go libres : 20 Go au moins conseillés")),
+        Some(g) => check("Disque", Level::Bad, format!("{g:.1} Go libres : 5 Go au moins")),
+        None => check("Disque", Level::Warn, "place libre inconnue"),
+    });
+    out.push(if Path::new("/run/systemd/system").exists() {
+        check("systemd", Level::Ok, "présent")
+    } else {
+        check("systemd", Level::Bad, "absent : le Core est un service systemd")
+    });
+    out.push(match internet() {
+        Ok(()) => check("Internet", Level::Ok, "GitHub joignable"),
+        Err(_) if offline => check("Internet", Level::Warn, "pas d'accès : installation depuis l'archive donnée"),
+        Err(e) => check("Internet", Level::Bad, format!("GitHub injoignable ({e}) : donnez l'archive du Core (--package)")),
+    });
+    // SAFETY: geteuid n'a aucune précondition.
+    out.push(if unsafe { libc::geteuid() } == 0 { check("Droits", Level::Ok, "root") } else { check("Droits", Level::Bad, "lancez l'installateur avec sudo") });
+    out
+}
+
+pub fn cores() -> usize {
+    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
+}
+
+/// Les adresses IPv4 de la machine (hors boucle locale), via `hostname -I`.
+pub fn local_ips() -> Vec<IpAddr> {
+    Command::new("hostname")
+        .arg("-I")
+        .output()
+        .ok()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .split_whitespace()
+                .filter_map(|s| s.parse().ok())
+                .filter(|ip: &IpAddr| ip.is_ipv4() && !ip.is_loopback())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Ce que donne le nom : à quelles adresses il mène, et si c'est cette machine.
+pub fn dns(name: &str) -> Check {
+    let ips: Vec<IpAddr> = (name, 80).to_socket_addrs().map(|a| a.map(|s| s.ip()).collect()).unwrap_or_default();
+    let mine = local_ips();
+    let first = mine.first().map(|i| i.to_string()).unwrap_or_else(|| "<adresse du serveur>".into());
+    if ips.is_empty() {
+        return check("Nom DNS", Level::Warn, format!("{name} n'est pas résolu : enregistrements à créer : {name} A {first}, *.{name} A {first}"));
+    }
+    if ips.iter().any(|i| mine.contains(i) || i.is_loopback()) {
+        check("Nom DNS", Level::Ok, format!("{name} → {}", ips.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", ")))
+    } else {
+        check(
+            "Nom DNS",
+            Level::Warn,
+            format!("{name} mène à {} et pas à ce serveur ({first})", ips.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", ")),
+        )
+    }
+}
+
+/// Un nom DNS valable : des mots de lettres, chiffres et tirets, séparés par des points.
+pub fn valid_dns(name: &str) -> bool {
+    let labels: Vec<&str> = name.split('.').collect();
+    name.len() <= 200
+        && labels.len() >= 2
+        && labels.iter().all(|l| {
+            !l.is_empty()
+                && l.len() <= 63
+                && !l.starts_with('-')
+                && !l.ends_with('-')
+                && l.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        })
+}
+
+// ---------- Le matériel ----------
+
+/// Les cartes Blackmagic sur le bus PCI (fabricant 0xbdbd).
+pub fn blackmagic_cards() -> usize {
+    std::fs::read_dir("/sys/bus/pci/devices")
+        .map(|d| d.flatten().filter(|e| std::fs::read_to_string(e.path().join("vendor")).is_ok_and(|v| v.trim() == "0xbdbd")).count())
+        .unwrap_or(0)
+}
+
+/// Le pilote Desktop Video installé : sa version.
+pub fn desktop_video() -> Option<String> {
+    let out = Command::new("dpkg-query").args(["-W", "-f=${Version}", "desktopvideo"]).output().ok()?;
+    let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !v.is_empty()).then_some(v)
+}
+
+/// Une archive Desktop Video déjà copiée sur le serveur (la plus récente).
+pub fn find_desktop_video() -> Option<PathBuf> {
+    let mut dirs: Vec<PathBuf> = vec![std::env::current_dir().unwrap_or_default(), "/root".into(), "/tmp".into()];
+    if let Ok(home) = std::fs::read_dir("/home") {
+        dirs.extend(home.flatten().map(|e| e.path()));
+    }
+    let mut found: Vec<PathBuf> = Vec::new();
+    for d in dirs {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let n = e.file_name().to_string_lossy().into_owned();
+            if (n.starts_with("Blackmagic_Desktop_Video_Linux_") && (n.ends_with(".tar.gz") || n.ends_with(".tar")))
+                || (n.starts_with("desktopvideo_") && n.ends_with(".deb"))
+            {
+                found.push(e.path());
+            }
+        }
+    }
+    found.sort_by_key(|p| p.file_name().map(|n| n.to_os_string()));
+    found.pop()
+}
+
+/// La bibliothèque NDI installée.
+pub fn ndi() -> Option<PathBuf> {
+    ["/usr/local/lib/libndi.so", "/usr/lib/libndi.so", "/usr/lib/x86_64-linux-gnu/libndi.so"].iter().map(PathBuf::from).find(|p| p.exists())
+}
+
+/// La version du Core installé (`strata-core 0.3.0`), s'il l'est.
+pub fn installed_core(root: &Path) -> Option<String> {
+    let bin = paths::under(root, paths::BIN);
+    let out = Command::new(&bin).arg("--version").output().ok()?;
+    let v = String::from_utf8_lossy(&out.stdout).split_whitespace().last().unwrap_or_default().to_string();
+    (out.status.success() && !v.is_empty()).then_some(v)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_the_system() {
+        let (id, v, p) = os_release("NAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nID=ubuntu\nPRETTY_NAME=\"Ubuntu 24.04.1 LTS\"\n");
+        assert_eq!((id.as_str(), v.as_str(), p.as_str()), ("ubuntu", "24.04", "Ubuntu 24.04.1 LTS"));
+        assert!((mem_gb("MemTotal:       16303860 kB\nMemFree: 1 kB\n") - 15.55).abs() < 0.01);
+        assert!(free_gb(Path::new("/tmp/does/not/exist")).is_some());
+        assert!(valid_dns("strata01.regie.fr") && !valid_dns("strata01") && !valid_dns("Strata.fr") && !valid_dns("a..b"));
+    }
+}

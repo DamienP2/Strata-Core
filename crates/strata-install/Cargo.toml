@@ -1,0 +1,23 @@
+[package]
+name = "strata-install"
+description = "L'installateur d'un serveur Strata : un écran plein terminal, ou des options (sans écran)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "strata-install"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+clap = { version = "4", features = ["derive", "env"] }
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
+sha2 = "0.10"
+flate2 = "1"
+tar = "0.4"
+libc = "0.2"
+ratatui = "0.29"
+crossterm = "0.28"

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/strata-core", "crates/strata-core-server", "crates/strata-decklink", "crates/strata-share"]
+members = ["crates/strata-core", "crates/strata-core-server", "crates/strata-decklink", "crates/strata-share", "crates/strata-install"]
 
 [workspace.package]
 version = "0.1.0"

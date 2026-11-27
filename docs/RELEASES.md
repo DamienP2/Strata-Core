@@ -26,7 +26,8 @@ Autre façon de publier, sans étiquette à pousser : *Actions › Release › R
 | --- | --- |
 | `strata-ui-<version>.tgz` | le paquet web `@strata/ui` |
 | `strata-core-<version>-linux-x86_64.tar.gz` | le serveur `strata-core`, interface comprise |
-| `strata-install-<version>-linux-x86_64` | l'installateur *(à venir)* |
+| `strata-install-<version>-linux-x86_64` | l'installateur (binaire statique) |
+| `install.sh` | la commande d'installation, qui télécharge l'installateur et vérifie son empreinte |
 | `release.json` | la fiche de la release |
 | `SHA256SUMS` | l'empreinte SHA-256 de chaque fichier |
 

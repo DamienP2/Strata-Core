@@ -5,7 +5,7 @@
 //!   réseau PTP (tenue par ptp4l, en TAI) et garde les serveurs NTP en secours ; sans PTP, il suit
 //!   les serveurs NTP. phc2sys ne doit pas régler l'horloge en même temps (signalé dans le bilan).
 //! - **Les fichiers** : le Core écrit `/etc/chrony/conf.d/strata.conf`, et pour le PTP
-//!   `/etc/linuxptp/strata-ptp4l.conf` et le service `strata-ptp4l`, puis relance ce qu'il faut.
+//!   `/etc/strata/ptp4l.conf` et le service `strata-ptp4l`, puis relance ce qu'il faut.
 //!   Sans les droits (l'installateur les donnera), il le dit, et les fichiers restent lisibles dans
 //!   l'interface et dans `<données>/clock/`. `STRATA_SYSTEM_ROOT` : écrire ailleurs qu'à la racine
 //!   (essais), sans rien relancer.
@@ -97,9 +97,9 @@ impl ClockSettings {
 pub struct SystemFiles {
     /// `/etc/chrony/conf.d/strata.conf`.
     pub chrony: String,
-    /// `/etc/linuxptp/strata-ptp4l.conf` (None : pas de PTP).
+    /// `/etc/strata/ptp4l.conf` (None : pas de PTP).
     pub ptp4l: Option<String>,
-    /// `/etc/systemd/system/strata-ptp4l.service`.
+    /// `/etc/systemd/system/strata-ptp4l.service` (toujours le même).
     pub ptp4l_unit: Option<String>,
     /// La carte PTP et son horloge matérielle.
     pub ptp_interface: Option<String>,
@@ -107,8 +107,24 @@ pub struct SystemFiles {
 }
 
 const CHRONY: &str = "etc/chrony/conf.d/strata.conf";
-const PTP4L: &str = "etc/linuxptp/strata-ptp4l.conf";
+const PTP4L: &str = "etc/strata/ptp4l.conf";
 const UNIT: &str = "etc/systemd/system/strata-ptp4l.service";
+
+/// Le service ptp4l de Strata : toujours là (posé par l'installateur), il ne démarre que si ses
+/// réglages existent ; le Core le relance ou l'arrête (droits donnés par l'installateur, polkit).
+pub const PTP4L_UNIT: &str = "[Unit]\n\
+Description=Strata Core : PTP (ptp4l, ST 2059-2)\n\
+After=network-online.target\n\
+Wants=network-online.target\n\
+ConditionPathExists=/etc/strata/ptp4l.conf\n\
+\n\
+[Service]\n\
+ExecStart=/usr/sbin/ptp4l -f /etc/strata/ptp4l.conf\n\
+Restart=always\n\
+RestartSec=2\n\
+\n\
+[Install]\n\
+WantedBy=multi-user.target\n";
 
 pub fn files(cfg: &HardwareConfig) -> SystemFiles {
     let c = &cfg.clock;
@@ -136,45 +152,29 @@ pub fn files(cfg: &HardwareConfig) -> SystemFiles {
             chrony.push_str(&format!("server {s} iburst\n"));
         }
     }
-    let (ptp4l, unit) = match (&iface, &phc) {
-        (Some(i), Some(_)) => (
-            Some(format!(
-                "# Strata Core : PTP (SMPTE ST 2059-2), esclave seulement. Écrit par le Core.\n\
-                 [global]\n\
-                 domainNumber            {}\n\
-                 slaveOnly               1\n\
-                 time_stamping           hardware\n\
-                 network_transport       UDPv4\n\
-                 delay_mechanism         E2E\n\
-                 logAnnounceInterval     -2\n\
-                 logSyncInterval         -3\n\
-                 logMinDelayReqInterval  -3\n\
-                 announceReceiptTimeout  3\n\
-                 dscp_event              46\n\
-                 dscp_general            46\n\
-                 tx_timestamp_timeout    50\n\
-                 \n\
-                 [{i}]\n",
-                cfg.ptp.domain
-            )),
-            Some(
-                "[Unit]\n\
-                 Description=Strata Core : PTP (ptp4l, ST 2059-2)\n\
-                 After=network-online.target\n\
-                 Wants=network-online.target\n\
-                 \n\
-                 [Service]\n\
-                 ExecStart=/usr/sbin/ptp4l -f /etc/linuxptp/strata-ptp4l.conf\n\
-                 Restart=always\n\
-                 RestartSec=2\n\
-                 \n\
-                 [Install]\n\
-                 WantedBy=multi-user.target\n"
-                    .to_string(),
-            ),
-        ),
-        _ => (None, None),
+    let ptp4l = match (&iface, &phc) {
+        (Some(i), Some(_)) => Some(format!(
+            "# Strata Core : PTP (SMPTE ST 2059-2), esclave seulement. Écrit par le Core.\n\
+             [global]\n\
+             domainNumber            {}\n\
+             slaveOnly               1\n\
+             time_stamping           hardware\n\
+             network_transport       UDPv4\n\
+             delay_mechanism         E2E\n\
+             logAnnounceInterval     -2\n\
+             logSyncInterval         -3\n\
+             logMinDelayReqInterval  -3\n\
+             announceReceiptTimeout  3\n\
+             dscp_event              46\n\
+             dscp_general            46\n\
+             tx_timestamp_timeout    50\n\
+             \n\
+             [{i}]\n",
+            cfg.ptp.domain
+        )),
+        _ => None,
     };
+    let unit = Some(PTP4L_UNIT.to_string());
     SystemFiles { chrony, ptp4l, ptp4l_unit: unit, ptp_interface: iface, phc }
 }
 
@@ -269,14 +269,15 @@ pub fn apply(data_dir: &Path, f: &SystemFiles, force: bool) -> Vec<Step> {
     let step = |what, r: Option<String>| Step { what, ok: r.is_none(), message: r };
     if unit == Some(true) {
         let _ = run("systemctl", &["daemon-reload"]);
+        let _ = run("systemctl", &["enable", "strata-ptp4l"]);
     }
     if f.ptp4l.is_some() {
-        if ptp.is_some() && unit.is_some() && (force || ptp == Some(true) || unit == Some(true)) {
-            steps.push(step("startPtp4l", run("systemctl", &["enable", "--now", "strata-ptp4l"]).or_else(|| run("systemctl", &["restart", "strata-ptp4l"]))));
+        if ptp.is_some() && (force || ptp == Some(true)) {
+            steps.push(step("startPtp4l", run("systemctl", &["restart", "strata-ptp4l"])));
         }
-    } else if unit == Some(true) {
-        // Le service vient d'être retiré.
-        steps.push(step("stopPtp4l", run("systemctl", &["disable", "--now", "strata-ptp4l"])));
+    } else if ptp == Some(true) {
+        // Ses réglages viennent d'être retirés.
+        steps.push(step("stopPtp4l", run("systemctl", &["stop", "strata-ptp4l"])));
     }
     if chrony.is_some() && (force || chrony == Some(true)) {
         steps.push(step("restartChrony", run("systemctl", &["restart", "chrony"])));

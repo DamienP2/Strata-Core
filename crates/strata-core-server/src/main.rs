@@ -25,6 +25,10 @@ enum Cmd {
     /// Le HTTPS du Core.
     #[command(subcommand)]
     Https(cli::HttpsCmd),
+    /// Le nom du serveur, son nom DNS, son fuseau.
+    Config(cli::ConfigArgs),
+    /// Le service ptp4l de Strata (posé par l'installateur).
+    Ptp4lUnit,
 }
 
 #[derive(Args, Default)]
@@ -46,6 +50,11 @@ fn main() -> anyhow::Result<()> {
         Some(Cmd::User(c)) => cli::user(c),
         Some(Cmd::App(c)) => cli::app(c),
         Some(Cmd::Https(c)) => cli::https(c),
+        Some(Cmd::Config(c)) => cli::config(c),
+        Some(Cmd::Ptp4lUnit) => {
+            print!("{}", strata_core_server::hardware::clock::PTP4L_UNIT);
+            Ok(())
+        }
         Some(Cmd::Run(r)) => run(r),
         None => run(cli.run),
     }
