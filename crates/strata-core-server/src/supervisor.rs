@@ -215,10 +215,10 @@ async fn keep(id: String, w: Arc<Watch>, l: Launch, mut stop: watch::Receiver<bo
                 w.line("core", &format!("started (pid {})", pid.unwrap_or(0)));
                 tracing::info!("{id} started (pid {})", pid.unwrap_or(0));
                 if let Some(out) = child.stdout.take() {
-                    tokio::spawn(pipe(w.clone(), out, "out"));
+                    tokio::spawn(pipe(id.clone(), w.clone(), out, "out"));
                 }
                 if let Some(err) = child.stderr.take() {
-                    tokio::spawn(pipe(w.clone(), err, "err"));
+                    tokio::spawn(pipe(id.clone(), w.clone(), err, "err"));
                 }
                 let mut up = false;
                 let exit = loop {
@@ -247,6 +247,13 @@ async fn keep(id: String, w: Arc<Watch>, l: Launch, mut stop: watch::Receiver<bo
                 if started.elapsed() > HEALTHY_AFTER {
                     delay = Duration::from_secs(1);
                 }
+                // Un rapport de plantage, avec la fin de son journal.
+                let tail: Vec<String> = {
+                    let log = w.log.lock().unwrap();
+                    log.iter().skip(log.len().saturating_sub(50)).map(|l| l.text.clone()).collect()
+                };
+                let version = l.env.iter().find(|(k, _)| k == "STRATA_APP_VERSION").map(|(_, v)| v.clone()).unwrap_or_default();
+                crate::health::app_crash(&id, &version, &how, started.elapsed().as_secs() as i64, tail);
                 let msg = format!("exited ({how}); restarting in {} s", delay.as_secs());
                 tracing::warn!("{id} {msg}");
                 w.line("core", &msg);
@@ -304,10 +311,12 @@ async fn terminate(child: &mut Child, pid: Option<u32>) {
     let _ = child.kill().await;
 }
 
-async fn pipe(w: Arc<Watch>, from: impl AsyncRead + Unpin, src: &'static str) {
+async fn pipe(id: String, w: Arc<Watch>, from: impl AsyncRead + Unpin, src: &'static str) {
     let mut lines = BufReader::new(from).lines();
     while let Ok(Some(line)) = lines.next_line().await {
         w.line(src, &line);
+        // Gardé aussi dans le journal de Santé.
+        crate::health::app_line(&id, &line);
     }
 }
 

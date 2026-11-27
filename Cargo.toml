@@ -6,7 +6,7 @@ members = ["crates/strata-core", "crates/strata-core-server", "crates/strata-dec
 version = "0.1.0"
 edition = "2021"
 license = "UNLICENSED"
-rust-version = "1.85"
+rust-version = "1.88"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

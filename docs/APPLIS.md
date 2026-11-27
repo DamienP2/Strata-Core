@@ -89,7 +89,11 @@ ces variables :
 - **Plantage** : relancée après 1 s, 2 s, 4 s… 30 s au plus (de nouveau 1 s après une minute de bonne
   marche).
 - **Journal** : ce qu'elle écrit sur la sortie standard et la sortie d'erreur est gardé par le Core
-  (les 1000 dernières lignes), visible dans *Réglages › Applis › <appli> › Journal*.
+  (les 1000 dernières lignes dans *Réglages › Applis › <appli> › Journal*, 30 jours dans *Santé ›
+  Journal*). Une ligne qui contient `ERROR` ou `WARN` dans ses premiers mots compte comme erreur ou
+  avertissement.
+- **Plantage** : un arrêt qu'elle n'a pas demandé laisse un rapport (90 jours) avec la fin de son
+  journal.
 - « En marche » veut dire que son port répond.
 
 Aujourd'hui, ce sont des processus enfants du Core. L'installateur en fera des services systemd

@@ -1,8 +1,8 @@
 // Les réglages du serveur (administrateurs), rangés par objet comme dans la maquette C : Ce serveur
 // (vue d'ensemble, nom et adresses, HTTPS), Applis (la Bibliothèque, puis une page par appli installée)
 // et Personnes (Utilisateurs, Groupes, Annuaire). Les autres sections viendront avec leurs briques
-// (Surveillance) ; Matériel (Cartes SDI, NDI, ST 2110, Réseau, Horloge).
-import { Clock, CloudDownload, EthernetPort as Ethernet, Globe, KeyRound, LayoutDashboard, LayoutGrid, Lock, MonitorPlay, Radio, Users as UsersIcon, UsersRound, Waves } from 'lucide-react';
+// Matériel (Cartes SDI, NDI, ST 2110, Réseau, Horloge) ; Santé (Ressources, Journal).
+import { Activity, Clock, CloudDownload, ScrollText, EthernetPort as Ethernet, Globe, KeyRound, LayoutDashboard, LayoutGrid, Lock, MonitorPlay, Radio, Users as UsersIcon, UsersRound, Waves } from 'lucide-react';
 import { Suspense, lazy, useEffect, useState } from 'react';
 import { NavItem, NavSection, SidePage, t } from '@strata/ui';
 import { appIcon } from '../icons';
@@ -20,6 +20,9 @@ const NdiPage = lazy(() => hw().then((m) => ({ default: m.NdiPage })));
 const St2110Page = lazy(() => hw().then((m) => ({ default: m.St2110Page })));
 const NetworkPage = lazy(() => hw().then((m) => ({ default: m.NetworkPage })));
 const ClockPage = lazy(() => hw().then((m) => ({ default: m.ClockPage })));
+// La santé (et ses courbes) aussi.
+const ResourcesPage = lazy(() => import('./health/Resources').then((m) => ({ default: m.ResourcesPage })));
+const JournalPage = lazy(() => import('./health/Journal').then((m) => ({ default: m.JournalPage })));
 import { api } from '../api';
 
 /** `path` : ce qui suit /reglages/ (« serveur », « adresses », « https », « bibliotheque », « applis/livecut », « utilisateurs »…). */
@@ -37,7 +40,8 @@ export function Settings({ path }: { path: string }) {
 
   let page: React.ReactNode = null;
   const hardware = ['sdi', 'ndi', 'st2110', 'reseau', 'horloge'];
-  const fixed = [...hardware, 'serveur', 'adresses', 'https', 'mises-a-jour', 'utilisateurs', 'groupes', 'annuaire'].includes(path);
+  const health = ['ressources', 'journal'];
+  const fixed = [...hardware, ...health, 'serveur', 'adresses', 'https', 'mises-a-jour', 'utilisateurs', 'groupes', 'annuaire'].includes(path);
   if (path === 'serveur') page = <Overview apps={apps} />;
   else if (path === 'adresses') page = <Addresses />;
   else if (path === 'https') page = <Https />;
@@ -46,6 +50,8 @@ export function Settings({ path }: { path: string }) {
   else if (path === 'st2110') page = <St2110Page />;
   else if (path === 'reseau') page = <NetworkPage />;
   else if (path === 'horloge') page = <ClockPage />;
+  else if (path === 'ressources') page = <ResourcesPage />;
+  else if (path === 'journal') page = <JournalPage />;
   else if (path === 'mises-a-jour') page = <Updates apps={apps} jobs={jobs} reloadApps={reload} onCount={setPending} />;
   else if (path === 'utilisateurs') page = <Users />;
   else if (path === 'groupes') page = <Groups />;
@@ -76,6 +82,11 @@ export function Settings({ path }: { path: string }) {
         <NavItem icon={Waves} label="ST 2110" on={path === 'st2110'} onClick={() => navigate('/reglages/st2110')} />
         <NavItem icon={Ethernet} label={t('Network')} on={path === 'reseau'} onClick={() => navigate('/reglages/reseau')} />
         <NavItem icon={Clock} label={t('Clock')} on={path === 'horloge'} onClick={() => navigate('/reglages/horloge')} />
+      </div>
+      <div>
+        <NavSection title={t('Health')} />
+        <NavItem icon={Activity} label={t('Resources')} on={path === 'ressources'} onClick={() => navigate('/reglages/ressources')} />
+        <NavItem icon={ScrollText} label={t('Journal')} on={path === 'journal'} onClick={() => navigate('/reglages/journal')} />
       </div>
       <div>
         <NavSection title={t('People')} />

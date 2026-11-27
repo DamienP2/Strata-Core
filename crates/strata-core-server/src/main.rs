@@ -52,8 +52,17 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn run(a: RunArgs) -> anyhow::Result<()> {
-    tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,tower_http=warn".into())).init();
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+    // La console, et l'anneau qui tient le journal de Santé.
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,tower_http=warn".into()))
+        .with(tracing_subscriber::fmt::layer())
+        .with(strata_core_server::logs::Ring)
+        .init();
     let data_dir = a.data_dir.unwrap_or_else(strata_core_server::user_data_dir);
+    // Le journal sur disque, les plantages.
+    let _ = std::fs::create_dir_all(&data_dir);
+    strata_core_server::health::start(&data_dir);
     // Les réglages réseau de NDI que partagent le Core et les applis (Matériel › NDI) ; avant
     // tout fil, la bibliothèque NDI le lit en se chargeant.
     if std::env::var_os("NDI_CONFIG_DIR").is_none() {

@@ -59,5 +59,7 @@ strata-decklink.workspace = true
 libloading = "0.8"
 jpeg-encoder = "0.6"
 strata-share.workspace = true
+sysinfo = { version = "0.37", default-features = false, features = ["system", "disk", "network"] }
+jiff = "1"
 
 [dev-dependencies]

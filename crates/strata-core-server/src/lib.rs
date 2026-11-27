@@ -12,9 +12,12 @@ pub mod config;
 pub mod groups;
 pub mod guard;
 pub mod hardware;
+pub mod health;
 pub mod install;
+pub mod logs;
 pub mod prefs;
 pub mod relay;
+pub mod resources;
 pub mod server;
 pub mod sso;
 pub mod state;
@@ -103,6 +106,7 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
     // certificat fait par Strata : renouvelé quand il le faut.
     apps::reconcile(&s).await;
     reconcile_inputs(&s).await;
+    resources::start(&s);
     let keeper = {
         let s = s.clone();
         tokio::spawn(async move {
@@ -113,7 +117,7 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
                 reconcile_inputs(&s).await;
                 updates::tick(&s).await;
                 tick += 1;
-                if tick % (12 * 3600 / 5) == 0 {
+                if tick.is_multiple_of(12 * 3600 / 5) {
                     tls::apply(&s).await;
                 }
             }
@@ -125,6 +129,8 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
     // Les entrées après les applis qui les lisent.
     let s2 = s.clone();
     let _ = tokio::task::spawn_blocking(move || s2.captures.stop_all()).await;
+    // Un arrêt voulu : pas un plantage au prochain démarrage.
+    health::stopped();
     s.auth.flush_sessions();
     let ending = if s.restart_asked() { Ending::Restart } else { Ending::Stop };
     tracing::info!("{}", if ending == Ending::Restart { "stopped, restarting" } else { "stopped" });

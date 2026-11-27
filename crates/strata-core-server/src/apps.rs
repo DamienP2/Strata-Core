@@ -165,6 +165,7 @@ pub fn launch_of(a: &Installed, data_dir: &Path, cfg: &ServerConfig, core_port: 
     }
     let env = [
         ("STRATA_APP_ID", m.id.clone()),
+        ("STRATA_APP_VERSION", m.version.to_string()),
         ("STRATA_APP_PORT", m.port.to_string()),
         ("STRATA_APP_BIND", format!("127.0.0.1:{}", m.port)),
         ("STRATA_APP_URL", cfg.app_url(&m.id)),

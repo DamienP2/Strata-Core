@@ -219,6 +219,8 @@ L'endroit où l'on choisit **ce que fait ce serveur physique** (administrateurs)
 - **Alertes** : webhook (Slack, Teams, Discord, Mattermost, JSON) et e-mail (SMTP), envoyées quand un problème dure et quand il est fini. Les applis peuvent y déclarer leurs propres alertes. Une carte DeckLink qui n'est plus vue (après une mise à jour du noyau, par exemple) déclenche une alerte.
 - **SNMP** : exposer l'état du serveur et des applis aux outils de supervision de la régie (nouveau).
 
+Fait : *Santé › Ressources* (processeurs, mémoire, disques, réseau, ce que prennent le Core et chaque appli avec ses processus enfants, ce qui reste, 10 dernières minutes) et *Santé › Journal* (journal du Core et des applis sur disque 30 jours, plantages 90 jours : panique du Core, arrêt inattendu, appli arrêtée seule avec la fin de son journal ; incidents regroupés ; export `.tar.gz` sans secrets). Reste : alertes, SNMP.
+
 Sources : `health.rs`, `logs.rs` (CG et Cut), `perf.rs` (CG), `resources.rs`, `alerts.rs` (Cut).
 
 ### 5.6 SERVEUR — réglages et mises à jour OTA
