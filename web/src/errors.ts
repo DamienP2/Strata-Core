@@ -50,6 +50,10 @@ const SHAPED: [RegExp, string, string[]][] = [
   [/^cannot replace (.+): (.+)$/, 'Cannot replace {path}: {why}', ['path', 'why']],
   [/^cannot keep the current Core: (.+)$/, 'Cannot keep the current Core: {why}', ['why']],
   [/^release (.+) has no Core archive$/, 'Release {tag} has no Core archive', ['tag']],
+  // SNMP
+  [/^not an address or a network: (.+)$/, 'not an address or a network: {a}', ['a']],
+  [/^not an address for the traps: (.+)$/, 'not an address for the traps: {a}', ['a']],
+  [/^cannot listen on UDP port (\d+): (.+)$/, 'cannot listen on UDP port {port}: {why}', ['port', 'why']],
   // Alertes
   [/^the webhook answered HTTP (\d+)$/, 'the webhook answered HTTP {code}', ['code']],
   // Horloge

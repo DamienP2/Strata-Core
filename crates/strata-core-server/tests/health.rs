@@ -136,3 +136,62 @@ async fn alert_settings_test_message_and_app_alerts() {
     assert_eq!((st, msg.as_str()), (StatusCode::BAD_REQUEST, Some("no active app: livecut")));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn snmp_agent_answers_over_udp() {
+    let dir = std::env::temp_dir().join(format!("strata-snmp-it-{}", strata_core::new_id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let s = AppState::new(dir.clone());
+    let admin = s.auth.add(NewUser { username: "admin".into(), display_name: String::new(), admin: true, password: Some("password1".into()) }).unwrap();
+    let cookie = format!("strata_session={}", s.auth.open_session(&admin.id));
+    let app = strata_core_server::app(s.clone(), None).layer(MockConnectInfo("10.0.0.5:5000".parse::<SocketAddr>().unwrap()));
+    // Un port UDP libre.
+    let port = std::net::UdpSocket::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let (st, v) = send(
+        &app,
+        "PUT",
+        "/api/health/snmp",
+        Some(&cookie),
+        serde_json::json!({"enabled": true, "port": port, "community": "regie", "allowed": ["127.0.0.0/8"], "location": "Régie A"}),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["settings"]["community"], "••••••••");
+    assert!(v["error"].is_null(), "{v}");
+
+    // GET sysLocation.0 (1.3.6.1.2.1.1.6.0), communauté « regie », SNMP v2c.
+    let oid = [0x06, 0x08, 0x2b, 0x06, 0x01, 0x02, 0x01, 0x01, 0x06, 0x00];
+    let bind = [&[0x30, (oid.len() + 2) as u8][..], &oid, &[0x05, 0x00]].concat();
+    let binds = [&[0x30, bind.len() as u8][..], &bind].concat();
+    let pdu_body = [&[0x02, 0x01, 0x07, 0x02, 0x01, 0x00, 0x02, 0x01, 0x00][..], &binds].concat();
+    let pdu = [&[0xA0, pdu_body.len() as u8][..], &pdu_body].concat();
+    let msg_body = [&[0x02, 0x01, 0x01, 0x04, 0x05][..], b"regie", &pdu].concat();
+    let msg = [&[0x30, msg_body.len() as u8][..], &msg_body].concat();
+    let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    sock.send_to(&msg, ("127.0.0.1", port)).await.unwrap();
+    let mut buf = [0u8; 1500];
+    let n = tokio::time::timeout(std::time::Duration::from_secs(5), sock.recv(&mut buf)).await.expect("no answer").unwrap();
+    let resp = &buf[..n];
+    assert!(resp.windows("Régie A".len()).any(|w| w == "Régie A".as_bytes()), "{resp:?}");
+    assert!(resp.contains(&0xA2));
+
+    // Ce que l'agent répond, dans l'interface ; la MIB.
+    let (_, b) = get(&app, "/api/health/snmp", &cookie).await;
+    let v: Value = serde_json::from_slice(&b).unwrap();
+    assert!(v["walk"].as_array().unwrap().iter().any(|w| w["name"] == "coreVersion"));
+    let (st, b) = get(&app, "/api/health/snmp/mib", &cookie).await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(String::from_utf8_lossy(&b).starts_with("STRATA-CORE-MIB DEFINITIONS"));
+
+    // Une alerte sans aucun canal allumé : refusée.
+    let (st, msg) = send(
+        &app,
+        "POST",
+        "/api/health/alerts/test",
+        Some(&cookie),
+        serde_json::json!({"webhook": "https://x.example", "webhookEnabled": false, "snmpTraps": false}),
+    )
+    .await;
+    assert_eq!((st, msg.as_str()), (StatusCode::BAD_REQUEST, Some("turn on a webhook, an e-mail address or the SNMP traps")));
+    let _ = std::fs::remove_dir_all(&dir);
+}

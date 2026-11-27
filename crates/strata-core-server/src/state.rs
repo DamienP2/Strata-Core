@@ -4,7 +4,7 @@ use std::{
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, AtomicU16, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     time::Instant,
 };
@@ -35,6 +35,9 @@ pub struct AppState {
     pub resources: crate::resources::Resources,
     /// Les alertes (Santé).
     pub alerts: crate::alerts::Alerts,
+    /// Le SNMP : ses réglages, l'agent.
+    pub snmp_settings: Mutex<crate::snmp::SnmpSettings>,
+    pub snmp: crate::snmp::Agent,
     /// Les mises à jour du Core et des applis.
     pub updates: Updates,
     /// Le HTTPS : certificat et écoute.
@@ -63,6 +66,8 @@ impl AppState {
             captures: Default::default(),
             resources: Default::default(),
             alerts: crate::alerts::Alerts::new(&data_dir),
+            snmp_settings: Mutex::new(crate::snmp::SnmpSettings::load(&data_dir)),
+            snmp: Default::default(),
             restart: AtomicBool::new(false),
             restart_signal: tokio::sync::Notify::new(),
             started_at: Instant::now(),

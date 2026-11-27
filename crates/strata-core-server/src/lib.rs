@@ -20,6 +20,7 @@ pub mod prefs;
 pub mod relay;
 pub mod resources;
 pub mod server;
+pub mod snmp;
 pub mod sso;
 pub mod state;
 pub mod supervisor;
@@ -109,6 +110,7 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
     reconcile_inputs(&s).await;
     resources::start(&s);
     alerts::start(&s);
+    snmp::apply(&s).await;
     let keeper = {
         let s = s.clone();
         tokio::spawn(async move {

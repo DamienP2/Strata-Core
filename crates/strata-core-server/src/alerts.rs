@@ -43,6 +43,11 @@ pub struct AlertSettings {
     pub enabled: bool,
     /// La langue des messages : `fr` ou `en`.
     pub language: String,
+    /// Chaque canal s'allume à part.
+    pub webhook_enabled: bool,
+    pub email_enabled: bool,
+    /// Les traps SNMP, vers les destinations de Santé › SNMP.
+    pub snmp_traps: bool,
     /// Reçoit un message JSON (`text` et `content` : ce qu'affichent les messageries).
     pub webhook: String,
     /// Destinataires, séparés par des virgules.
@@ -69,6 +74,9 @@ impl Default for AlertSettings {
         AlertSettings {
             enabled: false,
             language: "fr".into(),
+            webhook_enabled: true,
+            email_enabled: true,
+            snmp_traps: true,
             webhook: String::new(),
             email_to: String::new(),
             smtp_host: String::new(),
@@ -118,7 +126,7 @@ impl AlertSettings {
         if !["starttls", "tls", "none"].contains(&self.smtp_security.as_str()) {
             return Err("the mail server's security is starttls, tls or none".into());
         }
-        if !self.email_to.is_empty() {
+        if self.email_enabled && !self.email_to.is_empty() {
             if self.smtp_host.is_empty() || self.smtp_from.is_empty() {
                 return Err("give the mail server and the sender's address".into());
             }
@@ -409,7 +417,7 @@ fn look(s: &AppState) -> Vec<Problem> {
 }
 
 /// Un tour : ce qui va mal, ce qui est fini, et les messages à envoyer.
-fn round(s: &AppState) -> Vec<(&'static str, String)> {
+fn round(s: &AppState) -> Vec<(&'static str, String, String)> {
     let a = s.alerts.settings.load_full();
     let mut seen = look(s);
     let now = now_ms();
@@ -423,7 +431,7 @@ fn round(s: &AppState) -> Vec<(&'static str, String)> {
         }
         if a.enabled && !p.told && (p.once || now - p.since >= delay) {
             p.told = true;
-            out.push(("problem", p.text.clone()));
+            out.push(("problem", p.key.clone(), p.text.clone()));
             if p.key == "restart" {
                 *s.alerts.restart_told.lock().unwrap() = true;
             }
@@ -432,7 +440,7 @@ fn round(s: &AppState) -> Vec<(&'static str, String)> {
     // Fini : dit s'il avait été dit.
     for b in active.iter().filter(|b| !seen.iter().any(|p| p.key == b.key)) {
         if a.enabled && b.told && !b.over.is_empty() {
-            out.push(("ok", b.over.clone()));
+            out.push(("ok", b.key.clone(), b.over.clone()));
         }
     }
     // Désactivées : rien n'est gardé pour plus tard.
@@ -459,8 +467,11 @@ pub fn start(s: &Shared) {
             tokio::task::spawn_blocking(move || {
                 let a = s2.alerts.settings.load_full();
                 let server = s2.config.load().name.clone();
-                for (level, text) in out {
-                    let results = send(&a, &server, level, &text);
+                for (level, key, text) in out {
+                    let mut results = send(&a, &server, level, &text);
+                    if a.snmp_traps && crate::snmp::send_trap(&s2, level, &key, &text) {
+                        results.push(("snmp".into(), None));
+                    }
                     for (channel, r) in &results {
                         if let Some(e) = r {
                             tracing::warn!("alert by {channel}: {e}");
@@ -482,10 +493,10 @@ pub fn start(s: &Shared) {
 /// Envoie un message par chaque canal réglé : (canal, erreur éventuelle).
 fn send(a: &AlertSettings, server: &str, level: &'static str, text: &str) -> Vec<(String, Option<String>)> {
     let mut out = Vec::new();
-    if !a.webhook.is_empty() {
+    if a.webhook_enabled && !a.webhook.is_empty() {
         out.push(("webhook".into(), webhook(a, server, level, text).err()));
     }
-    if !a.email_to.is_empty() {
+    if a.email_enabled && !a.email_to.is_empty() {
         out.push(("email".into(), email(a, server, text).err()));
     }
     out
@@ -676,12 +687,24 @@ async fn test(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(mut a)
     require(me.admin)?;
     unmask(&mut a, &s.alerts.settings.load()).map_err(bad)?;
     a.check().map_err(bad)?;
-    if a.webhook.is_empty() && a.email_to.is_empty() {
-        return Err(bad("give a webhook or an e-mail address"));
+    let traps = a.snmp_traps && {
+        let t = s.snmp_settings.lock().unwrap();
+        t.enabled && !t.traps.is_empty()
+    };
+    if !(a.webhook_enabled && !a.webhook.is_empty()) && !(a.email_enabled && !a.email_to.is_empty()) && !traps {
+        return Err(bad("turn on a webhook, an e-mail address or the SNMP traps"));
     }
     let server = s.config.load().name.clone();
     let text = if a.fr() { "Message d’essai des alertes de Strata Core".to_string() } else { "Strata Core alerts: a test message".to_string() };
-    let results = blocking(move || send(&a, &server, "info", &text)).await?;
+    let s2 = s.clone();
+    let results = blocking(move || {
+        let mut r = send(&a, &server, "info", &text);
+        if a.snmp_traps && crate::snmp::send_trap(&s2, "info", "test", &text) {
+            r.push(("snmp".into(), None));
+        }
+        r
+    })
+    .await?;
     Ok(Json(json!({ "results": results })))
 }
 
@@ -749,7 +772,7 @@ mod tests {
         // Fini.
         std::fs::write(dir.join("hardware.json"), "{}").unwrap();
         let out = round(&s);
-        assert_eq!((out[0].0, out[0].1.as_str()), ("ok", "Carte DeckLink « Plateau » (DeckLink Quad 2) de nouveau vue"));
+        assert_eq!((out[0].0, out[0].1.as_str(), out[0].2.as_str()), ("ok", "card:gone", "Carte DeckLink « Plateau » (DeckLink Quad 2) de nouveau vue"));
         assert!(s.alerts.active().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }

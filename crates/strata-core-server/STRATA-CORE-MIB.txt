@@ -1,0 +1,166 @@
+STRATA-CORE-MIB DEFINITIONS ::= BEGIN
+
+-- L'état d'un serveur Strata (Strata Core) : le Core, ses applis, ses entrées SDI, les problèmes
+-- en cours, et les traps envoyés avec les alertes. Lecture seule, SNMP v2c.
+--
+-- La racine est sous le numéro d'entreprise réservé à la documentation (RFC 5612, 32473) ; à
+-- remplacer par celui de l'entreprise si elle en a un.
+
+IMPORTS
+    MODULE-IDENTITY, OBJECT-TYPE, NOTIFICATION-TYPE, Integer32, Gauge32, Counter32, TimeTicks, enterprises
+        FROM SNMPv2-SMI
+    DisplayString
+        FROM SNMPv2-TC;
+
+strataCore MODULE-IDENTITY
+    LAST-UPDATED "202611270000Z"
+    ORGANIZATION "Strata"
+    CONTACT-INFO "Strata Core"
+    DESCRIPTION  "L'état d'un serveur Strata."
+    ::= { strata 1 }
+
+strata OBJECT IDENTIFIER ::= { enterprises 32473 1 }
+
+strataCoreTraps   OBJECT IDENTIFIER ::= { strataCore 0 }
+strataCoreInfo    OBJECT IDENTIFIER ::= { strataCore 1 }
+strataAlert       OBJECT IDENTIFIER ::= { strataCore 5 }
+
+-- Le Core
+
+coreVersion OBJECT-TYPE
+    SYNTAX DisplayString MAX-ACCESS read-only STATUS current
+    DESCRIPTION "La version de Strata Core." ::= { strataCoreInfo 1 }
+
+coreServerName OBJECT-TYPE
+    SYNTAX DisplayString MAX-ACCESS read-only STATUS current
+    DESCRIPTION "Le nom d'usage du serveur." ::= { strataCoreInfo 2 }
+
+coreUptime OBJECT-TYPE
+    SYNTAX TimeTicks MAX-ACCESS read-only STATUS current
+    DESCRIPTION "Depuis quand le Core tourne." ::= { strataCoreInfo 3 }
+
+coreProblems OBJECT-TYPE
+    SYNTAX Gauge32 MAX-ACCESS read-only STATUS current
+    DESCRIPTION "Le nombre de problèmes en cours (problemTable)." ::= { strataCoreInfo 4 }
+
+coreCpu OBJECT-TYPE
+    SYNTAX Gauge32 (0..100) UNITS "percent" MAX-ACCESS read-only STATUS current
+    DESCRIPTION "Les processeurs utilisés, tous cœurs." ::= { strataCoreInfo 5 }
+
+coreMemory OBJECT-TYPE
+    SYNTAX Gauge32 (0..100) UNITS "percent" MAX-ACCESS read-only STATUS current
+    DESCRIPTION "La mémoire utilisée." ::= { strataCoreInfo 6 }
+
+coreDataDisk OBJECT-TYPE
+    SYNTAX Gauge32 (0..100) UNITS "percent" MAX-ACCESS read-only STATUS current
+    DESCRIPTION "Le disque des données du Core, utilisé." ::= { strataCoreInfo 7 }
+
+coreTimeSynced OBJECT-TYPE
+    SYNTAX INTEGER { yes(1), no(2), unknown(3) } MAX-ACCESS read-only STATUS current
+    DESCRIPTION "L'heure du serveur est synchronisée (PTP ou NTP)." ::= { strataCoreInfo 8 }
+
+corePtpLocked OBJECT-TYPE
+    SYNTAX INTEGER { yes(1), no(2), notRunning(3) } MAX-ACCESS read-only STATUS current
+    DESCRIPTION "Le PTP suit un grand maître." ::= { strataCoreInfo 9 }
+
+-- Les applis
+
+appTable OBJECT-TYPE
+    SYNTAX SEQUENCE OF AppEntry MAX-ACCESS not-accessible STATUS current
+    DESCRIPTION "Les applis installées." ::= { strataCore 2 }
+
+appEntry OBJECT-TYPE
+    SYNTAX AppEntry MAX-ACCESS not-accessible STATUS current
+    DESCRIPTION "Une appli." INDEX { appIndex } ::= { appTable 1 }
+
+AppEntry ::= SEQUENCE {
+    appIndex Integer32, appId DisplayString, appName DisplayString, appVersion DisplayString,
+    appState INTEGER, appCpu Gauge32, appMemory Gauge32, appRestarts Counter32 }
+
+appIndex OBJECT-TYPE SYNTAX Integer32 (1..1000) MAX-ACCESS read-only STATUS current
+    DESCRIPTION "Le rang." ::= { appEntry 1 }
+appId OBJECT-TYPE SYNTAX DisplayString MAX-ACCESS read-only STATUS current
+    DESCRIPTION "L'identifiant (livecut)." ::= { appEntry 2 }
+appName OBJECT-TYPE SYNTAX DisplayString MAX-ACCESS read-only STATUS current
+    DESCRIPTION "Le nom (LiveCut)." ::= { appEntry 3 }
+appVersion OBJECT-TYPE SYNTAX DisplayString MAX-ACCESS read-only STATUS current
+    DESCRIPTION "La version." ::= { appEntry 4 }
+appState OBJECT-TYPE
+    SYNTAX INTEGER { stopped(1), starting(2), running(3), crashed(4), inactive(5) }
+    MAX-ACCESS read-only STATUS current
+    DESCRIPTION "Son état." ::= { appEntry 5 }
+appCpu OBJECT-TYPE SYNTAX Gauge32 UNITS "hundredths of a core" MAX-ACCESS read-only STATUS current
+    DESCRIPTION "Les processeurs pris, en centièmes de cœur (150 = un cœur et demi)." ::= { appEntry 6 }
+appMemory OBJECT-TYPE SYNTAX Gauge32 UNITS "KiB" MAX-ACCESS read-only STATUS current
+    DESCRIPTION "La mémoire prise, avec ses processus enfants." ::= { appEntry 7 }
+appRestarts OBJECT-TYPE SYNTAX Counter32 MAX-ACCESS read-only STATUS current
+    DESCRIPTION "Ses relances depuis son activation." ::= { appEntry 8 }
+
+-- Les problèmes en cours
+
+problemTable OBJECT-TYPE
+    SYNTAX SEQUENCE OF ProblemEntry MAX-ACCESS not-accessible STATUS current
+    DESCRIPTION "Les problèmes en cours (Santé › Alertes)." ::= { strataCore 3 }
+
+problemEntry OBJECT-TYPE
+    SYNTAX ProblemEntry MAX-ACCESS not-accessible STATUS current
+    DESCRIPTION "Un problème." INDEX { problemIndex } ::= { problemTable 1 }
+
+ProblemEntry ::= SEQUENCE { problemIndex Integer32, problemKey DisplayString, problemText DisplayString, problemAge TimeTicks }
+
+problemIndex OBJECT-TYPE SYNTAX Integer32 (1..10000) MAX-ACCESS read-only STATUS current
+    DESCRIPTION "Le rang." ::= { problemEntry 1 }
+problemKey OBJECT-TYPE SYNTAX DisplayString MAX-ACCESS read-only STATUS current
+    DESCRIPTION "Ce qui est en cause (disk:/, app:livecut, input:<carte>:<n>…)." ::= { problemEntry 2 }
+problemText OBJECT-TYPE SYNTAX DisplayString MAX-ACCESS read-only STATUS current
+    DESCRIPTION "Le problème, en mots." ::= { problemEntry 3 }
+problemAge OBJECT-TYPE SYNTAX TimeTicks MAX-ACCESS read-only STATUS current
+    DESCRIPTION "Depuis combien de temps." ::= { problemEntry 4 }
+
+-- Les entrées SDI
+
+inputTable OBJECT-TYPE
+    SYNTAX SEQUENCE OF InputEntry MAX-ACCESS not-accessible STATUS current
+    DESCRIPTION "Les entrées SDI captées par le Core." ::= { strataCore 4 }
+
+inputEntry OBJECT-TYPE
+    SYNTAX InputEntry MAX-ACCESS not-accessible STATUS current
+    DESCRIPTION "Une entrée." INDEX { inputIndex } ::= { inputTable 1 }
+
+InputEntry ::= SEQUENCE {
+    inputIndex Integer32, inputCard DisplayString, inputConnector Integer32, inputName DisplayString,
+    inputSignal INTEGER, inputFormat DisplayString, inputFps Gauge32, inputReaders Gauge32 }
+
+inputIndex OBJECT-TYPE SYNTAX Integer32 (1..1000) MAX-ACCESS read-only STATUS current
+    DESCRIPTION "Le rang." ::= { inputEntry 1 }
+inputCard OBJECT-TYPE SYNTAX DisplayString MAX-ACCESS read-only STATUS current
+    DESCRIPTION "La carte." ::= { inputEntry 2 }
+inputConnector OBJECT-TYPE SYNTAX Integer32 MAX-ACCESS read-only STATUS current
+    DESCRIPTION "Le numéro du connecteur (SDI n)." ::= { inputEntry 3 }
+inputName OBJECT-TYPE SYNTAX DisplayString MAX-ACCESS read-only STATUS current
+    DESCRIPTION "À quoi il est relié." ::= { inputEntry 4 }
+inputSignal OBJECT-TYPE SYNTAX INTEGER { yes(1), no(2), unknown(3) } MAX-ACCESS read-only STATUS current
+    DESCRIPTION "Un signal arrive." ::= { inputEntry 5 }
+inputFormat OBJECT-TYPE SYNTAX DisplayString MAX-ACCESS read-only STATUS current
+    DESCRIPTION "Le format (1080i50)." ::= { inputEntry 6 }
+inputFps OBJECT-TYPE SYNTAX Gauge32 UNITS "hundredths of a frame per second" MAX-ACCESS read-only STATUS current
+    DESCRIPTION "Images par seconde mesurées, en centièmes." ::= { inputEntry 7 }
+inputReaders OBJECT-TYPE SYNTAX Gauge32 MAX-ACCESS read-only STATUS current
+    DESCRIPTION "Les applis qui la lisent." ::= { inputEntry 8 }
+
+-- Les traps
+
+alertKey OBJECT-TYPE SYNTAX DisplayString MAX-ACCESS accessible-for-notify STATUS current
+    DESCRIPTION "Ce qui est en cause." ::= { strataAlert 1 }
+alertText OBJECT-TYPE SYNTAX DisplayString MAX-ACCESS accessible-for-notify STATUS current
+    DESCRIPTION "Le message." ::= { strataAlert 2 }
+
+strataProblem NOTIFICATION-TYPE
+    OBJECTS { alertKey, alertText } STATUS current
+    DESCRIPTION "Un problème a duré le délai des alertes." ::= { strataCoreTraps 1 }
+
+strataProblemOver NOTIFICATION-TYPE
+    OBJECTS { alertKey, alertText } STATUS current
+    DESCRIPTION "Un problème est fini." ::= { strataCoreTraps 2 }
+
+END

@@ -126,6 +126,8 @@
 @media (max-width: 760px) { .core-jline { grid-template-columns: 1fr; gap: 2px; } }
 /* Les alertes */
 .core-switches { display: flex; flex-direction: column; gap: 8px; }
+.core-channel { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 12px 0; border-top: 1px solid var(--line); }
+.core-channel > .st-field, .core-channel > .st-grid { width: 100%; }
 /* L'horloge */
 .core-clock { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
 .core-clock-tc { font: 600 44px/1.1 var(--mono); letter-spacing: .02em; font-variant-numeric: tabular-nums; color: var(--text); }
