@@ -637,7 +637,10 @@ fn firewall(ctx: &Ctx) -> Result<String, String> {
     }
     ctx.run("ufw", &["allow", "80/tcp", "comment", "Strata Core"])?;
     ctx.run("ufw", &["allow", "443/tcp", "comment", "Strata Core"])?;
-    Ok("80/tcp et 443/tcp ouverts".into())
+    // NMOS : l'API du nœud (IS-04, IS-05) et son annonce mDNS, pour le contrôleur de la régie.
+    ctx.run("ufw", &["allow", "3212/tcp", "comment", "Strata Core NMOS"])?;
+    ctx.run("ufw", &["allow", "5353/udp", "comment", "Strata Core NMOS (mDNS)"])?;
+    Ok("80/tcp, 443/tcp, 3212/tcp (NMOS) et 5353/udp (mDNS) ouverts".into())
 }
 
 fn admin(ctx: &Ctx, name: &str, password: &str) -> Result<String, String> {

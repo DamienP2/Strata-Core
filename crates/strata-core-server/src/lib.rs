@@ -17,6 +17,7 @@ pub mod hardware;
 pub mod health;
 pub mod install;
 pub mod logs;
+pub mod nmos;
 pub mod prefs;
 pub mod relay;
 pub mod resources;
@@ -138,6 +139,7 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
     resources::start(&s);
     alerts::start(&s);
     snmp::apply(&s).await;
+    nmos::apply(&s).await;
     cluster::start(&s);
     let keeper = {
         let s = s.clone();
@@ -147,6 +149,7 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 apps::reconcile(&s).await;
                 reconcile_inputs(&s).await;
+                nmos::apply(&s).await;
                 let s2 = s.clone();
                 let _ = tokio::task::spawn_blocking(move || s2.previews.sweep()).await;
                 updates::tick(&s).await;
@@ -160,6 +163,8 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
     axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).with_graceful_shutdown(stop(s.clone())).await?;
     keeper.abort();
     s.supervisor.stop_all().await;
+    let s2 = s.clone();
+    let _ = tokio::task::spawn_blocking(move || nmos::stop(&s2)).await;
     // Les entrées après les applis qui les lisent.
     let s2 = s.clone();
     let _ = tokio::task::spawn_blocking(move || {

@@ -1,14 +1,14 @@
 // Réglages › Matériel : Cartes SDI, NDI, ST 2110, Réseau, Horloge. Les réglages sont partagés par
 // les cinq pages (store.ts) et enregistrés d'un coup.
 import { useState } from 'react';
-import { MonitorPlay, Network as NetIcon, Pencil, Plus, Radio, RefreshCw, Search, Trash2, Waves } from 'lucide-react';
+import { Cable, MonitorPlay, Network as NetIcon, Pencil, Plus, Radio, RefreshCw, Search, Trash2, Waves } from 'lucide-react';
 import { Badge, Card, Dropdown, Empty, Field, FieldGrid, Modal, NumberField, PageHead, Segmented, Switch, confirmDialog, t, tn, toast, type DropOption } from '@strata/ui';
 import { api } from '../../api';
 import { friendly } from '../../errors';
 import { HwSaveBar, useHardware } from './common';
 import { FlowsCard, InputsCard, OutputsCard, usePoll } from './Inputs';
 import { DeckLink3D, Pcie3D, SDI_COLOR, nicLook, printedOf, type Jack } from './Card3D';
-import { cardOf, editCard, editHw, loadHw, type DetectedCard, type Flow, type Fn, type HwConfig, type Nic, type Port, type Snapshot } from './store';
+import { cardOf, editCard, editHw, loadHw, type DetectedCard, type Flow, type Fn, type HwConfig, type Nic, type NmosStatus, type Port, type Snapshot } from './store';
 
 function Rescan() {
   const [busy, setBusy] = useState(false);
@@ -287,7 +287,47 @@ function NicRow({ n, cfg, sel, onClick }: { n: Nic; cfg: HwConfig; sel?: boolean
   );
 }
 
+/** NMOS : le Core annoncé en mDNS (sans registre) et branché par un contrôleur (Buttons…). */
+function NmosCard({ draft, opts, status }: { draft: HwConfig; opts: DropOption<string>[]; status: NmosStatus | null }) {
+  const n = draft.nmos ?? { enabled: false, port: 3212, interface: '' };
+  const set = (fn: (x: NonNullable<HwConfig['nmos']>) => void) =>
+    editHw((x) => {
+      x.nmos = { ...(x.nmos ?? { enabled: false, port: 3212, interface: '' }) };
+      fn(x.nmos);
+    });
+  return (
+    <Card icon={<Cable size={16} />} title="NMOS (IS-04 · IS-05)">
+      <Switch checked={n.enabled} onChange={(v) => set((x) => void (x.enabled = v))} label={t('Announce the ST 2110 flows to an NMOS controller')} />
+      <p className="st-muted core-note">
+        {t('Without a registry: the Core announces itself in mDNS (peer-to-peer) and the controller connects the receivers. The addresses of the flows sent stay those set here.')}
+      </p>
+      {n.enabled && (
+        <>
+          <FieldGrid two>
+            <Field label={t('Interface')} hint={t('The controller reaches the Core through it.')} group>
+              <Dropdown value={n.interface} options={[{ value: '', label: t('Management interface') }, ...opts.filter((o) => o.value !== '')]} onChange={(v) => set((x) => void (x.interface = v))} />
+            </Field>
+            <Field label={t('Port')}>
+              <NumberField value={n.port} min={1} max={65535} onChange={(v) => set((x) => void (x.port = v))} />
+            </Field>
+          </FieldGrid>
+          {status?.error ? (
+            <p className="core-note">
+              <Badge tone="bad">{t('Error')}</Badge> {friendly(status.error)}
+            </p>
+          ) : status?.running && status.url ? (
+            <p className="core-note">
+              <Badge tone="ok">{t('Announced')}</Badge> <span className="st-mono">{status.url}</span>
+            </p>
+          ) : null}
+        </>
+      )}
+    </Card>
+  );
+}
+
 export function NetworkPage() {
+  const nmos = usePoll<NmosStatus>('/api/hardware/nmos');
   const hw = useHardware();
   if (!hw) return null;
   const [snap, draft] = hw;
@@ -360,6 +400,7 @@ export function NetworkPage() {
           </FieldGrid>
         )}
       </Card>
+      <NmosCard draft={draft} opts={opts} status={nmos} />
       <Card icon={<NetIcon size={16} />} title={t('Roles')}>
         <FieldGrid>
           <Field label={t('Management')} hint={t('The control room reaches the cockpit through it.')} group>
@@ -417,6 +458,7 @@ function FlowEditor({ flow, redundant, onClose, onSave }: { flow: Flow; redundan
       <Field label={t('Name')}>
         <input value={f.name} onChange={(e) => set('name', e.target.value)} />
       </Field>
+      <Switch checked={f.enabled !== false} onChange={(v) => set('enabled', v)} label={t('On: received or sent by the Core')} />
       <FieldGrid two>
         <Field label={t('Direction')} group>
           <Segmented<Flow['direction']> value={f.direction} onChange={(v) => set('direction', v)} options={[{ value: 'input', label: t('Received') }, { value: 'output', label: t('Sent') }]} />
@@ -487,6 +529,7 @@ export function St2110Page() {
   // Le Core tient les flux (MTL) : ce qui passe vraiment, flux par flux.
   const io = usePoll<{ flows: { id: string; io?: { state: string; format?: string | null; lost: number; error?: string | null } | null }[]; io?: { active: boolean } }>('/api/hardware/flows');
   const ioOf = (id: string) => (io?.io?.active ? io.flows.find((x) => x.id === id)?.io : undefined);
+  const nmos = usePoll<NmosStatus>('/api/hardware/nmos');
   if (!hw) return null;
   const [snap, draft] = hw;
   const redundant = draft.network.mediaMode !== 'separate';
@@ -535,6 +578,20 @@ export function St2110Page() {
               <tr key={f.id || i}>
                 <td>
                   <strong>{f.name}</strong>
+                  {f.enabled === false && (
+                    <>
+                      {' '}
+                      <Badge>{t('Off')}</Badge>
+                    </>
+                  )}
+                  {f.direction === 'input' && nmos?.links[f.id]?.peer && (
+                    <>
+                      {' '}
+                      <span title={t('Connected by the NMOS controller to sender {id}', { id: nmos.links[f.id].peer ?? '' })}>
+                        <Badge tone="accent">NMOS</Badge>
+                      </span>
+                    </>
+                  )}
                 </td>
                 <td>{f.direction === 'input' ? t('Received') : t('Sent')}</td>
                 <td>{t(ESSENCE[f.essence])}</td>
@@ -553,7 +610,7 @@ export function St2110Page() {
                   <td>
                     {(() => {
                       const x = ioOf(f.id);
-                      if (f.essence === 'data') return <span className="st-muted">—</span>;
+                      if (f.essence === 'data' || f.enabled === false) return <span className="st-muted">—</span>;
                       if (!x) return <Badge>{t('Opening…')}</Badge>;
                       if (x.state === 'error') return <span title={x.error ? friendly(x.error) : undefined}><Badge tone="bad">{t('Error')}</Badge></span>;
                       if (x.state === 'running')

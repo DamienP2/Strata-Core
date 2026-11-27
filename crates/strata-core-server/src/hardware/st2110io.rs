@@ -25,7 +25,7 @@ use std::{
 use strata_mtl::{Leg, Mtl, Pmd, Port};
 use strata_mxl::Mxl;
 
-use super::{net, parse_format, Direction, Essence, HardwareConfig, MediaIo, MediaMode};
+use super::{net, Direction, Essence, HardwareConfig, MediaIo, MediaMode};
 
 #[derive(Serialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -141,18 +141,12 @@ fn plan(cfg: &HardwareConfig) -> Result<Option<Plan>, String> {
     if two {
         ports.push(port_of(r.media_io, &r.media2, &r.media2_address)?);
     }
-    let house = {
-        let (n, d) = cfg.clock.house.rate.ratio();
-        let interlaced = matches!((n, d), (25, 1) | (30000, 1001));
-        (1920, 1080, (n as u32, d as u32), interlaced)
-    };
     let mut flows = Vec::new();
     for f in video {
         let kind = if f.essence == Essence::Audio {
             Kind::Audio(strata_mtl::Audio { channels: f.channels.clamp(1, 64), bits: f.bits, ptime_us: f.ptime_us, frame_ms: 10 })
         } else {
-            let (width, height, rate, interlaced) =
-                if f.format.trim().is_empty() { house } else { parse_format(&f.format).ok_or(format!("{}: unknown format {}", f.name, f.format))? };
+            let (width, height, rate, interlaced) = cfg.video_of(f).ok_or(format!("{}: unknown format {}", f.name, f.format))?;
             Kind::Video(strata_mtl::Video { width, height, rate, interlaced })
         };
         let legs = match (r.media_mode, f.blue) {

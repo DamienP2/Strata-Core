@@ -39,6 +39,8 @@ pub struct AppState {
     pub st2110: crate::hardware::st2110io::Engine,
     /// Les flux réseau (SRT, RTMP, HLS…) reçus et envoyés par le Core.
     pub streams: crate::streams::engine::Engine,
+    /// NMOS (IS-04, IS-05) : l'API du nœud et son annonce.
+    pub nmos: crate::nmos::Nmos,
     /// MTL : chargée au démarrage si elle est installée (sinon la raison).
     pub mtl: std::sync::OnceLock<Result<std::path::PathBuf, String>>,
     /// MXL : ouvert au démarrage s'il est installé (sinon la raison).
@@ -83,6 +85,7 @@ impl AppState {
             mxl: Default::default(),
             st2110: Default::default(),
             streams: Default::default(),
+            nmos: Default::default(),
             mtl: Default::default(),
             resources: Default::default(),
             alerts: crate::alerts::Alerts::new(&data_dir),

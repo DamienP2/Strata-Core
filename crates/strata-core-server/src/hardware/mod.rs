@@ -64,6 +64,8 @@ pub struct HardwareConfig {
     pub ptp: PtpSettings,
     /// L'heure du serveur, la cadence et le timecode maison.
     pub clock: clock::ClockSettings,
+    /// NMOS : les flux ST 2110 vus et branchés par un contrôleur (IS-04, IS-05).
+    pub nmos: crate::nmos::NmosSettings,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -161,7 +163,7 @@ pub struct NdiSettings {
     pub machine: String,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub enum Direction {
     #[default]
@@ -246,6 +248,34 @@ impl Flow {
             (Essence::Data, 0 | 96) => 100,
             (_, p) => p,
         }
+    }
+}
+
+impl HardwareConfig {
+    /// La vidéo d'un flux : son format, ou sinon le format maison en 1080.
+    pub fn video_of(&self, f: &Flow) -> Option<(u32, u32, (u32, u32), bool)> {
+        if f.format.trim().is_empty() {
+            let (n, d) = self.clock.house.rate.ratio();
+            let interlaced = matches!((n, d), (25, 1) | (30000, 1001));
+            Some((1920, 1080, (n as u32, d as u32), interlaced))
+        } else {
+            parse_format(&f.format)
+        }
+    }
+
+    /// Les adresses des deux ports média (en DPDK, celles réglées : le noyau ne les voit plus).
+    pub fn media_ips(&self) -> [Option<Ipv4Addr>; 2] {
+        let r = &self.network;
+        let one = |iface: &str, address: &str| -> Option<Ipv4Addr> {
+            if r.media_io == MediaIo::Dpdk {
+                address.split('/').next().and_then(|a| a.trim().parse().ok())
+            } else if iface.is_empty() {
+                None
+            } else {
+                net::interface_ip(iface)
+            }
+        };
+        [one(&r.media1, &r.media1_address), one(&r.media2, &r.media2_address)]
     }
 }
 
@@ -378,7 +408,8 @@ impl HardwareConfig {
             }
             if redundant {
                 f.port = 1;
-                if f.blue.is_none() {
+                // Un récepteur peut n'écouter que le rouge (branché par NMOS sur un émetteur sans 2022-7).
+                if f.blue.is_none() && f.direction == Direction::Output {
                     return Err(format!("{}: in SMPTE 2022-7, a flow has an address on each network (red and blue)", f.name));
                 }
             } else {
@@ -393,7 +424,8 @@ impl HardwareConfig {
                 if !is_multicast(&a) {
                     return Err(format!("{}: the {leg} address must be multicast (224.0.0.0 to 239.255.255.255) with a port", f.name));
                 }
-                if !used.insert(a) {
+                // Une adresse sert une fois par sens (un flux envoyé peut être reçu en retour).
+                if !used.insert((f.direction, a)) {
                     return Err(format!("{a} is used by two flows"));
                 }
             }
@@ -474,6 +506,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/hardware/outputs", get(outputs))
         .route("/api/hardware/outputs/{card}/{n}/preview.jpg", get(output_preview))
         .route("/api/hardware/flows", get(flows))
+        .route("/api/hardware/nmos", get(nmos_status))
         .route("/api/hardware/flows/{id}/preview.jpg", get(flow_preview))
 }
 
@@ -733,6 +766,13 @@ async fn flow_preview(State(s): State<Shared>, CurrentUser(me): CurrentUser, Url
     Ok(jpeg_response(jpeg))
 }
 
+/// NMOS : marche-t-il, où, et ce qui est branché.
+async fn nmos_status(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
+    require(me.admin)?;
+    let s2 = s.clone();
+    Ok(Json(blocking(move || s2.nmos.status(&s2)).await?))
+}
+
 async fn read(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
     require(me.admin)?;
     let s2 = s.clone();
@@ -756,6 +796,7 @@ async fn write(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(mut c
     })
     .await?
     .map_err(bad)?;
+    crate::nmos::apply(&s).await;
     tracing::info!("hardware settings changed by {}", me.username);
     let (mut v, ndi_changed, applied) = saved;
     v["ndiChanged"] = json!(ndi_changed);

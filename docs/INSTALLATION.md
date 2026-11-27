@@ -68,6 +68,23 @@ Le Core réserve lui-même les hugepages (2 Go, plus 512 Mo par flux HD et 2 Go 
 plus la moitié de la mémoire) et les rend quand on repasse à « Non ». Si la mémoire est trop
 morcelée pour les réserver, redémarrez le serveur.
 
+## NMOS (Bitfocus Buttons, sans registre)
+
+*Réglages › Matériel › Réseau*, carte **NMOS** : le Core s'annonce en mDNS
+(`_nmos-node._tcp`, IS-04 en pair-à-pair) sur l'interface de gestion (ou celle choisie), et
+répond sur le port 3212 (IS-04 Node API v1.2/v1.3, IS-05 Connection API v1.1). Le contrôleur doit
+être sur le même réseau (mDNS ne traverse pas les routeurs).
+
+- Chaque flux ST 2110 **envoyé** est un émetteur NMOS avec son SDP (`transportfile`). Ses
+  adresses restent celles réglées dans *ST 2110* : le contrôleur peut le couper ou le rallumer,
+  pas les changer.
+- Chaque flux **reçu** est un récepteur : le contrôleur le branche sur un émetteur (SDP ou
+  adresses, tout de suite ou à une heure donnée). Le branchement est écrit dans les réglages
+  (adresses, format du SDP) et seul ce flux est relancé. Un badge « NMOS » le montre dans
+  *ST 2110*.
+- L'API n'a pas de mot de passe (comme NMOS le prévoit) : elle ne doit être joignable que depuis
+  le réseau de la régie. L'installateur ouvre 3212/tcp et 5353/udp si ufw est actif.
+
 ## Relancé sur un serveur installé
 
 Il propose : mettre à jour le Core, ajouter des applis, installer DeckLink / NDI, réparer (fichiers

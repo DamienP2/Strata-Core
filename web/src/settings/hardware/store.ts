@@ -84,6 +84,8 @@ export interface Flow {
   channels?: number;
   bits?: number;
   ptimeUs?: number;
+  /** Reçu ou envoyé par le Core ; coupé : réglé seulement (aussi par NMOS). */
+  enabled?: boolean;
 }
 
 export type Role = 'management' | 'ndi' | 'media1' | 'media2' | 'ptp';
@@ -101,6 +103,26 @@ export interface HwConfig {
   flows: Flow[];
   ptp: { domain: number; taiOffset: number };
   clock: ClockSettings;
+  /** NMOS : IS-04 en pair-à-pair (mDNS) et IS-05. */
+  nmos?: NmosSettings;
+}
+
+export interface NmosSettings {
+  enabled: boolean;
+  port: number;
+  /** L'interface où le Core s'annonce ; vide : celle de gestion. */
+  interface: string;
+}
+
+/** L'état de NMOS (`GET /api/hardware/nmos`). */
+export interface NmosStatus {
+  running: boolean;
+  url?: string | null;
+  interface?: string | null;
+  nodeId?: string | null;
+  error?: string | null;
+  /** Par flux : l'émetteur (ou le récepteur) que NMOS y a branché. */
+  links: Record<string, { peer?: string | null }>;
 }
 
 export type HouseRate = '25' | '29.97' | '30' | '24' | '23.98';

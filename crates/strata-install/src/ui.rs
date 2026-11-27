@@ -964,8 +964,18 @@ fn draw(f: &mut Frame, app: &App) {
             );
         }
         Screen::Firewall => {
-            let r = heading(f, body, "Le pare-feu", "Si ufw est actif, le cockpit a besoin des ports 80 (HTTP) et 443 (HTTPS).");
-            choices(f, r, &[("Ouvrir les ports 80 et 443".into(), "recommandé".into()), ("Ne pas toucher au pare-feu".into(), String::new())], app.sel);
+            let r = heading(
+                f,
+                body,
+                "Le pare-feu",
+                "Si ufw est actif, le cockpit a besoin des ports 80 (HTTP) et 443 (HTTPS) ; NMOS, de 3212 et de mDNS (5353/udp).",
+            );
+            choices(
+                f,
+                r,
+                &[("Ouvrir les ports 80, 443, 3212 et 5353".into(), "recommandé".into()), ("Ne pas toucher au pare-feu".into(), String::new())],
+                app.sel,
+            );
         }
         Screen::AdminUser => {
             let r = heading(
@@ -1083,7 +1093,7 @@ fn draw_summary(f: &mut Frame, body: Rect, app: &App) {
                 .flatten()
                 .collect::<Vec<_>>();
             lines.push(row("GPU", if gpu.is_empty() { "—".into() } else { gpu.join(", ") }));
-            lines.push(row("Pare-feu", if p.firewall { "80 et 443 ouverts (ufw)".into() } else { "inchangé".into() }));
+            lines.push(row("Pare-feu", if p.firewall { "80, 443, 3212 et 5353 ouverts (ufw)".into() } else { "inchangé".into() }));
             lines.push(row("Administrateur", p.admin.as_ref().map_or("—".into(), |a| a.0.clone())));
             ("Tout est prêt", "Installer Strata")
         }

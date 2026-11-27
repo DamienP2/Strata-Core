@@ -808,4 +808,11 @@ export const fr: Record<string, string> = {
   'In the Core': 'Dans le Core',
   'silence on the output': 'silence en sortie',
   'As the source (in 1080)': 'Comme la source (en 1080)',
+  'Announce the ST 2110 flows to an NMOS controller': 'Annoncer les flux ST 2110 à un contrôleur NMOS',
+  'Without a registry: the Core announces itself in mDNS (peer-to-peer) and the controller connects the receivers. The addresses of the flows sent stay those set here.': "Sans registre : le Core s'annonce en mDNS (pair-à-pair) et le contrôleur branche les récepteurs. Les adresses des flux envoyés restent celles réglées ici.",
+  'The controller reaches the Core through it.': 'Le contrôleur joint le Core par celle-ci.',
+  'Management interface': "L'interface de gestion",
+  'Announced': 'Annoncé',
+  'On: received or sent by the Core': 'Actif : reçu ou envoyé par le Core',
+  'Connected by the NMOS controller to sender {id}': "Branché par le contrôleur NMOS sur l'émetteur {id}",
 };
