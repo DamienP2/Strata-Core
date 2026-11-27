@@ -86,8 +86,22 @@ impl Mxl {
 
     /// Crée (ou reprend) le flux vidéo `id` et rend son écrivain.
     pub fn video_writer(&self, id: Uuid, label: &str, v: &Video) -> Result<VideoWriter, String> {
+        // Un ancien flux de ce nom, sans écrivain, à un autre format : effacé d'abord (sinon MXL le
+        // rendrait tel quel).
+        if !self.is_active(id) && self.video_of(id).is_some_and(|old| old != *v) {
+            self.collect();
+        }
         let def = video_flow_def(id, label, v);
         let (w, info, _) = self.inst.create_flow_writer(&def, None).map_err(|e| format!("cannot create the MXL flow {id}: {e}"))?;
+        // MXL rend le flux existant s'il a encore un écrivain : il doit être à ce format.
+        if let Some(actual) = self.video_of(id).filter(|a| a != v) {
+            return Err(format!(
+                "the MXL flow {id} is still open as {}x{}{} by another writer",
+                actual.width,
+                actual.height,
+                if actual.interlaced { "i" } else { "p" }
+            ));
+        }
         let rate = info.common().grain_rate().map_err(|e| e.to_string())?;
         let grains = w.to_grain_writer().map_err(|e| e.to_string())?;
         Ok(VideoWriter { inst: self.inst.clone(), grains, rate, video: *v, last: None, scratch: Vec::new() })
@@ -123,6 +137,12 @@ impl Mxl {
         let r = self.inst.create_flow_reader(&id.to_string()).map_err(|e| format!("cannot read the MXL flow {id}: {e}"))?;
         let samples = r.to_samples_reader().map_err(|e| e.to_string())?;
         Ok(AudioReader { inst: self.inst.clone(), samples, channels, next: None })
+    }
+
+    /// La vidéo d'un flux d'après sa description (elle change quand l'écrivain le recrée à un
+    /// autre format) ; None : pas de flux, ou pas de la vidéo v210.
+    pub fn video_of(&self, id: Uuid) -> Option<Video> {
+        Video::from_flow_def(&self.inst.get_flow_def(&id.to_string()).ok()?)
     }
 
     /// Le nom qu'un flux se donne (`label` de sa description).
@@ -311,8 +331,11 @@ impl VideoReader {
         }
         let stride = v210_stride(self.video.width);
         let lines = self.video.grain_lines() as usize;
+        // Sans attendre : `get_complete_grain` du crate tourne sans fin sur un grain resté partiel
+        // (un écrivain arrêté ou remplacé en plein grain) et bloque qui le lit. Les grains jusqu'à
+        // la tête sont validés en entier par l'écrivain.
         let read = |i: u64| -> Option<Vec<u8>> {
-            let g = self.grains.get_complete_grain(i, Duration::from_millis(50)).ok()?;
+            let g = self.grains.get_grain_non_blocking(i).ok()?;
             (g.index == i && g.payload.len() >= stride * lines).then(|| g.payload[..stride * lines].to_vec())
         };
         if !self.video.interlaced {

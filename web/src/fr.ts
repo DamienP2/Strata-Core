@@ -807,4 +807,5 @@ export const fr: Record<string, string> = {
   'L16 · 1 ms': 'L16 · 1 ms',
   'In the Core': 'Dans le Core',
   'silence on the output': 'silence en sortie',
+  'As the source (in 1080)': 'Comme la source (en 1080)',
 };

@@ -357,7 +357,11 @@ function InputEditor({ value, busy, onClose, onSave }: { value: Input; busy: boo
       <p className="st-muted core-note">{t('SRT, RTMP, RTSP, HLS (https://…/index.m3u8), UDP or RTP in TS, RIST. To have a stream pushed to the server: rtmp://0.0.0.0:1935/live/<name> or srt://:9000?mode=listener.')}</p>
       <FieldGrid two>
         <Field label={t('Video written in MXL')} group>
-          <Dropdown value={v.format} options={[{ value: '', label: t('House format') }, ...FORMATS.map((x) => ({ value: x, label: x }))]} onChange={(x) => set('format', x)} />
+          <Dropdown
+            value={v.format}
+            options={[{ value: '', label: t('As the source (in 1080)') }, { value: 'house', label: t('House format') }, ...FORMATS.map((x) => ({ value: x, label: x }))]}
+            onChange={(x) => set('format', x)}
+          />
         </Field>
         <Field label={t('State')} group>
           <Switch checked={v.enabled} onChange={(x) => set('enabled', x)} label={t('Received')} />

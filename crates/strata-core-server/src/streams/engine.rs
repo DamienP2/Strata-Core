@@ -279,6 +279,37 @@ fn backoff(n: u32) -> Duration {
 
 /// Les options de ffmpeg pour une entrée : la source, l'image (v210 sur stdout), le son
 /// (float32 sur le fd 3), le relais local.
+/// La vidéo à écrire en MXL pour une source (« Video: h264 (High), yuv420p(tv, bt709, top first),
+/// 1920x1080, 25 fps… ») : en 1080, à sa cadence, entrelacée si elle l'est. None : cadence
+/// inconnue (on garde le format maison).
+pub fn source_video(desc: &str) -> Option<Video> {
+    let interlaced = desc.contains("top first") || desc.contains("bottom first");
+    let fps: f64 = desc.split(", ").find_map(|p| p.strip_suffix(" fps")).and_then(|x| x.trim().parse().ok())?;
+    // La cadence d'images la plus proche parmi les cadences de diffusion.
+    let rates = [23.976, 24.0, 25.0, 29.97, 30.0, 50.0, 59.94, 60.0];
+    let r = rates.iter().copied().min_by(|a, b| (a - fps).abs().total_cmp(&(b - fps).abs()))?;
+    if (r - fps).abs() > 0.5 {
+        return None;
+    }
+    let name = |x: f64| if x.fract() == 0.0 { format!("{x:.0}") } else { format!("{x}") };
+    // En entrelacé, ffmpeg donne les images par seconde (25 pour du 1080i50).
+    let f = if interlaced {
+        format!(
+            "1080i{}",
+            name(if r == 23.976 {
+                47.952
+            } else if r == 29.97 {
+                59.94
+            } else {
+                r * 2.0
+            })
+        )
+    } else {
+        format!("1080p{}", name(r))
+    };
+    video_of(&f)
+}
+
 /// Le décodage par le GPU : `cuda` (NVIDIA) ou `vaapi` et son nœud de rendu.
 pub type HwDecode = (String, Option<String>);
 
@@ -341,13 +372,19 @@ pub fn input_args(c: &InputCfg, v: &Video, audio: bool, hw: Option<&HwDecode>) -
 
 fn run_input(c: &InputCfg, env: &Env, stop: &AtomicBool, status: &Mutex<HashMap<String, InputStatus>>) {
     let set = |f: &dyn Fn(&mut InputStatus)| f(status.lock().unwrap().entry(c.id.clone()).or_default());
-    let v = if c.format.trim().is_empty() { env.house } else { video_of(&c.format).unwrap_or(env.house) };
+    // « auto » (vide) : la cadence et le balayage de la source, en 1080, dès qu'ils sont connus
+    // (le format maison en attendant) ; « house » : le format maison ; sinon le format demandé.
+    let auto = c.format.trim().is_empty();
+    let mut v = match c.format.trim() {
+        "" | "house" => env.house,
+        f => video_of(f).unwrap_or(env.house),
+    };
     set(&|s| s.format = Some(format_name(&v)));
     let vid = strata_mxl::flow_id(&input_flow(&c.id));
     let aid = strata_mxl::flow_id(&audio_of(&input_flow(&c.id)));
     let writers = env.mxl.video_writer(vid, &c.name, &v).and_then(|w| Ok((w, env.mxl.audio_writer(aid, &c.name, 2)?)));
     let (mut vw, mut aw) = match writers {
-        Ok((v, a)) => (v, a),
+        Ok((v, a)) => (Some(v), a),
         Err(e) => {
             set(&|s| {
                 set_state(s, State::Error, |s| (&mut s.state, &mut s.since));
@@ -356,8 +393,6 @@ fn run_input(c: &InputCfg, env: &Env, stop: &AtomicBool, status: &Mutex<HashMap<
             return;
         }
     };
-    let stride = strata_mxl::v210_stride(v.width);
-    let frame_bytes = stride * v.height as usize;
     let mut audio = true;
     let mut hw = hw_decode(env);
     let mut failures = 0u32;
@@ -373,7 +408,12 @@ fn run_input(c: &InputCfg, env: &Env, stop: &AtomicBool, status: &Mutex<HashMap<
             None => "cpu",
         }
         .to_string();
-        set(&|s| s.decoder = Some(decoder.clone()));
+        set(&|s| {
+            s.decoder = Some(decoder.clone());
+            s.format = Some(format_name(&v));
+        });
+        let stride = strata_mxl::v210_stride(v.width);
+        let frame_bytes = stride * v.height as usize;
         let mut p = match ffmpeg::spawn(&input_args(c, &v, audio, hw.as_ref()), false, true, if audio { ffmpeg::Fd3::Read } else { ffmpeg::Fd3::None }) {
             Ok(p) => p,
             Err(e) => {
@@ -430,6 +470,7 @@ fn run_input(c: &InputCfg, env: &Env, stop: &AtomicBool, status: &Mutex<HashMap<
             }
         });
         let started = Instant::now();
+        let mut reformat = false;
         let (mut frames, mut window, mut window_start) = (0u64, 0u64, Instant::now());
         let mut last_frame = Instant::now();
         let mut acc = 0u64;
@@ -452,6 +493,7 @@ fn run_input(c: &InputCfg, env: &Env, stop: &AtomicBool, status: &Mutex<HashMap<
                     // Une image qui arrive trop en avance (rattrapage après un à-coup de la source)
                     // est jetée : MXL ne garde que 200 ms, on reste près de maintenant. Son son est
                     // gardé, posé à la suite du précédent.
+                    let Some(vw) = vw.as_mut() else { continue };
                     if vw.ahead() >= if v.interlaced { 4 } else { 2 } {
                         pcm.resize(n * 2, 0.0);
                         let _ = aw.write_interleaved(&pcm);
@@ -481,6 +523,18 @@ fn run_input(c: &InputCfg, env: &Env, stop: &AtomicBool, status: &Mutex<HashMap<
             if window_start.elapsed() >= Duration::from_secs(1) {
                 let fps = window as f64 / window_start.elapsed().as_secs_f64();
                 let log = p.log.lock().unwrap().clone();
+                // En « auto » : la source est connue ; une autre cadence ou un autre balayage que
+                // ce qui s'écrit fait relancer ffmpeg au bon format (sans désentrelacer pour rien).
+                if auto && !reformat {
+                    if let Some(want) = log.streams.iter().find(|d| d.starts_with("Video:")).and_then(|d| source_video(d)) {
+                        if want != v {
+                            tracing::info!("network input {}: the source is {}, written as such", c.name, format_name(&want));
+                            v = want;
+                            reformat = true;
+                            break;
+                        }
+                    }
+                }
                 let has_audio = audio && heard.load(Ordering::Relaxed);
                 set(&|s| {
                     s.frames = frames;
@@ -506,6 +560,16 @@ fn run_input(c: &InputCfg, env: &Env, stop: &AtomicBool, status: &Mutex<HashMap<
         }
         if stop.load(Ordering::Relaxed) {
             break;
+        }
+        // Le format de la source vient d'être connu : le flux MXL est recréé à ce format.
+        if reformat {
+            // L'ancien écrivain lâché d'abord : MXL recrée alors le flux au nouveau format.
+            drop(vw.take());
+            match env.mxl.video_writer(vid, &c.name, &v) {
+                Ok(w) => vw = Some(w),
+                Err(e) => tracing::warn!("network input {}: {e}", c.name),
+            }
+            continue;
         }
         let log = p.log.lock().unwrap().clone();
         let errors = log.errors.join(" ");
@@ -832,6 +896,10 @@ fn feed_encoder(
             if reader.as_ref().is_some_and(|r| r.video != *feed) {
                 break;
             }
+            // Le flux recréé à un autre format (une entrée qui a reconnu sa source) : on suit.
+            if tick.elapsed() >= Duration::from_secs(1) && env.mxl.video_of(vid).is_some_and(|v| v != *feed) {
+                break;
+            }
         } else {
             reader = None;
         }
@@ -1012,6 +1080,17 @@ mod tests {
         assert!(!a.contains("pipe:3") && !a.contains("udp://"));
         let cuda = ("cuda".to_string(), None);
         assert!(input_args(&c, &v, false, Some(&cuda)).join(" ").starts_with("-hwaccel cuda -fflags"));
+    }
+
+    #[test]
+    fn the_source_sets_scan_and_rate() {
+        let p = source_video("Video: h264 (High), yuv420p(progressive), 1920x1080 [SAR 1:1 DAR 16:9], 25 fps, 25 tbr, 90k tbn").unwrap();
+        assert_eq!(format_name(&p), "1080p25");
+        let i = source_video("Video: h264 (High), yuv420p(tv, bt709, top first), 1920x1080, 25 fps, 50 tbr, 90k tbn").unwrap();
+        assert_eq!(format_name(&i), "1080i50");
+        let n = source_video("Video: h264 (Main), yuv420p(tv, bt709), 1280x720, 59.94 fps, 59.94 tbr").unwrap();
+        assert_eq!(format_name(&n), "1080p59.94");
+        assert!(source_video("Video: h264, yuv420p, 1920x1080").is_none());
     }
 
     #[test]

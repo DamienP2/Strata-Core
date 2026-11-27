@@ -28,7 +28,8 @@ pub struct InputCfg {
     /// RTMP sur `0.0.0.0` : le Core attend qu'on lui pousse le flux.
     pub url: String,
     pub enabled: bool,
-    /// La vidéo écrite en MXL (« 1080i50 ») ; vide : le format maison.
+    /// La vidéo écrite en MXL (« 1080i50 ») ; vide : comme la source (sa cadence et son balayage,
+    /// en 1080) ; `house` : le format maison.
     pub format: String,
     /// Le flux d'origine remis en local (`udp://127.0.0.1:<relay_port>`, en TS).
     pub relay: bool,
@@ -144,7 +145,7 @@ impl StreamsConfig {
             if scheme(&i.url).is_none() {
                 return Err(format!("{}: not a stream address (srt://, rtmp://, rtsp://, http(s)://, udp://, rtp://, rist://)", i.name));
             }
-            if !i.format.trim().is_empty() && crate::hardware::parse_format(&i.format).is_none() {
+            if !matches!(i.format.trim(), "" | "house") && crate::hardware::parse_format(&i.format).is_none() {
                 return Err(format!("{}: unknown format {}", i.name, i.format));
             }
             if i.relay_port != 0 && !ports.insert(i.relay_port) {

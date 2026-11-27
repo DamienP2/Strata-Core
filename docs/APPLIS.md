@@ -230,7 +230,7 @@ Le Core reçoit et envoie les flux réseau lui-même (*Réglages › Matériel �
 ffmpeg) : une appli ne parle jamais SRT ou RTMP, elle lit et écrit des flux MXL.
 
 - **Les entrées** : `streams.inputs` dans `/api/hardware/shared`. Chacune a son image
-  (`mxlFlow`, v210 au format réglé, le format maison par défaut) et son son (`audioFlow`, float32
+  (`mxlFlow`, v210 en 1080, à la cadence et au balayage de la source par défaut : une source progressive reste progressive ; ou au format réglé) et son son (`audioFlow`, float32
   48 kHz stéréo ; du silence si la source n'en a pas). Le son est calé sur l'image : l'échantillon
   d'une image est à l'instant de son grain. `relay` (si réglé) : le flux d'origine, tel quel, en
   MPEG-TS sur `udp://127.0.0.1:<port>`, pour enregistrer ou relayer sans décoder.
