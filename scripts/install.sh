@@ -4,17 +4,23 @@
 # Télécharge l'installateur strata-install de la release, vérifie son empreinte, le lance (écran
 # plein terminal). Les options passent : … | sudo bash -s -- --yes --dns-name strata01.regie.fr
 set -euo pipefail
-REPO="${STRATA_REPO:-DamienP2/Strata-Core}"
-VERSION="${STRATA_VERSION:-latest}"
+STRATA_REPO="${STRATA_REPO:-DamienP2/Strata-Core}"
+STRATA_VERSION="${STRATA_VERSION:-latest}"
 die() { printf '✗ %s\n' "$*" >&2; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || die "lancez-le avec sudo"
-. /etc/os-release
-[ "${ID:-}" = ubuntu ] || die "Strata s'installe sur Ubuntu 24.04 (ici : ${PRETTY_NAME:-inconnu})"
+# /etc/os-release est lu à part : il définit VERSION, NAME… qui écraseraient les nôtres.
+os_id="$(. /etc/os-release 2>/dev/null; echo "${ID:-}")"
+os_name="$(. /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-inconnu}")"
+[ "$os_id" = ubuntu ] || die "Strata s'installe sur Ubuntu 24.04 (ici : $os_name)"
 [ "$(uname -m)" = x86_64 ] || die "Strata s'installe sur un processeur x86-64 (ici : $(uname -m))"
 command -v curl >/dev/null || die "curl est nécessaire : apt-get install curl"
 
-if [ "$VERSION" = latest ]; then base="https://github.com/$REPO/releases/latest/download"; else base="https://github.com/$REPO/releases/download/v${VERSION#v}"; fi
+if [ "$STRATA_VERSION" = latest ]; then
+  base="https://github.com/$STRATA_REPO/releases/latest/download"
+else
+  base="https://github.com/$STRATA_REPO/releases/download/v${STRATA_VERSION#v}"
+fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 curl -fsSL "$base/SHA256SUMS" -o "$tmp/SHA256SUMS" || die "impossible de joindre GitHub ($base)"
