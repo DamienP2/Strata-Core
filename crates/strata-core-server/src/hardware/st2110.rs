@@ -175,7 +175,7 @@ impl Canvas {
             return;
         }
         // 10 bits : Cb Y0 Cr Y1 sur 5 octets ; on garde les 8 bits forts de chacun.
-        for g in data.chunks_exact(5) {
+        for g in data.as_chunks::<5>().0 {
             if x + 4 > STRIDE {
                 break;
             }
