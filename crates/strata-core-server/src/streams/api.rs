@@ -102,6 +102,47 @@ fn sources(s: &Shared, cfg: &StreamsConfig) -> Vec<Value> {
     v
 }
 
+/// Pour les applis (`/api/hardware/shared`) : les entrées (flux MXL à lire, relais local du flux
+/// d'origine) et les sorties (flux MXL à écrire), sans les adresses ni les clés.
+pub fn shared(s: &crate::state::AppState) -> Value {
+    let cfg = StreamsConfig::load(&s.data_dir);
+    let inputs: Vec<Value> = cfg
+        .inputs
+        .iter()
+        .filter(|i| i.enabled)
+        .map(|i| {
+            let st = s.streams.input_status(&i.id);
+            json!({
+                "id": i.id,
+                "name": i.name,
+                "mxlFlow": mxl_id(&input_flow(&i.id)),
+                "audioFlow": mxl_id(&audio_of(&input_flow(&i.id))),
+                "relay": if i.relay && i.relay_port != 0 { json!(format!("udp://127.0.0.1:{}", i.relay_port)) } else { Value::Null },
+                "format": st.as_ref().and_then(|x| x.format.clone()),
+                "live": st.as_ref().is_some_and(|x| x.state == super::engine::State::Running),
+            })
+        })
+        .collect();
+    let outputs: Vec<Value> = cfg
+        .outputs
+        .iter()
+        .filter(|o| o.enabled && o.source.trim().is_empty())
+        .map(|o| {
+            let st = s.streams.output_status(&o.id);
+            json!({
+                "id": o.id,
+                "name": o.name,
+                "app": o.app,
+                "mxlFlow": mxl_id(&output_flow(&o.id)),
+                "audioFlow": mxl_id(&audio_of(&output_flow(&o.id))),
+                "format": st.as_ref().and_then(|x| x.format.clone()),
+                "sending": st.as_ref().is_some_and(|x| x.state == super::engine::State::Running),
+            })
+        })
+        .collect();
+    json!({ "inputs": inputs, "outputs": outputs })
+}
+
 async fn read(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
     require(me.admin)?;
     let s2 = s.clone();

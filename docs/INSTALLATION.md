@@ -41,6 +41,7 @@ Journal complet : `/var/log/strata-install.log`.
 | `strata-core.service` | le service, sous le compte `strata` (groupes `video` et `render` : cartes et GPU), port 80 (et 443, 161) |
 | `strata-ptp4l.service` | ptp4l, démarré seulement si le PTP est réglé (Matériel › Horloge) |
 | `/etc/strata/`, `/etc/chrony/conf.d/strata.conf` | ce que le Core écrit pour l'heure |
+| `ffmpeg` (paquet Ubuntu) | les flux réseau (SRT, RTMP, HLS, RTSP…) reçus et envoyés par le Core |
 | `/opt/strata/lib` | MXL (`libmxl.so`), et sous `mtl/` Intel Media Transport Library avec DPDK (ST 2110) |
 | `strata-media.service` | en root, au démarrage et quand le Core le demande : réserve les hugepages et passe les ports média en DPDK (`/etc/strata/media.json`), seulement si le Core tient le ST 2110 |
 | `/etc/polkit-1/rules.d/50-strata-core.rules` | le compte `strata` peut relancer chrony, ptp4l et strata-media, rien d'autre |

@@ -62,7 +62,7 @@ function usePageVisible(): boolean {
 }
 
 /** Relit `path` chaque seconde tant que l'onglet est visible. */
-function usePoll<T>(path: string): T | null {
+export function usePoll<T>(path: string): T | null {
   const [data, setData] = useState<T | null>(null);
   const visible = usePageVisible();
   useEffect(() => {
@@ -145,7 +145,7 @@ function Apps({ label, none, names }: { label: string; none: string; names: stri
   );
 }
 
-function Tile({ head, sub, pic, error, foot }: { head: ReactNode; sub?: string; pic: ReactNode; error?: string | null; foot: ReactNode }) {
+export function Tile({ head, sub, pic, error, foot }: { head: ReactNode; sub?: string; pic: ReactNode; error?: string | null; foot: ReactNode }) {
   return (
     <div className="core-input">
       {pic}

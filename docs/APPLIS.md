@@ -220,6 +220,41 @@ En C ou C++ : `mxlCreateInstance`, `mxlCreateFlowReader` / `mxlCreateFlowWriter`
 `mxlFlowReaderGetGrain`, `mxlFlowWriterOpenGrain` / `mxlFlowWriterCommitGrain` (dépôt
 `dmf-mxl/mxl`). Les applis tournent sous le compte du Core : elles ont accès au domaine.
 
+## Les flux réseau (SRT, RTMP, HLS…)
+
+Le Core reçoit et envoie les flux réseau lui-même (*Réglages › Matériel › Flux réseau*, avec
+ffmpeg) : une appli ne parle jamais SRT ou RTMP, elle lit et écrit des flux MXL.
+
+- **Les entrées** : `streams.inputs` dans `/api/hardware/shared`. Chacune a son image
+  (`mxlFlow`, v210 au format réglé, le format maison par défaut) et son son (`audioFlow`, float32
+  48 kHz stéréo ; du silence si la source n'en a pas). Le son est calé sur l'image : l'échantillon
+  d'une image est à l'instant de son grain. `relay` (si réglé) : le flux d'origine, tel quel, en
+  MPEG-TS sur `udp://127.0.0.1:<port>`, pour enregistrer ou relayer sans décoder.
+- **Les sorties** : une appli déclare la sienne, puis écrit son image et son son en MXL ; le Core
+  l'encode une fois (NVENC ou VA-API si le serveur a un GPU, sinon x264) et l'envoie à chaque
+  destination. Une destination qui tombe est relancée seule. Sans image depuis une seconde : du
+  noir et du silence, le flux continue.
+
+```
+POST $STRATA_CORE_URL/api/streams/app/outputs/programme
+{"app": "livecut", "name": "Programme", "format": "1080p50", "videoKbps": 8000,
+ "destinations": [
+   {"id": "yt", "name": "YouTube", "url": "rtmp://a.rtmp.youtube.com/live2", "key": "xxxx-xxxx", "enabled": true},
+   {"id": "hls", "url": "hls", "enabled": true}
+ ]}
+→ {"id": "livecut-programme", "mxlFlow": "…", "audioFlow": "…", "status": {…}}
+```
+
+- Depuis la machine, sans session (comme les alertes). L'identifiant devient `<appli>-<id>`.
+- Une clé non redonnée (vide) garde la précédente ; les clés ne sont jamais renvoyées.
+- `GET …/api/streams/app/outputs?app=livecut` : l'état de ses sorties (par destination : envoie,
+  erreur, débit) ; `DELETE …/api/streams/app/outputs/programme?app=livecut` la retire.
+- `"enabled": false` arrête l'envoi sans oublier la sortie.
+- Destinations : `rtmp://` et `rtmps://` (la clé s'ajoute à l'adresse), `srt://` (la clé part en
+  `streamid`), `udp://`, `rtp://`, `rist://` (MPEG-TS), et `hls` : servi par le Core sur
+  `/hls/<sortie>/index.m3u8`.
+- Les administrateurs voient et changent ces sorties dans les réglages, comme les autres.
+
 ## Lire une entrée SDI sans MXL
 
 Sans MXL (bibliothèque absente), le Core partage les entrées avec `strata-share`.

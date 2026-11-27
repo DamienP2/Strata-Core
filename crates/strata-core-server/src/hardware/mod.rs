@@ -838,6 +838,8 @@ async fn shared(State(s): State<Shared>, ConnectInfo(peer): ConnectInfo<SocketAd
             "clock": {"source": cfg.clock.source, "house": cfg.clock.house, "timezone": s2.config.load().timezone},
             // MXL : le domaine où sont les flux (null : pas de MXL, le partage strata-share).
             "mxl": mxl.as_ref().map(|m| json!({"domain": m.domain(), "version": m.version})),
+            // Les flux réseau tenus par le Core : entrées à lire, sorties à écrire.
+            "streams": crate::streams::api::shared(&s2),
         })
     })
     .await?;

@@ -361,6 +361,45 @@ fn look(s: &AppState) -> Vec<Problem> {
         }
     }
 
+    // Les flux réseau : une entrée qui ne reçoit plus, une destination qui n'envoie plus.
+    if a.hardware {
+        let cfg = crate::streams::StreamsConfig::load(&s.data_dir);
+        use crate::streams::engine::State as St;
+        for i in cfg.inputs.iter().filter(|i| i.enabled) {
+            if let Some(st) = s.streams.input_status(&i.id).filter(|x| matches!(x.state, St::Error | St::Waiting)) {
+                let why = st.error.clone().unwrap_or_default();
+                push(
+                    format!("stream-in:{}", i.id),
+                    "hardware",
+                    st.since as i64,
+                    false,
+                    say(format!("Flux {} : rien n'arrive ({why})", i.name), format!("Stream {}: nothing arrives ({why})", i.name)),
+                    say(format!("Flux {} : reçu de nouveau", i.name), format!("Stream {}: received again", i.name)),
+                );
+            }
+        }
+        for o in cfg.outputs.iter().filter(|o| o.enabled) {
+            let Some(st) = s.streams.output_status(&o.id) else { continue };
+            for d in st.destinations.iter().filter(|d| d.state == St::Error) {
+                let label = o
+                    .destinations
+                    .iter()
+                    .find(|x| x.id == d.id)
+                    .map(|x| if x.name.is_empty() { x.url.clone() } else { x.name.clone() })
+                    .unwrap_or_else(|| d.id.clone());
+                let why = d.error.clone().unwrap_or_default();
+                push(
+                    format!("stream-out:{}:{}", o.id, d.id),
+                    "hardware",
+                    d.since as i64,
+                    false,
+                    say(format!("Sortie {} → {label} : n'envoie plus ({why})", o.name), format!("Output {} → {label}: not sending ({why})", o.name)),
+                    say(format!("Sortie {} → {label} : envoie de nouveau", o.name), format!("Output {} → {label}: sending again", o.name)),
+                );
+            }
+        }
+    }
+
     if a.clock {
         let cfg = HardwareConfig::load(&s.data_dir);
         let st = s.clock.read();
