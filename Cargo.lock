@@ -2199,6 +2199,7 @@ dependencies = [
  "sha2 0.10.9",
  "strata-core",
  "strata-decklink",
+ "strata-mtl",
  "strata-mxl",
  "strata-share",
  "sysinfo",
@@ -2236,6 +2237,13 @@ dependencies = [
  "sha2 0.10.9",
  "tar",
  "ureq",
+]
+
+[[package]]
+name = "strata-mtl"
+version = "0.1.0"
+dependencies = [
+ "cc",
 ]
 
 [[package]]

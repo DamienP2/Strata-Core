@@ -327,6 +327,38 @@ export function NetworkPage() {
             <Dropdown value={r.media2} options={opts} onChange={(v) => setRole('media2', v)} />
           </Field>
         </FieldGrid>
+        <Field label={t('Flows received and sent by the Core (MTL)')} group>
+          <Segmented<'off' | 'kernel' | 'afXdp' | 'dpdk'>
+            value={r.mediaIo ?? 'off'}
+            onChange={(v) => setRole('mediaIo', v)}
+            options={[
+              { value: 'off', label: t('No') },
+              { value: 'kernel', label: t('Kernel') },
+              { value: 'afXdp', label: 'AF_XDP' },
+              { value: 'dpdk', label: 'DPDK' },
+            ]}
+          />
+        </Field>
+        <p className="st-muted core-note">
+          {
+            {
+              off: t('The flows are only set: the apps receive and send them themselves.'),
+              kernel: t('Through the kernel: simple, for a few HD flows.'),
+              afXdp: t('AF_XDP: the port stays with the kernel, much faster.'),
+              dpdk: t('DPDK: the fastest (UHD, many flows); the ports are reserved for ST 2110 and need their own address.'),
+            }[r.mediaIo ?? 'off']
+          }
+        </p>
+        {r.mediaIo === 'dpdk' && (
+          <FieldGrid two>
+            <Field label={t('Address of port 1')}>
+              <input className="st-mono" value={r.media1Address ?? ''} placeholder="10.10.1.21/24" onChange={(e) => setRole('media1Address', e.target.value)} />
+            </Field>
+            <Field label={t('Address of port 2')}>
+              <input className="st-mono" value={r.media2Address ?? ''} placeholder="10.20.1.21/24" onChange={(e) => setRole('media2Address', e.target.value)} />
+            </Field>
+          </FieldGrid>
+        )}
       </Card>
       <Card icon={<NetIcon size={16} />} title={t('Roles')}>
         <FieldGrid>
@@ -393,6 +425,18 @@ function FlowEditor({ flow, redundant, onClose, onSave }: { flow: Flow; redundan
           <Segmented<Flow['essence']> value={f.essence} onChange={(v) => set('essence', v)} options={(['video', 'audio', 'data'] as const).map((e) => ({ value: e, label: t(ESSENCE[e]) }))} />
         </Field>
       </FieldGrid>
+      {f.essence === 'video' && (
+        <Field label={t('Video format')} group>
+          <Dropdown
+            value={f.format ?? ''}
+            options={[
+              { value: '', label: t('House format') },
+              ...['1080i50', '1080i59.94', '1080p25', '1080p50', '1080p59.94', '720p50', '720p59.94', '2160p25', '2160p50', '2160p59.94'].map((x) => ({ value: x, label: x })),
+            ]}
+            onChange={(v) => set('format', v)}
+          />
+        </Field>
+      )}
       {redundant ? (
         <FieldGrid two>
           <Field label={t('Red address (port 1)')}>

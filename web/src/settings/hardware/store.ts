@@ -77,13 +77,22 @@ export interface Flow {
   blue?: string | null;
   /** Le port média (1 ou 2), avec deux ports indépendants. */
   port?: number;
+  /** La vidéo (« 1080i50 ») ; vide : le format maison. */
+  format?: string;
+  payloadType?: number;
 }
 
 export type Role = 'management' | 'ndi' | 'media1' | 'media2' | 'ptp';
 
 export interface HwConfig {
   cards: Card[];
-  network: Record<Role, string> & { mediaMode: 'redundant' | 'separate' };
+  network: Record<Role, string> & {
+    mediaMode: 'redundant' | 'separate';
+    /** Comment le Core tient les flux ST 2110 (MTL). */
+    mediaIo?: 'off' | 'kernel' | 'afXdp' | 'dpdk';
+    media1Address?: string;
+    media2Address?: string;
+  };
   ndi: { discovery: string; machine: string };
   flows: Flow[];
   ptp: { domain: number; taiOffset: number };

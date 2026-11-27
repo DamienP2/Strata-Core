@@ -3,7 +3,7 @@
 // serveur ne fabrique rien (et ne reçoit aucun flux) pour une page fermée ou cachée.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Cable, MonitorUp, Waves } from 'lucide-react';
-import { Badge, Card, t } from '@strata/ui';
+import { Badge, Card, t, tn } from '@strata/ui';
 import { api } from '../../api';
 import { friendly } from '../../errors';
 import type { Flow, HwConfig } from './store';
@@ -44,6 +44,8 @@ interface OutputStatus extends Sent {
 
 interface FlowStatus extends Partial<Sent> {
   id: string;
+  /** Tenu par le Core (MTL) : ce qui arrive ou part vraiment. */
+  io?: { state: 'opening' | 'running' | 'idle' | 'error'; format?: string | null; frames: number; packets: number; lost: number; error?: string | null } | null;
   /** Un flux entrant regardé : la réception de l'aperçu. */
   reception?: { receiving: boolean; leg?: string | null; format?: string | null; error?: string | null } | null;
 }
@@ -279,15 +281,49 @@ const LEG: Record<string, string> = { red: 'red network', blue: 'blue network', 
 /** Les flux vidéo ST 2110 : reçus (le Core les rejoint seulement pendant qu'on regarde) ou envoyés. */
 export function FlowsCard({ flows }: { flows: Flow[] }) {
   const video = flows.filter((f) => f.essence === 'video' && f.id);
-  const r = usePoll<{ flows: FlowStatus[] }>('/api/hardware/flows');
+  const r = usePoll<{ flows: FlowStatus[]; io?: { active: boolean; problem?: string | null } }>('/api/hardware/flows');
   if (video.length === 0) return null;
+  const engine = r?.io;
   const st = (id: string) => r?.flows.find((x) => x.id === id);
   return (
-    <Card icon={<Waves size={16} />} title={t('Video flows')} actions={<span className="st-muted">{t('Received flows are joined only while this page is open')}</span>}>
+    <Card
+      icon={<Waves size={16} />}
+      title={t('Video flows')}
+      actions={<span className="st-muted">{engine?.active ? t('Received and sent by the Core (MTL), shared with the apps in MXL') : t('Received flows are joined only while this page is open')}</span>}
+    >
+      {engine?.problem && <p className="core-warn">{engine.problem}</p>}
       <div className="core-inputs">
         {video.map((f) => {
           const s = st(f.id);
           const src = `/api/hardware/flows/${enc(f.id)}/preview.jpg`;
+          if (engine?.active) {
+            const io = s?.io;
+            const badge = !io ? (
+              <Badge>{t('Opening…')}</Badge>
+            ) : io.state === 'error' ? (
+              <Badge tone="bad">{t('Error')}</Badge>
+            ) : io.state === 'running' ? (
+              <Badge tone="ok">{io.format || t('Receiving')}</Badge>
+            ) : (
+              <Badge tone="warn">{f.direction === 'input' ? t('Nothing received') : t('black on the output')}</Badge>
+            );
+            const stats = f.direction === 'input' && io ? tn(io.lost, '{n} packet lost', '{n} packets lost') : '';
+            return (
+              <Tile
+                key={f.id}
+                pic={<Preview src={src} on={io?.state === 'running'} empty={t('No picture')} />}
+                head={
+                  <>
+                    <strong className="core-input-wire">{f.name}</strong>
+                    {badge}
+                  </>
+                }
+                sub={[f.direction === 'input' ? t('Received by the Core') : t('Sent by the Core'), f.red, stats].filter(Boolean).join(' · ')}
+                error={io?.error}
+                foot={null}
+              />
+            );
+          }
           if (f.direction === 'input') {
             const rx = s?.reception;
             const badge = rx?.error ? (

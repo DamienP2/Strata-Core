@@ -110,6 +110,13 @@ async fn open_mxl(s: &Shared) {
         Err(e) => tracing::info!("no MXL ({e}): the inputs are shared with strata-share"),
     }
     let r = r.map(std::sync::Arc::new);
+    // MTL (ST 2110 sur les ports média), qui passe par MXL.
+    let mtl = tokio::task::spawn_blocking(strata_mtl::load).await.unwrap_or_else(|e| Err(e.to_string()));
+    match &mtl {
+        Ok(p) => tracing::info!("MTL loaded ({})", p.display()),
+        Err(e) => tracing::info!("no MTL ({e}): the ST 2110 flows are only set, not received or sent by the Core"),
+    }
+    let _ = s.mtl.set(mtl);
     s.captures.set_mxl(r.as_ref().ok().cloned());
     s.playouts.set_mxl(r.as_ref().ok().cloned());
     let _ = s.mxl.set(r);
@@ -155,6 +162,7 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
     // Les entrées après les applis qui les lisent.
     let s2 = s.clone();
     let _ = tokio::task::spawn_blocking(move || {
+        s2.st2110.stop_all();
         s2.playouts.stop_all();
         s2.captures.stop_all();
     })

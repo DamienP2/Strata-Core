@@ -231,6 +231,13 @@ impl VideoWriter {
         }
     }
 
+    /// Une trame v210 seule (entrelacé : `second` pour la trame du bas), un grain.
+    pub fn write_field_v210(&mut self, field: &[u8], stride: usize, second: bool) -> Result<(), String> {
+        let lines = self.video.grain_lines() as usize;
+        let row = |y: usize| &field[y * stride..(y * stride + stride).min(field.len())];
+        self.grain(!second, &mut (0..lines).map(row))
+    }
+
     /// Une image UYVY 8 bits, passée en v210.
     pub fn write_uyvy(&mut self, frame: &[u8], stride: usize) -> Result<(), String> {
         let (w, h) = (self.video.width as usize, self.video.height as usize);

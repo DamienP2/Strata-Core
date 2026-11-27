@@ -27,6 +27,7 @@ pub mod net;
 pub mod playout;
 pub mod preview;
 pub mod st2110;
+pub mod st2110io;
 pub mod sync;
 
 use axum::{
@@ -115,6 +116,27 @@ pub struct NetworkRoles {
     pub media2: String,
     /// L'interface où tourne ptp4l (son horloge règle celle du système par phc2sys).
     pub ptp: String,
+    /// Comment le Core reçoit et envoie les flux ST 2110 (MTL) : pas du tout (l'aperçu seulement),
+    /// par le noyau, en AF_XDP, ou en DPDK (le port est alors retiré au noyau).
+    pub media_io: MediaIo,
+    /// En DPDK, l'adresse du port média 1 (« 10.10.1.21/24 ») : le noyau ne le voit plus.
+    pub media1_address: String,
+    pub media2_address: String,
+}
+
+/// Comment le Core tient les flux ST 2110.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum MediaIo {
+    /// Les flux ne sont que réglés (et regardés dans l'aperçu) : les applis les reçoivent elles-mêmes.
+    #[default]
+    Off,
+    /// MTL par les sockets du noyau : simple, pour quelques flux HD.
+    Kernel,
+    /// MTL en AF_XDP : le port reste au noyau, bien plus rapide.
+    AfXdp,
+    /// MTL en DPDK : le plus rapide (UHD, nombreux flux) ; le port est réservé au ST 2110.
+    Dpdk,
 }
 
 /// Comment servent les deux ports média.
@@ -177,6 +199,41 @@ pub struct Flow {
     /// Le port média (1 ou 2), avec deux ports indépendants.
     #[serde(default = "first_port")]
     pub port: u8,
+    /// La vidéo (« 1080i50 », « 2160p50 ») ; vide : le format maison en 1080.
+    #[serde(default)]
+    pub format: String,
+    /// Le type de charge RTP (96 en vidéo par usage).
+    #[serde(default = "video_pt")]
+    pub payload_type: u8,
+}
+
+fn video_pt() -> u8 {
+    96
+}
+
+/// Une vidéo d'après son nom : « 1080i50 », « 720p59.94 », « 2160p25 ».
+pub fn parse_format(s: &str) -> Option<(u32, u32, (u32, u32), bool)> {
+    let s = s.trim().to_ascii_lowercase();
+    let (h, rest, interlaced) = if let Some((h, r)) = s.split_once('i') { (h, r, true) } else { let (h, r) = s.split_once('p')?; (h, r, false) };
+    let height: u32 = h.parse().ok()?;
+    let width = match height {
+        480 => 720,
+        576 => 720,
+        720 => 1280,
+        1080 => 1920,
+        2160 => 3840,
+        4320 => 7680,
+        _ => return None,
+    };
+    // En entrelacé, le nom donne les trames par seconde (1080i50 : 25 images).
+    let field_rate: f64 = rest.parse().ok()?;
+    let frame_rate = if interlaced { field_rate / 2.0 } else { field_rate };
+    let rate = if (frame_rate - frame_rate.round()).abs() < 0.001 {
+        (frame_rate.round() as u32, 1)
+    } else {
+        ((frame_rate.ceil() as u32) * 1000, 1001)
+    };
+    Some((width, height, rate, interlaced))
 }
 
 fn first_port() -> u8 {
@@ -388,6 +445,12 @@ pub fn reconcile_inputs(s: &crate::state::AppState) {
     let tz = s.config.load().timezone.clone();
     s.captures.reconcile(capture::wanted(&cfg, &detected, simulated, &tz));
     s.playouts.reconcile(playout::wanted(&cfg, &detected, simulated));
+    let mtl = match s.mtl.get() {
+        Some(Ok(_)) => Ok(()),
+        Some(Err(e)) => Err(e.clone()),
+        None => Err("not loaded yet".to_string()),
+    };
+    s.st2110.apply(&cfg, mtl, mxl_of(s));
 }
 
 /// Les entrées captées : signal, format, images par seconde, applis qui les lisent.
@@ -580,6 +643,8 @@ async fn flows(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResu
             .iter()
             .map(|f| {
                 let mut v = match f.direction {
+                    // Tenu par le Core (MTL) : ce qui arrive ou part vraiment.
+                    _ if s2.st2110.active() && f.essence == Essence::Video => json!({ "io": s2.st2110.status_of(&f.id) }),
                     Direction::Output => match mxl_of(&s2) {
                         Some(m) => published_mxl(&m, out_flow(&format!("2110/{}", f.id))),
                         None => published(&strata_share::flow_path(&f.id), &s2),
@@ -590,7 +655,7 @@ async fn flows(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResu
                 v
             })
             .collect();
-        json!({ "flows": list })
+        json!({ "flows": list, "io": { "active": s2.st2110.active(), "problem": s2.st2110.problem() } })
     })
     .await?;
     Ok(Json(v))
@@ -607,6 +672,11 @@ async fn flow_preview(State(s): State<Shared>, CurrentUser(me): CurrentUser, Url
             return Err("only video flows have a picture".to_string());
         }
         let key = flow_key(&cfg, f);
+        // Le Core tient le flux (MTL) : son flux MXL, reçu ou écrit par l'appli.
+        if let (true, Some(mxl)) = (s2.st2110.active(), mxl_of(&s2)) {
+            let key = format!("{key}/mxl");
+            return s2.previews.jpeg(&key, || preview::Feed::Mxl { mxl, id: out_flow(&format!("2110/{}", f.id)), reader: None });
+        }
         match f.direction {
             Direction::Output => s2.previews.jpeg(&key, || match mxl_of(&s2) {
                 Some(mxl) => preview::Feed::Mxl { mxl, id: out_flow(&format!("2110/{}", f.id)), reader: None },
@@ -784,7 +854,20 @@ mod tests {
             red: red.parse().unwrap(),
             blue: blue.map(|b| b.parse().unwrap()),
             port: 1,
+            format: String::new(),
+            payload_type: 96,
         }
+    }
+
+    #[test]
+    fn video_formats_by_name() {
+        assert_eq!(parse_format("1080i50"), Some((1920, 1080, (25, 1), true)));
+        assert_eq!(parse_format("1080p50"), Some((1920, 1080, (50, 1), false)));
+        assert_eq!(parse_format("1080i59.94"), Some((1920, 1080, (30000, 1001), true)));
+        assert_eq!(parse_format("2160p59.94"), Some((3840, 2160, (60000, 1001), false)));
+        assert_eq!(parse_format("720p50"), Some((1280, 720, (50, 1), false)));
+        assert_eq!(parse_format("1080p23.98"), Some((1920, 1080, (24000, 1001), false)));
+        assert_eq!(parse_format("abc"), None);
     }
 
     #[test]

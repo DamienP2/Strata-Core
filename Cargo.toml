@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/strata-core", "crates/strata-core-server", "crates/strata-decklink", "crates/strata-share", "crates/strata-mxl", "crates/strata-install"]
+members = ["crates/strata-core", "crates/strata-core-server", "crates/strata-decklink", "crates/strata-share", "crates/strata-mxl", "crates/strata-mtl", "crates/strata-install"]
 
 [workspace.package]
 version = "0.1.0"
@@ -21,6 +21,7 @@ strata-core = { path = "crates/strata-core" }
 strata-decklink = { path = "crates/strata-decklink" }
 strata-share = { path = "crates/strata-share" }
 strata-mxl = { path = "crates/strata-mxl" }
+strata-mtl = { path = "crates/strata-mtl" }
 # MXL (EBU DMF Media eXchange Layer) : la bibliothèque chargée au lancement (libmxl.so).
 mxl = { git = "https://github.com/dmf-mxl/mxl", rev = "ce5ac2bffa5d", features = ["mxl-not-built"] }
 
