@@ -174,7 +174,8 @@ async fn https_made_by_strata() {
     .await;
     assert_eq!(st, 200);
     assert!(tls(srv.https, &ca, "other.test").await.is_err());
-    let (st, _, _) = plain(srv.http, "GET", &format!("other.test:{}", srv.http), "/", &[]).await;
+    // (une adresse de l'API : l'interface web n'est pas construite en CI)
+    let (st, _, _) = plain(srv.http, "GET", &format!("other.test:{}", srv.http), "/api/auth/state", &[]).await;
     assert_eq!(st, 200);
 
     // Le certificat d'entreprise ne se choisit pas avant d'être importé ; le port HTTP est pris.
