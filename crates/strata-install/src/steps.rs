@@ -370,10 +370,13 @@ fn desktop_video(ctx: &Ctx, src: &Path) -> Result<String, String> {
         let out = ctx.p("/var/cache/strata/desktopvideo");
         let _ = std::fs::remove_dir_all(&out);
         std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
-        let f = std::fs::File::open(src).map_err(|e| format!("cannot open {}: {e}", src.display()))?;
-        let n = src.to_string_lossy().to_lowercase();
-        let reader: Box<dyn std::io::Read> = if n.ends_with(".gz") || n.ends_with(".tgz") { Box::new(flate2::read::GzDecoder::new(f)) } else { Box::new(f) };
-        tar::Archive::new(reader).unpack(&out).map_err(|_| "the archive is damaged (copy it again)".to_string())?;
+        unpack_any(src, &out)?;
+        // Une archive dans l'archive (un .tar.gz dans le .tar) : déballée à son tour.
+        for inner in files_in(&out).into_iter().filter(|f| is_archive(f)) {
+            let dest = inner.with_extension("d");
+            std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+            unpack_any(&inner, &dest)?;
+        }
         out
     } else {
         src.parent().unwrap_or(Path::new("/")).to_path_buf()
@@ -398,6 +401,31 @@ fn desktop_video(ctx: &Ctx, src: &Path) -> Result<String, String> {
     let _ = ctx.run("modprobe", &["blackmagic-io"]);
     let loaded = ctx.dry() || Path::new("/dev/blackmagic").exists();
     Ok(if loaded { "pilote installé (DKMS)".into() } else { "pilote installé : redémarrez le serveur pour le charger".into() })
+}
+
+/// Déballe une archive tar, compressée (gzip) ou non, d'après son contenu et pas son nom (un
+/// navigateur peut garder « .tar » à un fichier compressé, ou l'inverse).
+fn unpack_any(src: &Path, out: &Path) -> Result<(), String> {
+    let mut head = [0u8; 262];
+    let n = {
+        use std::io::Read;
+        let mut f = std::fs::File::open(src).map_err(|e| format!("cannot open {}: {e}", src.display()))?;
+        f.read(&mut head).map_err(|e| e.to_string())?
+    };
+    let size = std::fs::metadata(src).map(|m| m.len()).unwrap_or(0);
+    let what = match &head[..n.min(6)] {
+        [0x1f, 0x8b, ..] => "gzip",
+        [b'B', b'Z', b'h', ..] => return Err("this archive is compressed with bzip2: copy the .tar or .tar.gz from Blackmagic".into()),
+        [0xfd, b'7', b'z', b'X', b'Z', 0] => return Err("this archive is compressed with xz: copy the .tar or .tar.gz from Blackmagic".into()),
+        [b'P', b'K', ..] => return Err("this is a .zip: copy the Linux .tar or .tar.gz from Blackmagic".into()),
+        _ if n >= 262 && &head[257..262] == b"ustar" => "tar",
+        _ => return Err(format!("{} is not a tar archive ({size} bytes): copy it again, completely", src.display())),
+    };
+    let f = std::fs::File::open(src).map_err(|e| e.to_string())?;
+    let reader: Box<dyn std::io::Read> = if what == "gzip" { Box::new(flate2::read::GzDecoder::new(f)) } else { Box::new(f) };
+    tar::Archive::new(reader).unpack(out).map_err(|e| {
+        format!("cannot unpack {} ({size} bytes, {e}): copy it again, completely", src.file_name().map(|n| n.to_string_lossy()).unwrap_or_default())
+    })
 }
 
 fn is_archive(p: &Path) -> bool {
@@ -700,6 +728,40 @@ pub fn run(ctx: &Ctx, steps: &[Step], on: &(dyn Fn(Event) + Sync)) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn unpacks_tar_whatever_its_name() {
+        let base = std::env::temp_dir().join(format!("strata-dv-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let src = base.join("src/Blackmagic_Desktop_Video_Linux_15.0/deb/x86_64");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("desktopvideo_15.0a1_amd64.deb"), b"deb").unwrap();
+        let mut tar_bytes = Vec::new();
+        {
+            let mut t = tar::Builder::new(&mut tar_bytes);
+            t.append_dir_all("Blackmagic_Desktop_Video_Linux_15.0", base.join("src/Blackmagic_Desktop_Video_Linux_15.0")).unwrap();
+            t.finish().unwrap();
+        }
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        std::io::Write::write_all(&mut gz, &tar_bytes).unwrap();
+        let gz = gz.finish().unwrap();
+        // Un .tar qui est en fait compressé, et un vrai .tar.
+        for (name, bytes) in [("a.tar", &gz), ("b.tar", &tar_bytes), ("c.tar.gz", &gz)] {
+            let f = base.join(name);
+            std::fs::write(&f, bytes).unwrap();
+            let out = base.join(format!("{name}.out"));
+            unpack_any(&f, &out).unwrap();
+            assert!(pick_deb(&files_in(&out)).is_some(), "{name}");
+        }
+        // Coupé en route (copie pas finie) : l'erreur le dit.
+        let cut = base.join("cut.tar");
+        std::fs::write(&cut, &tar_bytes[..tar_bytes.len() / 2]).unwrap();
+        let e = unpack_any(&cut, &base.join("cut.out"));
+        assert!(e.is_ok() || e.unwrap_err().contains("copy it again"));
+        std::fs::write(base.join("z.tar"), b"PK\x03\x04 not a tar").unwrap();
+        assert!(unpack_any(&base.join("z.tar"), &base.join("z.out")).unwrap_err().contains(".zip"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn finds_the_blackmagic_driver_in_what_was_copied() {

@@ -198,7 +198,11 @@ pub fn find_desktop_video() -> Option<PathBuf> {
     let mut found: Vec<PathBuf> = Vec::new();
     for d in dirs {
         for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
-            if is_desktop_video(&e.file_name().to_string_lossy(), e.path().is_dir()) {
+            // Un fichier encore en train d'arriver (copie pas finie) attend : rien n'y a été écrit
+            // depuis 5 s.
+            let settled =
+                e.metadata().ok().and_then(|m| m.modified().ok()).and_then(|t| t.elapsed().ok()).is_some_and(|d| d > std::time::Duration::from_secs(5));
+            if is_desktop_video(&e.file_name().to_string_lossy(), e.path().is_dir()) && (settled || e.path().is_dir()) {
                 found.push(e.path());
             }
         }
