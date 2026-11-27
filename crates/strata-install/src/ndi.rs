@@ -69,12 +69,28 @@ pub fn split_installer(script: &[u8]) -> Result<(String, &[u8]), String> {
     Ok((license, &script[at + marker.len()..]))
 }
 
+/// Le SDK copié sur le serveur s'il y est (serveur sans internet), sinon téléchargé ; déballé
+/// dans `dir`.
+pub fn get(dir: &Path) -> Result<Sdk, String> {
+    match crate::checks::find_ndi_sdk() {
+        Some(local) => {
+            let _ = std::fs::remove_dir_all(dir);
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+            unpack(&local, dir)
+        }
+        None => fetch(dir),
+    }
+}
+
 /// Télécharge et déballe le SDK dans `dir`.
 pub fn fetch(dir: &Path) -> Result<Sdk, String> {
     let _ = std::fs::remove_dir_all(dir);
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(300))).build().into();
-    let res = agent.get(SDK_URL).call().map_err(|e| format!("cannot download the NDI SDK: {e}"))?;
+    let res = agent
+        .get(SDK_URL)
+        .call()
+        .map_err(|e| format!("cannot download the NDI SDK ({e}); without internet, copy Install_NDI_SDK_v6_Linux.tar.gz (ndi.video) to this server"))?;
     let tgz = dir.join("ndi-sdk.tar.gz");
     let mut f = std::fs::File::create(&tgz).map_err(|e| e.to_string())?;
     std::io::copy(&mut res.into_body().into_reader(), &mut f).map_err(|e| format!("the download was cut: {e}"))?;

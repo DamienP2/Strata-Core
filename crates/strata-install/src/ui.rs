@@ -278,7 +278,11 @@ impl App {
                         self.license_scroll = 0;
                         self.go(Screen::License);
                     }
-                    Err(e) => self.ndi_error = Some(e),
+                    // Sans le SDK : NDI repasse à « non », Entrée continue sans lui.
+                    Err(e) => {
+                        self.ndi_error = Some(e);
+                        self.ndi_wanted = false;
+                    }
                 }
             }
             Msg::Step(e) => match e {
@@ -463,7 +467,7 @@ impl App {
                         self.ndi_error = None;
                         let tx = self.tx.clone();
                         std::thread::spawn(move || {
-                            let _ = tx.send(Msg::Ndi(ndi::fetch(&std::env::temp_dir().join("strata-install-ndi"))));
+                            let _ = tx.send(Msg::Ndi(ndi::get(&std::env::temp_dir().join("strata-install-ndi"))));
                         });
                         return;
                     }
@@ -695,9 +699,23 @@ fn draw(f: &mut Frame, app: &App) {
         }
         Screen::Hardware => draw_hardware(f, body, app),
         Screen::License => {
+            let [text_area, ask] = Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).areas(body);
             let text = app.ndi_sdk.as_ref().map(|s| s.license.clone()).unwrap_or_default();
             let b = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(ACCENT)).title(title("Licence du SDK NDI"));
-            f.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }).scroll((app.license_scroll, 0)).block(b), body);
+            f.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }).scroll((app.license_scroll, 0)).block(b), text_area);
+            f.render_widget(
+                Paragraph::new(vec![
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::styled(" A ", Style::new().fg(BG).bg(OK).add_modifier(Modifier::BOLD)),
+                        Span::styled("  j'accepte la licence : la bibliothèque NDI sera installée", Style::new().fg(FG)),
+                        Span::raw("        "),
+                        Span::styled(" R ", Style::new().fg(BG).bg(BAD).add_modifier(Modifier::BOLD)),
+                        Span::styled("  je refuse : sans NDI", Style::new().fg(FG)),
+                    ]),
+                ]),
+                ask,
+            );
         }
         Screen::Settings => {
             let ufw = if app.plan.firewall { Span::styled("[x] ", Style::new().fg(ACCENT)) } else { Span::styled("[ ] ", Style::new().fg(MUTED)) };
@@ -780,7 +798,7 @@ fn draw_hardware(f: &mut Frame, body: Rect, app: &App) {
     let ndi_state = match (&app.ndi_present, &app.plan.ndi) {
         (_, Some(_)) => "licence acceptée : la bibliothèque sera installée".to_string(),
         (Some(p), None) => format!("bibliothèque présente ({})", p.display()),
-        (None, None) => "bibliothèque absente : le SDK NDI est téléchargé, sa licence est à accepter".into(),
+        (None, None) => "bibliothèque absente. Oui : le SDK NDI est téléchargé, puis sa licence s'affiche, à accepter (A)".into(),
     };
     lines.push(Line::from(Span::styled(format!("  {ndi_state}"), Style::new().fg(MUTED))));
     lines.push(Line::from(vec![Span::raw("  Bibliothèque NDI : "), yes_no(app.ndi_wanted, app.hw_focus == 1)]));
@@ -789,6 +807,7 @@ fn draw_hardware(f: &mut Frame, body: Rect, app: &App) {
     }
     if let Some(e) = &app.ndi_error {
         lines.push(Line::from(Span::styled(format!("  ✗ {e}"), Style::new().fg(BAD))));
+        lines.push(Line::from(Span::styled("  NDI ne sera pas installé (Entrée pour continuer, ou Oui pour réessayer).", Style::new().fg(MUTED))));
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled("GPU", Style::new().add_modifier(Modifier::BOLD))));
@@ -988,5 +1007,18 @@ mod tests {
         assert!(line("Get-ChildItem $HOME\\Downloads\\Blackmagic_Desktop_Video_Linux_* | % { scp $_.FullName ").unwrap().ends_with(": }"));
         // Rien d'autre sur la ligne d'une commande (pas de cadre).
         assert!(!rows.iter().any(|r| r.contains('│')));
+    }
+
+    #[test]
+    fn the_license_says_how_to_accept() {
+        let mut app = new_app(Args::default());
+        app.screen = Screen::License;
+        app.ndi_sdk = Some(ndi::Sdk { lib: "/tmp/libndi.so.6".into(), license: "NDI SDK License Agreement\nTerms.".into() });
+        let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        term.draw(|f| draw(f, &app)).unwrap();
+        let buf = term.backend().buffer();
+        let text: String = buf.content().iter().map(|c| c.symbol()).collect();
+        assert!(text.contains("NDI SDK License Agreement"));
+        assert!(text.contains(" A   j'accepte la licence") && text.contains(" R   je refuse"));
     }
 }

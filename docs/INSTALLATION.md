@@ -18,7 +18,9 @@ empreinte et le lance. Un écran plein terminal, au clavier :
      donne la marche à suivre (le télécharger sur son ordinateur, le copier par `scp` avec la
      commande exacte) et l'attend : l'archive telle que téléchargée (`.tar.gz`), son dossier
      déballé, ou ce qu'elle contient (`.deb`, installateur `.sh`). Il installe le pilote avec DKMS.
-   - **NDI** : le SDK NDI est téléchargé, sa licence affichée ; la bibliothèque n'est installée
+   - **NDI** : à mettre sur *Oui*. Le SDK NDI est téléchargé (ou pris sur le serveur s'il y a été
+     copié : `Install_NDI_SDK_v6_Linux.tar.gz`, pour un serveur sans internet), puis sa licence
+     s'affiche : **A** pour l'accepter, **R** pour la refuser. La bibliothèque n'est installée
      qu'une fois la licence acceptée.
    - **GPU** : le pilote NVIDIA recommandé par Ubuntu (`ubuntu-drivers`, avec NVENC/NVDEC) ;
      VA-API pour Intel et AMD (`intel-media-va-driver-non-free` ou `mesa-va-drivers`, `vainfo`).

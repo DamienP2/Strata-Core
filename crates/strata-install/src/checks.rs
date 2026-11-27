@@ -253,6 +253,28 @@ pub fn secure_boot() -> bool {
     Command::new("mokutil").arg("--sb-state").output().is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("SecureBoot enabled"))
 }
 
+/// Le SDK NDI copié à la main (serveur sans internet) : `Install_NDI_SDK_v6_Linux.tar.gz`, ou le
+/// `.sh` qu'il contient, dans le dossier personnel, /root ou /tmp.
+pub fn find_ndi_sdk() -> Option<PathBuf> {
+    let mut dirs: Vec<PathBuf> = vec![std::env::current_dir().unwrap_or_default(), "/root".into(), "/tmp".into()];
+    if let Ok(home) = std::fs::read_dir("/home") {
+        dirs.extend(home.flatten().map(|e| e.path()));
+    }
+    let mut found: Vec<PathBuf> = Vec::new();
+    for d in dirs {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let n = e.file_name().to_string_lossy().to_lowercase();
+            let settled =
+                e.metadata().ok().and_then(|m| m.modified().ok()).and_then(|t| t.elapsed().ok()).is_some_and(|d| d > std::time::Duration::from_secs(5));
+            if n.starts_with("install_ndi_sdk") && n.contains("linux") && (n.ends_with(".tar.gz") || n.ends_with(".sh")) && settled {
+                found.push(e.path());
+            }
+        }
+    }
+    found.sort_by_key(|p| p.file_name().map(|n| n.to_os_string()));
+    found.pop()
+}
+
 /// La bibliothèque NDI installée.
 pub fn ndi() -> Option<PathBuf> {
     ["/usr/local/lib/libndi.so", "/usr/lib/libndi.so", "/usr/lib/x86_64-linux-gnu/libndi.so"].iter().map(PathBuf::from).find(|p| p.exists())
