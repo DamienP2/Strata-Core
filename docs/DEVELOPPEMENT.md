@@ -69,6 +69,8 @@ comme une appli :
 STRATA_APP_ID=livecut cargo run -p strata-share --example read -- /dev/shm/strata-sdi-<carte>-1
 ```
 
+Les GPU : `STRATA_FAKE_GPU=nvidia,intel,nouveau,amd`.
+
 L'horloge : `STRATA_FAKE_CLOCK=ptp` (ou `ntp`, `none`) simule l'état de PTP et de chrony ;
 `STRATA_SYSTEM_ROOT=./data/root` fait écrire les fichiers de chrony et ptp4l dans ce dossier au lieu
 de `/etc`, sans rien relancer.

@@ -11,6 +11,7 @@
 //! - **ST 2110** : les flux (nom, sens, adresses multicast : rouge et bleue en 2022-7, une seule
 //!   et son port sinon).
 //! - **Horloge** : le domaine PTP, le décalage TAI, et l'état de NTP et PTP (`sync.rs`).
+//! - **GPU** : NVIDIA, Intel, AMD, leur pilote et ce qu'ils encodent (`gpu.rs`).
 //! - **Entrées** : chaque entrée SDI captée une fois par le Core et partagée avec les applis
 //!   (`capture.rs`, `strata-share`).
 //!
@@ -18,6 +19,7 @@
 pub mod capture;
 pub mod clock;
 pub mod decklink;
+pub mod gpu;
 pub mod ndi;
 pub mod net;
 pub mod sync;
@@ -335,6 +337,7 @@ fn snapshot(s: &Shared) -> Value {
         },
         "models": decklink::MODELS,
         "nics": net::nics(),
+        "gpus": gpu::detect(),
         "ndi": ndi,
     })
 }
@@ -493,6 +496,8 @@ async fn shared(State(s): State<Shared>, ConnectInfo(peer): ConnectInfo<SocketAd
             "ndi": {"configDir": ndi::config_dir(&s2.data_dir), "discovery": cfg.ndi.discovery, "machine": cfg.ndi.machine},
             "flows": cfg.flows,
             "ptp": cfg.ptp,
+            // Les GPU : où encoder, décoder ou rendre.
+            "gpus": gpu::detect().into_iter().map(|g| json!({"pci": g.pci, "vendor": g.vendor, "name": g.name, "driver": g.driver, "renderNode": g.render_node, "api": g.api, "encode": g.encode, "decode": g.decode, "ready": g.ready})).collect::<Vec<_>>(),
             "clock": {"source": cfg.clock.source, "house": cfg.clock.house, "timezone": s2.config.load().timezone},
         })
     })

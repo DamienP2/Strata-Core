@@ -180,6 +180,7 @@ Le matériel appartient au serveur : le Core le découvre, le règle une fois, e
 - **Cartes réseau** : interfaces, adresses, rôle de chaque carte (gestion, flux, 2110…).
 - **DeckLink** : cartes Blackmagic, connecteurs SDI / HDMI, fonction de chaque connecteur (entrée ou sortie), nom, format ; pilote Desktop Video.
 - **NDI** : bibliothèque, sources visibles sur le réseau.
+- **GPU** : NVIDIA, Intel, AMD ; pilote, nœud de rendu, encodage et décodage matériels (NVENC/NVDEC, VA-API), charge. Les applis le lisent pour encoder, décoder ou rendre ; l'installateur pose le pilote NVIDIA ou VA-API.
 - **Représentation** : chaque carte (DeckLink, réseau) est rendue en 3D réaliste (three.js : matières, éclairage, ombre), en vue isométrique, selon son modèle, avec ses connecteurs numérotés comme sur l'équerre et comme le logiciel les voit, à la couleur de leur fonction.
 - **ST 2110** : les deux ports média servent soit en **SMPTE 2022-7** (rouge et bleu, chaque flux sur les deux), soit comme **deux ports indépendants** (chaque flux sur l'un ou l'autre).
 

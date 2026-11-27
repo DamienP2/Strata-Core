@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Activity, Cpu, HardDrive, Network } from 'lucide-react';
 import { Badge, Card, PageHead, formatBytes, formatDuration, locale, t } from '@strata/ui';
 import { api } from '../../api';
+import { UseBar, type Gpu } from '../hardware/Gpu';
 import { LineChart } from './LineChart';
 
 interface Use {
@@ -31,6 +32,7 @@ interface Res {
   now: Now | null;
   history: { t: number; cpu: number; mem: number; rx: number; tx: number; apps: Record<string, number> }[];
   names: Record<string, string>;
+  gpus?: Gpu[];
   machine: { host?: string; os: string; kernel?: string; cpu?: string; cores: number; uptimeSecs: number; coreUptimeSecs: number };
 }
 
@@ -164,6 +166,27 @@ export function ResourcesPage() {
         </div>
         <p className="st-muted core-note">{t('Load: {a} · {b} · {c} (1, 5, 15 min)', { a: num(now.load[0], 2), b: num(now.load[1], 2), c: num(now.load[2], 2) })}</p>
       </Card>
+
+      {(r.gpus ?? []).length > 0 && (
+        <div className="core-cols">
+          {r.gpus!.map((g) => (
+            <Card key={g.pci} icon={<Cpu size={16} />} title={g.name}>
+              <div className="core-lines">
+                <UseBar label="GPU" value={g.usage?.gpu ?? 0} />
+                <UseBar label={t('Encoder')} value={g.usage?.encoder ?? 0} />
+                <UseBar label={t('Decoder')} value={g.usage?.decoder ?? 0} />
+                {g.memoryMb ? <UseBar label={t('Memory')} value={((g.usage?.memoryUsedMb ?? 0) / g.memoryMb) * 100} text={`${formatBytes((g.usage?.memoryUsedMb ?? 0) * 1048576)} / ${formatBytes(g.memoryMb * 1048576)}`} /> : null}
+                {g.usage?.temperature != null && (
+                  <div className="core-line">
+                    <span>{t('Temperature')}</span>
+                    <span className="st-muted st-mono">{Math.round(g.usage.temperature)} °C</span>
+                  </div>
+                )}
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
 
       <div className="core-cols">
         <Card icon={<HardDrive size={16} />} title={t('Disks')}>

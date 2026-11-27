@@ -36,6 +36,9 @@ pub struct Plan {
     pub desktop_video: Option<PathBuf>,
     /// La bibliothèque NDI, sortie du SDK et sa licence acceptée.
     pub ndi: Option<PathBuf>,
+    /// Le pilote NVIDIA (pour NVENC/NVDEC), et les paquets VA-API (Intel, AMD).
+    pub nvidia: bool,
+    pub vaapi: Vec<String>,
     /// Ouvrir les ports du cockpit dans le pare-feu (ufw actif).
     pub firewall: bool,
     /// Le compte administrateur : nom, mot de passe.
@@ -56,6 +59,8 @@ impl Default for Plan {
             apps: Vec::new(),
             desktop_video: None,
             ndi: None,
+            nvidia: false,
+            vaapi: Vec::new(),
             firewall: true,
             admin: None,
             package: None,
@@ -202,7 +207,7 @@ fn core_unit() -> String {
          [Service]\n\
          User={user}\n\
          Group={user}\n\
-         SupplementaryGroups=video\n\
+         SupplementaryGroups=video render\n\
          ExecStart={bin} run --bind 0.0.0.0:{port} --data-dir {data}\n\
          Restart=always\n\
          RestartSec=2\n\
@@ -306,9 +311,11 @@ fn put_core(ctx: &Ctx, plan: &Plan, say: &dyn Fn(String)) -> Result<String, Stri
 fn service_user(ctx: &Ctx) -> Result<String, String> {
     let exists = !ctx.dry() && Command::new("id").args(["-u", paths::USER]).output().is_ok_and(|o| o.status.success());
     if exists {
+        // Les GPU et les cartes : groupes video et render.
+        let _ = ctx.run("usermod", &["-aG", "video,render", paths::USER]);
         return Ok(format!("compte « {} »", paths::USER));
     }
-    ctx.run("useradd", &["--system", "--no-create-home", "--home-dir", paths::DATA, "--shell", "/usr/sbin/nologin", "--groups", "video", paths::USER])?;
+    ctx.run("useradd", &["--system", "--no-create-home", "--home-dir", paths::DATA, "--shell", "/usr/sbin/nologin", "--groups", "video,render", paths::USER])?;
     Ok(format!("compte « {} » créé", paths::USER))
 }
 
@@ -397,6 +404,21 @@ fn ndi(ctx: &Ctx, lib: &Path) -> Result<String, String> {
     Ok(format!("{target} ; découverte des sources par Avahi"))
 }
 
+/// Le pilote NVIDIA recommandé pour cette carte (celui d'Ubuntu, avec NVENC/NVDEC).
+fn nvidia(ctx: &Ctx) -> Result<String, String> {
+    ctx.run("apt-get", &["install", "-y", "-q", "ubuntu-drivers-common"])?;
+    ctx.run("ubuntu-drivers", &["install"])?;
+    let loaded = !ctx.dry() && Command::new("nvidia-smi").output().is_ok_and(|o| o.status.success());
+    Ok(if loaded { "pilote NVIDIA en place".into() } else { "pilote installé : redémarrez le serveur pour le charger".into() })
+}
+
+fn vaapi(ctx: &Ctx, pkgs: &[String]) -> Result<String, String> {
+    let mut args = vec!["install", "-y", "-q"];
+    args.extend(pkgs.iter().map(String::as_str));
+    ctx.run("apt-get", &args)?;
+    Ok(pkgs.join(", "))
+}
+
 fn firewall(ctx: &Ctx) -> Result<String, String> {
     let status = if ctx.dry() {
         String::new()
@@ -475,6 +497,13 @@ pub fn steps(plan: &Plan) -> Vec<Step> {
             if let Some(lib) = plan.ndi.clone() {
                 v.push(step("Bibliothèque NDI", true, move |ctx, _| ndi(ctx, &lib)));
             }
+            if plan.nvidia {
+                v.push(step("Pilote NVIDIA", true, |ctx, _| nvidia(ctx)));
+            }
+            if !plan.vaapi.is_empty() {
+                let pkgs = plan.vaapi.clone();
+                v.push(step("Pilotes VA-API (Intel, AMD)", true, move |ctx, _| vaapi(ctx, &pkgs)));
+            }
             if let Some((name, pw)) = plan.admin.clone() {
                 v.push(step(format!("Compte administrateur « {name} »"), false, move |ctx, _| admin(ctx, &name, &pw)));
             }
@@ -503,6 +532,13 @@ pub fn steps(plan: &Plan) -> Vec<Step> {
             }
             if let Some(lib) = plan.ndi.clone() {
                 v.push(step("Bibliothèque NDI", true, move |ctx, _| ndi(ctx, &lib)));
+            }
+            if plan.nvidia {
+                v.push(step("Pilote NVIDIA", true, |ctx, _| nvidia(ctx)));
+            }
+            if !plan.vaapi.is_empty() {
+                let pkgs = plan.vaapi.clone();
+                v.push(step("Pilotes VA-API (Intel, AMD)", true, move |ctx, _| vaapi(ctx, &pkgs)));
             }
             v.push(step("Droits sur les données", false, |ctx, _| ctx.chown(paths::DATA, true).map(|_| paths::DATA.to_string())));
             v.push(step("Redémarrage du service", false, |ctx, _| start(ctx, true)));

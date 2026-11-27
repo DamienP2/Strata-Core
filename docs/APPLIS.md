@@ -146,6 +146,7 @@ GET $STRATA_CORE_URL/api/hardware/shared
 | `flows` | les flux ST 2110 : nom, sens, essence, `red` (et `blue` en 2022-7), `port` (1 ou 2, ports indépendants) |
 | `ndi` | le dossier des réglages NDI (`configDir`), le serveur de découverte, le nom de machine |
 | `ptp` | le domaine PTP, le décalage TAI − UTC |
+| `gpus` | les GPU : fabricant, nom, pilote, nœud de rendu (`renderNode`), interface (`nvenc` ou `vaapi`), codecs encodés et décodés, prêt ou non |
 | `clock` | d'où le serveur prend l'heure (`ptp` ou `ntp`), le timecode maison (`house` : cadence, heure locale / UTC / décalage, drop frame, recalage quotidien) et le fuseau du serveur |
 
 NDI : le Core donne `NDI_CONFIG_DIR` à l'appli qu'il lance ; la bibliothèque NDI y lit l'interface,

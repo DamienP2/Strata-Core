@@ -296,6 +296,7 @@ async fn resources(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> Api
             "now": s2.resources.now(),
             "history": s2.resources.history(),
             "names": names,
+            "gpus": crate::hardware::gpu::detect().into_iter().filter(|g| g.usage.is_some()).collect::<Vec<_>>(),
             "machine": {
                 "host": System::host_name(),
                 "os": format!("{} {}", System::name().unwrap_or_default(), System::os_version().unwrap_or_default()),

@@ -34,6 +34,7 @@ fn server() -> Srv {
     std::env::set_var("STRATA_SHARE_DIR", dir.join("shm"));
     // L'horloge : un PTP simulé, les fichiers du système écrits dans le dossier du test.
     std::env::set_var("STRATA_FAKE_CLOCK", "ptp");
+    std::env::set_var("STRATA_FAKE_GPU", "nvidia,nouveau");
     std::env::set_var("STRATA_FAKE_NICS", "connectx");
     std::env::set_var("STRATA_SYSTEM_ROOT", dir.join("root"));
     let s = AppState::new(dir.clone());
@@ -206,6 +207,14 @@ async fn hardware_settings_and_what_apps_read() {
     let (st, v) = call(&srv.remote, "POST", "/api/hardware/clock/apply", host, c, Some(json!({}))).await;
     assert_eq!(st, StatusCode::OK, "{v}");
     assert_eq!(v["steps"].as_array().unwrap().len(), 3);
+
+    // Les GPU : prêt, ou pilote à installer ; les applis savent où encoder.
+    let (_, v) = call(&srv.remote, "GET", "/api/hardware", host, c, None).await;
+    assert_eq!((v["gpus"][0]["api"].as_str(), v["gpus"][0]["ready"].as_bool()), (Some("nvenc"), Some(true)));
+    assert_eq!(v["gpus"][1]["ready"], false);
+    let (_, v) = call(&srv.local, "GET", "/api/hardware/shared", "127.0.0.1:8080", None, None).await;
+    assert!(v["gpus"][0]["encode"].as_array().unwrap().iter().any(|c| c == "av1"));
+    assert_eq!(v["gpus"][0]["renderNode"], "/dev/dri/renderD128");
 
     // Les applis lisent le timecode maison.
     let (_, v) = call(&srv.local, "GET", "/api/hardware/shared", "127.0.0.1:8080", None, None).await;

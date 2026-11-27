@@ -200,6 +200,48 @@ pub fn find_desktop_video() -> Option<PathBuf> {
     found.pop()
 }
 
+/// Les GPU sur le bus PCI : (fabricant `nvidia` / `intel` / `amd`, pilote du noyau en place).
+pub fn gpus() -> Vec<(&'static str, Option<String>)> {
+    let mut out = Vec::new();
+    for e in std::fs::read_dir("/sys/bus/pci/devices").into_iter().flatten().flatten() {
+        let d = e.path();
+        if !std::fs::read_to_string(d.join("class")).is_ok_and(|c| c.trim().starts_with("0x03")) {
+            continue;
+        }
+        let vendor = match std::fs::read_to_string(d.join("vendor")).unwrap_or_default().trim() {
+            "0x10de" => "nvidia",
+            "0x8086" => "intel",
+            "0x1002" => "amd",
+            _ => continue,
+        };
+        let driver = std::fs::read_link(d.join("driver")).ok().and_then(|p| p.file_name().map(|f| f.to_string_lossy().into_owned()));
+        out.push((vendor, driver));
+    }
+    out
+}
+
+/// Ce qu'il faut pour que les GPU encodent : (pilote NVIDIA à installer, paquets VA-API).
+pub fn gpu_needs(gpus: &[(&'static str, Option<String>)]) -> (bool, Vec<String>) {
+    let nvidia = gpus.iter().any(|(v, d)| *v == "nvidia" && d.as_deref() != Some("nvidia"));
+    let mut pkgs: Vec<String> = Vec::new();
+    if gpus.iter().any(|(v, _)| *v == "intel") {
+        pkgs.extend(["intel-media-va-driver-non-free", "vainfo"].map(String::from));
+    }
+    if gpus.iter().any(|(v, _)| *v == "amd") {
+        pkgs.extend(["mesa-va-drivers", "vainfo"].map(String::from));
+    }
+    pkgs.dedup();
+    if !pkgs.is_empty() && Command::new("vainfo").arg("--version").output().is_ok_and(|o| o.status.success()) {
+        pkgs.clear();
+    }
+    (nvidia, pkgs)
+}
+
+/// Secure Boot actif : un module ajouté (Blackmagic, NVIDIA) doit être signé par une clé enrôlée.
+pub fn secure_boot() -> bool {
+    Command::new("mokutil").arg("--sb-state").output().is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("SecureBoot enabled"))
+}
+
 /// La bibliothèque NDI installée.
 pub fn ndi() -> Option<PathBuf> {
     ["/usr/local/lib/libndi.so", "/usr/lib/libndi.so", "/usr/lib/x86_64-linux-gnu/libndi.so"].iter().map(PathBuf::from).find(|p| p.exists())

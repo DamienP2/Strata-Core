@@ -117,6 +117,12 @@ struct App {
     ndi_sdk: Option<ndi::Sdk>,
     ndi_error: Option<String>,
     hw_focus: usize,
+    /// GPU : ce qui manque (pilote NVIDIA, paquets VA-API), et si on l'installe.
+    gpu_nvidia: bool,
+    gpu_vaapi: Vec<String>,
+    gpu_names: Vec<String>,
+    gpu_wanted: bool,
+    secure_boot: bool,
     license_scroll: u16,
     // Réglages, compte
     admin_user: Input,
@@ -164,6 +170,11 @@ pub fn run(args: Args) -> std::io::Result<()> {
         ndi_sdk: None,
         ndi_error: None,
         hw_focus: 0,
+        gpu_nvidia: false,
+        gpu_vaapi: Vec::new(),
+        gpu_names: Vec::new(),
+        gpu_wanted: false,
+        secure_boot: checks::secure_boot(),
         license_scroll: 0,
         admin_user: Input { value: "admin".into(), secret: false },
         admin_pw: Input { value: String::new(), secret: true },
@@ -176,6 +187,10 @@ pub fn run(args: Args) -> std::io::Result<()> {
         quit: false,
     };
     app.dv_wanted = app.cards > 0 && app.dv_installed.is_none();
+    let gpus = checks::gpus();
+    app.gpu_names = gpus.iter().map(|(v, d)| format!("{v} ({})", d.as_deref().unwrap_or("sans pilote"))).collect();
+    (app.gpu_nvidia, app.gpu_vaapi) = checks::gpu_needs(&gpus);
+    app.gpu_wanted = app.gpu_nvidia || !app.gpu_vaapi.is_empty();
     let mut term = ratatui::try_init()?;
     let r = main_loop(&mut term, &mut app);
     ratatui::restore();
@@ -389,7 +404,8 @@ impl App {
                 _ => self.app_input.key(k),
             },
             Screen::Hardware => match k.code {
-                KeyCode::Up | KeyCode::Down | KeyCode::Tab => self.hw_focus = 1 - self.hw_focus,
+                KeyCode::Down | KeyCode::Tab => self.hw_focus = (self.hw_focus + 1) % 3,
+                KeyCode::Up | KeyCode::BackTab => self.hw_focus = (self.hw_focus + 2) % 3,
                 KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') => {
                     if self.hw_focus == 0 {
                         self.dv_wanted = !self.dv_wanted;
@@ -397,11 +413,13 @@ impl App {
                             self.dv_waiting = false;
                             self.plan.desktop_video = None;
                         }
-                    } else {
+                    } else if self.hw_focus == 1 {
                         self.ndi_wanted = !self.ndi_wanted;
                         if !self.ndi_wanted {
                             self.plan.ndi = None;
                         }
+                    } else {
+                        self.gpu_wanted = !self.gpu_wanted;
                     }
                 }
                 KeyCode::Char('p') => {
@@ -432,6 +450,8 @@ impl App {
                     if self.ndi_fetching {
                         return;
                     }
+                    self.plan.nvidia = self.gpu_wanted && self.gpu_nvidia;
+                    self.plan.vaapi = if self.gpu_wanted { self.gpu_vaapi.clone() } else { Vec::new() };
                     if self.plan.action == Action::Update {
                         self.go(Screen::Summary);
                     } else {
@@ -541,7 +561,7 @@ fn draw(f: &mut Frame, app: &App) {
         Screen::Menu => "↑↓ : choisir   ·   Entrée : valider   ·   Échap : retour",
         Screen::Name | Screen::Admin => "Tab : champ suivant   ·   Entrée : continuer   ·   Échap : retour",
         Screen::Apps => "Entrée : ajouter (champ rempli) ou continuer   ·   Suppr : retirer la dernière   ·   Échap : retour",
-        Screen::Hardware => "↑↓ : DeckLink / NDI   ·   Espace : oui / non   ·   Entrée : continuer   ·   Échap : retour",
+        Screen::Hardware => "↑↓ : DeckLink / NDI / GPU   ·   Espace : oui / non   ·   Entrée : continuer   ·   Échap : retour",
         Screen::License => "↑↓ PgPréc PgSuiv : lire   ·   A : accepter   ·   R : refuser",
         Screen::Settings => "Espace : oui / non   ·   Entrée : continuer   ·   Échap : retour",
         Screen::Summary => "Entrée : lancer   ·   Échap : retour",
@@ -749,6 +769,30 @@ fn draw_hardware(f: &mut Frame, body: Rect, app: &App) {
     if let Some(e) = &app.ndi_error {
         lines.push(Line::from(Span::styled(format!("  ✗ {e}"), Style::new().fg(BAD))));
     }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("GPU", Style::new().add_modifier(Modifier::BOLD))));
+    let gpu_state = if app.gpu_names.is_empty() {
+        "aucun GPU : les applis encodent avec les processeurs".to_string()
+    } else {
+        let need = match (app.gpu_nvidia, app.gpu_vaapi.is_empty()) {
+            (false, true) => " · prêts".to_string(),
+            (true, true) => " · pilote NVIDIA à installer (NVENC / NVDEC)".to_string(),
+            (false, false) => format!(" · VA-API à installer ({})", app.gpu_vaapi.join(", ")),
+            (true, false) => format!(" · pilote NVIDIA et VA-API ({}) à installer", app.gpu_vaapi.join(", ")),
+        };
+        format!("{}{need}", app.gpu_names.join(", "))
+    };
+    lines.push(Line::from(Span::styled(format!("  {gpu_state}"), Style::new().fg(MUTED))));
+    if app.gpu_nvidia || !app.gpu_vaapi.is_empty() {
+        lines.push(Line::from(vec![Span::raw("  Pilotes GPU : "), yes_no(app.gpu_wanted, app.hw_focus == 2)]));
+    }
+    if app.secure_boot && (app.dv_wanted || (app.gpu_wanted && app.gpu_nvidia)) {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  ! Secure Boot est actif : au redémarrage, enrôlez la clé MOK (écran bleu « Perform MOK management »), sinon les pilotes Blackmagic et NVIDIA ne se chargent pas.",
+            Style::new().fg(WARN),
+        )));
+    }
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
 }
 
@@ -793,6 +837,11 @@ fn draw_summary(f: &mut Frame, body: Rect, app: &App) {
             lines.push(row("Applis", if p.apps.is_empty() { "aucune".into() } else { p.apps.join(", ") }));
             lines.push(row("DeckLink", p.desktop_video.as_ref().map_or("—".into(), |d| format!("pilote depuis {}", d.display()))));
             lines.push(row("NDI", if p.ndi.is_some() { "bibliothèque (licence acceptée)".into() } else { "—".into() }));
+            let gpu = [p.nvidia.then(|| "pilote NVIDIA".to_string()), (!p.vaapi.is_empty()).then(|| format!("VA-API ({})", p.vaapi.join(", ")))]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            lines.push(row("GPU", if gpu.is_empty() { "—".into() } else { gpu.join(", ") }));
             lines.push(row("Pare-feu", if p.firewall { "80 et 443 ouverts (ufw)".into() } else { "inchangé".into() }));
             lines.push(row("Administrateur", p.admin.as_ref().map_or("—".into(), |a| a.0.clone())));
         }
@@ -844,6 +893,12 @@ fn draw_end(f: &mut Frame, body: Rect, app: &App) {
         }
         if app.plan.desktop_video.is_some() && !std::path::Path::new("/dev/blackmagic").exists() {
             todo.push("Redémarrer le serveur pour charger le pilote Blackmagic.".into());
+        }
+        if app.plan.nvidia {
+            todo.push("Redémarrer le serveur pour charger le pilote NVIDIA.".into());
+        }
+        if app.secure_boot && (app.plan.desktop_video.is_some() || app.plan.nvidia) {
+            todo.push("Secure Boot : au redémarrage, enrôler la clé MOK (écran « Perform MOK management »).".into());
         }
         if !todo.is_empty() {
             lines.push(Line::from(Span::styled("Reste à faire", Style::new().add_modifier(Modifier::BOLD))));

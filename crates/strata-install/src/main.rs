@@ -55,6 +55,9 @@ pub struct Args {
     /// Accepte la licence du SDK NDI (https://ndi.video/legal/).
     #[arg(long)]
     accept_ndi_license: bool,
+    /// Installe ce qu'il faut aux GPU présents : le pilote NVIDIA, VA-API pour Intel et AMD.
+    #[arg(long)]
+    gpu_drivers: bool,
     /// N'ouvre pas les ports du cockpit dans le pare-feu.
     #[arg(long)]
     no_firewall: bool,
@@ -123,6 +126,12 @@ fn plan_of(a: &Args) -> Plan {
         if dv == "auto" && p.desktop_video.is_none() {
             eprintln!("! no Desktop Video archive on this server: the Blackmagic driver is skipped");
         }
+    }
+    if a.gpu_drivers {
+        (p.nvidia, p.vaapi) = checks::gpu_needs(&checks::gpus());
+    }
+    if (p.nvidia || p.desktop_video.is_some()) && checks::secure_boot() {
+        eprintln!("! Secure Boot is on: at the next boot, enrol the MOK key, or the Blackmagic / NVIDIA modules will not load");
     }
     if a.ndi {
         if !a.accept_ndi_license {

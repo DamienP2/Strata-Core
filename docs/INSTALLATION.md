@@ -19,6 +19,10 @@ empreinte et le lance. Un écran plein terminal, au clavier :
      commande exacte) et attend l'archive ; il installe le paquet avec DKMS.
    - **NDI** : le SDK NDI est téléchargé, sa licence affichée ; la bibliothèque n'est installée
      qu'une fois la licence acceptée.
+   - **GPU** : le pilote NVIDIA recommandé par Ubuntu (`ubuntu-drivers`, avec NVENC/NVDEC) ;
+     VA-API pour Intel et AMD (`intel-media-va-driver-non-free` ou `mesa-va-drivers`, `vainfo`).
+   - **Secure Boot** actif : les modules Blackmagic et NVIDIA doivent être signés ; au redémarrage,
+     enrôlez la clé MOK (écran bleu « Perform MOK management »).
 5. **Réglages** : ouvrir les ports 80 et 443 si ufw est actif.
 6. **Compte administrateur**.
 7. **Récapitulatif**, puis l'installation, une ligne par étape.
@@ -31,7 +35,7 @@ Journal complet : `/var/log/strata-install.log`.
 | --- | --- |
 | `/opt/strata/bin/strata-core` | le Core (au compte du service : il se met à jour lui-même) ; `strata-core` dans le PATH |
 | `/var/lib/strata-core` | ses données |
-| `strata-core.service` | le service, sous le compte `strata`, port 80 (et 443, 161) |
+| `strata-core.service` | le service, sous le compte `strata` (groupes `video` et `render` : cartes et GPU), port 80 (et 443, 161) |
 | `strata-ptp4l.service` | ptp4l, démarré seulement si le PTP est réglé (Matériel › Horloge) |
 | `/etc/strata/`, `/etc/chrony/conf.d/strata.conf` | ce que le Core écrit pour l'heure |
 | `/etc/polkit-1/rules.d/50-strata-core.rules` | le compte `strata` peut relancer chrony et ptp4l, rien d'autre |
@@ -54,6 +58,7 @@ curl -fsSL https://github.com/DamienP2/Strata-Core/releases/latest/download/inst
 
 - `--package <archive>` : le Core depuis son archive (serveur sans internet) ;
 - `--ndi --accept-ndi-license` : la bibliothèque NDI ;
+- `--gpu-drivers` : le pilote NVIDIA, ou VA-API, selon les GPU présents ;
 - `--update`, `--repair`, `--uninstall [--purge]`.
 
 ## Essai à blanc
