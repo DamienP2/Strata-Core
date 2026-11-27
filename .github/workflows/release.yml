@@ -5,13 +5,20 @@ name: Release
 #   - strata-ui-<version>.tgz : le paquet web, que les applis référencent par son adresse ;
 #   - release.json : la fiche de la release (version, fichiers, empreintes), lue par le Core ;
 #   - SHA256SUMS : les empreintes de chaque fichier.
-# Lancée à la main (workflow_dispatch), elle construit les mêmes fichiers sans rien publier.
+# Lancée à la main (workflow_dispatch) : avec une version (« 0.1.0 »), elle publie la release v<version>
+# sur le commit choisi (l'étiquette est créée par la publication) ; sans version, elle construit les
+# mêmes fichiers sans rien publier.
 # Tout est construit sur Ubuntu 24.04, la plateforme des serveurs (voir docs/RELEASES.md).
 # À ajouter quand il existera : l'installateur strata-install.
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version à publier (ex. 0.1.0) ; vide : construire sans publier'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -25,8 +32,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Version tirée de l'étiquette
-        run: scripts/stamp-version.sh
+      - name: Version tirée de l'étiquette (ou donnée à la main)
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then scripts/stamp-version.sh "$INPUT_VERSION"; else scripts/stamp-version.sh; fi
 
       - name: Version
         run: |
@@ -81,11 +91,13 @@ jobs:
           path: dist/*
 
       - name: Publication
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' || inputs.version != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          TAG="v$VERSION"; [ "$GITHUB_REF_TYPE" = tag ] && TAG="$GITHUB_REF_NAME"
           PRE=""; case "$VERSION" in *-*) PRE="--prerelease" ;; esac
-          gh release create "$GITHUB_REF_NAME" dist/* \
+          gh release create "$TAG" dist/* \
+            --target "$GITHUB_SHA" \
             --title "Strata Core $VERSION" \
             --generate-notes $PRE

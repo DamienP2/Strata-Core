@@ -18,7 +18,7 @@ Le workflow `Release` (`.github/workflows/release.yml`) :
 
 Une version avec un tiret (`v0.3.0-rc.1`) est publiée en **préversion** : les serveurs ne la proposent pas d'eux-mêmes.
 
-Lancé à la main (*Actions › Release › Run workflow*), le workflow construit les mêmes fichiers, sans rien publier : on les télécharge depuis la page de l'exécution.
+Autre façon de publier, sans étiquette à pousser : *Actions › Release › Run workflow*, choisir la branche, et donner la version (`0.1.0`). La release `v0.1.0` est publiée sur le dernier commit de cette branche, et son étiquette créée avec elle. Sans version, le workflow construit les mêmes fichiers sans rien publier : on les télécharge depuis la page de l'exécution.
 
 ## Ce que contient une release
 
