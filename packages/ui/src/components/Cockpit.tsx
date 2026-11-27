@@ -39,6 +39,8 @@ export interface CockpitInstance {
   app: string;
   server: string;
   url: string;
+  /** L'appli répond-elle sur ce serveur ? (absent : oui) */
+  up?: boolean;
 }
 
 export interface CockpitData {
@@ -86,15 +88,18 @@ function serverOf(data: CockpitData, id: string) {
   return data.servers.find((s) => s.id === id);
 }
 
+/** L'instance peut-elle s'ouvrir : son serveur répond, et l'appli aussi. */
+const live = (data: CockpitData, i: CockpitInstance) => !!serverOf(data, i.server)?.up && i.up !== false;
+
 /** Le bouton d'une instance : le nom d'usage du serveur ; son état en plus pour les administrateurs. */
 function InstanceButton({ data, inst, onOpen, menu }: { data: CockpitData; inst: CockpitInstance; onOpen: (i: CockpitInstance) => void; menu?: boolean }) {
   const role = menu ? 'menuitem' : undefined;
   const s = serverOf(data, inst.server);
-  const up = !!s?.up;
   const name = s?.name ?? inst.server;
-  if (!up)
+  if (!live(data, inst)) {
+    const why = !s?.up ? t('{host} does not answer', { host: s?.host ?? inst.server }) : t('The app does not answer on {host}', { host: s.host });
     return (
-      <button type="button" role={role} className="st-inst" disabled title={data.admin ? t('{host} does not answer', { host: s?.host ?? inst.server }) : t('Unavailable')}>
+      <button type="button" role={role} className="st-inst" disabled title={data.admin ? why : t('Unavailable')}>
         {data.admin ? (
           <>
             <span className="st-dot bad" />
@@ -105,6 +110,7 @@ function InstanceButton({ data, inst, onOpen, menu }: { data: CockpitData; inst:
         )}
       </button>
     );
+  }
   const alerts = s?.alerts ?? 0;
   const title = data.admin ? [s?.host, alerts ? tn(alerts, '{n} alert', '{n} alerts') : null].filter(Boolean).join(' · ') : undefined;
   return (
@@ -138,7 +144,7 @@ export function Cockpit({ data, title, onOpen, onServer }: {
       <div className="st-tiles">
         {groups.map(({ app, list }) => {
           const Icon = app.icon;
-          const up = list.filter((i) => serverOf(data, i.server)?.up);
+          const up = list.filter((i) => live(data, i));
           if (!up.length)
             return (
               <div key={app.id} className="st-tile off" aria-disabled="true">
@@ -236,7 +242,7 @@ export function Launcher({ data, current, onOpen, onCockpit }: {
           </div>
           {groupByApp(data).map(({ app, list }) => {
             const Icon = app.icon;
-            const one = list.length === 1 && !!serverOf(data, list[0].server)?.up;
+            const one = list.length === 1 && live(data, list[0]);
             const here = list.some((i) => instanceKey(i) === current);
             const row = (
               <>

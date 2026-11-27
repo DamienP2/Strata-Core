@@ -69,6 +69,7 @@ export const core: Record<string, string> = {
   'Unavailable': 'Indisponible',
   '{name} · unavailable': '{name} · indisponible',
   '{host} does not answer': '{host} injoignable',
+  'The app does not answer on {host}': 'L’appli ne répond pas sur {host}',
   'does not answer': 'injoignable',
   '{n} alert': '{n} alerte',
   '{n} alerts': '{n} alertes',

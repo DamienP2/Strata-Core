@@ -36,6 +36,23 @@ TOML
 cargo run -p strata-core-server -- app activate livecut --data-dir ./data
 ```
 
+Sans section `[run]`, le Core ne lance pas l'appli : démarrez-la à part sur son port (`127.0.0.1:8101`),
+le Core la relaie. Avec `[run]`, il la lance lui-même (voir [APPLIS.md](APPLIS.md)).
+
+## Ouvrir une appli par son sous-domaine, en local
+
+Le relais choisit l'appli d'après le nom demandé (`livecut.<nom du serveur>`). En local, réglez le nom
+du serveur dans `data/config.json` :
+
+```json
+{ "name": "Régie A", "dnsName": "strata.test", "scheme": "http" }
+```
+
+puis faites pointer `strata.test` et `*.strata.test` vers `127.0.0.1` : une ligne par nom dans
+`/etc/hosts` (`127.0.0.1 strata.test livecut.strata.test`), ou dnsmasq
+(`address=/strata.test/127.0.0.1`). Le cockpit est alors `http://strata.test:8080/` et LiveCut
+`http://livecut.strata.test:8080/`, avec la même connexion.
+
 ## Vérifier avant d'envoyer
 
 ```bash

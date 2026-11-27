@@ -333,7 +333,7 @@ async fn start(State(s): State<Shared>, headers: HeaderMap, Query(q): Query<Star
             let Some(old) = p.iter().min_by_key(|(_, v)| v.created).map(|(k, _)| k.clone()) else { break };
             p.remove(&old);
         }
-        p.insert(state.clone(), Pending { nonce, verifier, redirect_uri, next: safe_next(q.next.as_deref()), created: Instant::now() });
+        p.insert(state.clone(), Pending { nonce, verifier, redirect_uri, next: s.config.load().safe_return(q.next.as_deref()), created: Instant::now() });
     }
     let mut res = Redirect::to(&url).into_response();
     res.headers_mut().append(header::SET_COOKIE, state_cookie(&state, &headers));

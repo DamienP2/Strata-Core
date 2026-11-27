@@ -81,6 +81,26 @@ function useCockpit(signedIn: boolean) {
 
 const open = (i: CockpitInstance) => openAppTab(i.url, instanceKey(i));
 
+/** `?next=` : où aller une fois connecté (le serveur vérifie aussi celui du SSO). */
+const nextParam = new URLSearchParams(location.search).get('next');
+
+/**
+ * Où revenir après la connexion : une page du cockpit, ou une appli de ce serveur (le relais y
+ * envoie quand on ouvre une appli sans être connecté). Autre chose : nulle part.
+ */
+function returnTo(): { local: string } | { app: string } | null {
+  if (!nextParam) return null;
+  try {
+    const u = new URL(nextParam, location.origin);
+    if (u.origin === location.origin) return { local: u.pathname };
+    const ours = u.hostname.endsWith(`.${location.hostname}`) && !u.hostname.slice(0, -location.hostname.length - 1).includes('.');
+    if (ours && (u.protocol === 'https:' || u.protocol === 'http:') && !u.username && !u.password) return { app: u.href };
+  } catch {
+    /* adresse illisible */
+  }
+  return null;
+}
+
 function App() {
   useLang((s) => s.lang);
   const auth = useApp((s) => s.auth);
@@ -89,14 +109,27 @@ function App() {
   const user = auth?.user ?? null;
   const data = useCockpit(!!user);
   useHeartbeat();
+  const [back, setBack] = useState(returnTo);
+  // Connecté avec un `?next=` : vers l'appli (cet onglet devient le sien) ou la page demandée.
+  useEffect(() => {
+    if (!user || !back) return;
+    if ('app' in back) {
+      location.replace(back.app);
+      return;
+    }
+    setBack(null);
+    history.replaceState(null, '', location.pathname);
+    navigate(back.local, true);
+  }, [user, back]);
   // Les réglages : administrateurs seulement ; toute autre adresse revient au cockpit.
   useEffect(() => {
-    if (!user) return;
+    if (!user || back) return;
     if (user.admin && path === '/reglages') navigate('/reglages/bibliotheque', true);
     else if (path !== '/' && !(user.admin && path.startsWith('/reglages/'))) navigate('/', true);
-  }, [user, path]);
+  }, [user, path, back]);
 
   if (!auth) return null;
+  if (user && back && 'app' in back) return null;
   if (!user)
     return (
       <Login
@@ -104,7 +137,7 @@ function App() {
         serverName={auth.serverName}
         setup={auth.needsSetup}
         sso={auth.sso}
-        ssoHref={`/api/auth/sso/start?next=${encodeURIComponent(location.pathname)}`}
+        ssoHref={`/api/auth/sso/start?next=${encodeURIComponent(back && 'app' in back ? back.app : location.pathname)}`}
         cliHint="sudo strata-core user add admin"
         onLogin={async (username, password) => {
           await api('POST', '/api/auth/login', { username, password });

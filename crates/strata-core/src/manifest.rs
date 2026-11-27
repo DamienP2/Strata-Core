@@ -10,7 +10,16 @@
 //!
 //! [requires]
 //! core = ">=0.1, <1"  # les versions du Core acceptées
+//!
+//! [run]               # facultatif : sans lui, l'appli est lancée à part (en développement)
+//! command = "bin/strata-livecut"   # relatif au dossier de l'appli, ou absolu
+//! args = ["serve"]
+//!
+//! [relay]             # facultatif
+//! public = ["/output/"]  # chemins servis sans connexion (sorties pour un mélangeur…)
 //! ```
+//!
+//! Le contrat complet (variables d'environnement, en-têtes d'identité) : docs/APPLIS.md.
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -45,6 +54,33 @@ pub struct AppManifest {
     /// Le port interne du service de l'appli.
     pub port: u16,
     pub requires: Requires,
+    /// Comment le Core lance l'appli ; absent : elle est lancée à part, le Core ne fait que la relayer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<Run>,
+    #[serde(default)]
+    pub relay: Relay,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Run {
+    /// Le programme : relatif au dossier de l'appli (`bin/strata-livecut`), ou absolu.
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct Relay {
+    /// Les débuts de chemin servis sans connexion (`/output/`) : le Core les relaie sans identité.
+    #[serde(default)]
+    pub public: Vec<String>,
+}
+
+impl Relay {
+    /// Ce chemin est-il public ?
+    pub fn is_public(&self, path: &str) -> bool {
+        self.public.iter().any(|p| path.starts_with(p.as_str()) || (p.ends_with('/') && path == p.trim_end_matches('/')))
+    }
 }
 
 impl AppManifest {
@@ -70,6 +106,14 @@ impl AppManifest {
         }
         if self.port < 1024 {
             return Err("the app's port must be 1024 or more".into());
+        }
+        if let Some(run) = &self.run {
+            if run.command.trim().is_empty() {
+                return Err("[run] needs a command".into());
+            }
+        }
+        if let Some(p) = self.relay.public.iter().find(|p| !p.starts_with('/') || p.len() < 2 || p.contains("..")) {
+            return Err(format!("[relay] public paths start with / and are not / alone: {p:?}"));
         }
         Ok(())
     }
@@ -131,6 +175,21 @@ core = ">=0.1, <1"
         assert!(!m.accepts(&Version::new(1, 0, 0)));
         assert!(!m.accepts(&Version::new(0, 0, 9)));
         assert!(m.accepts(&Version::parse("0.2.0-rc.1").unwrap()), "a pre-release counts as its release");
+        assert!(m.run.is_none());
+        assert!(!m.relay.is_public("/output/a"));
+    }
+
+    #[test]
+    fn run_and_public_paths() {
+        let text = format!("{LIVECUT}\n[run]\ncommand = \"bin/livecut\"\nargs = [\"serve\"]\n\n[relay]\npublic = [\"/output/\", \"/health\"]\n");
+        let m = AppManifest::parse(&text, "t").unwrap();
+        assert_eq!(m.run.as_ref().unwrap().args, ["serve"]);
+        assert!(m.relay.is_public("/output/pgm.html"));
+        assert!(m.relay.is_public("/output"));
+        assert!(m.relay.is_public("/health"));
+        assert!(!m.relay.is_public("/api/state"));
+        assert!(AppManifest::parse(&text.replace("\"/health\"", "\"/\""), "t").is_err(), "/ alone would open everything");
+        assert!(AppManifest::parse(&text.replace("bin/livecut", " "), "t").is_err());
     }
 
     #[test]

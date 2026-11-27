@@ -26,3 +26,10 @@
 .core-switches { display: flex; flex-direction: column; gap: 8px; max-height: 220px; overflow: auto; }
 .core-copy { display: flex; gap: 6px; }
 .core-copy input { flex: 1; }
+.core-service { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; font-size: var(--fs-12); }
+.core-note { margin: 0; font-size: var(--fs-12); }
+.core-log { height: 260px; overflow: auto; padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; font: var(--fs-12)/1.55 var(--mono); }
+.core-log-line { display: flex; gap: 10px; white-space: pre-wrap; word-break: break-word; }
+.core-log-t { color: var(--text-3); flex: none; }
+.core-log-line.err > span:last-child { color: var(--warn); }
+.core-log-line.core > span:last-child { color: var(--accent-2); }

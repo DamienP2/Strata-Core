@@ -91,6 +91,40 @@ impl ServerConfig {
         format!("{}://{id}.{}/", self.scheme, self.dns_name)
     }
 
+    /// L'adresse d'une appli vue depuis une requête arrivée par `host` : avec son port s'il en a un
+    /// (`http://livecut.strata01.local:8080/`), pour un Core qui n'écoute pas sur 80 ou 443.
+    pub fn app_url_at(&self, id: &str, host: Option<&str>) -> String {
+        match host_port(host) {
+            Some(port) => format!("{}://{id}.{}:{port}/", self.scheme, self.dns_name),
+            None => self.app_url(id),
+        }
+    }
+
+    /// L'adresse du cockpit vue depuis une requête arrivée par `host`.
+    pub fn core_url_at(&self, host: Option<&str>) -> String {
+        match host_port(host) {
+            Some(port) => format!("{}://{}:{port}/", self.scheme, self.dns_name),
+            None => format!("{}://{}/", self.scheme, self.dns_name),
+        }
+    }
+
+    /// Où revenir après la connexion : un chemin du cockpit (`/reglages`), ou l'adresse d'une appli de
+    /// ce serveur (`https://livecut.strata01.local/…`) ; autre chose : le cockpit.
+    pub fn safe_return(&self, next: Option<&str>) -> String {
+        let Some(n) = next else { return "/".into() };
+        if n.starts_with('/') {
+            return crate::sso::safe_next(Some(n));
+        }
+        let clean = !n.contains('\\') && !n.chars().any(|c| c.is_control() || c.is_whitespace());
+        let host = n.strip_prefix("https://").or_else(|| n.strip_prefix("http://")).map(|r| r.split(['/', '?', '#']).next().unwrap_or(""));
+        let ok = clean && host.is_some_and(|h| !h.contains('@') && crate::relay::app_of_host(&self.dns_name, h).is_some());
+        if ok {
+            n.to_string()
+        } else {
+            "/".into()
+        }
+    }
+
     /// Le domaine du cookie de session quand la requête arrive par le nom du serveur ou un de ses
     /// sous-domaines : la session vaut alors pour toutes les applis. Par adresse IP ou localhost : aucun.
     pub fn cookie_domain(&self, host: Option<&str>) -> Option<String> {
@@ -98,6 +132,16 @@ impl ServerConfig {
         let base = &self.dns_name;
         (host == *base || host.ends_with(&format!(".{base}"))).then(|| base.clone())
     }
+}
+
+/// Le port d'un `Host` (`strata01.local:8080` → 8080), sauf 80 et 443.
+fn host_port(host: Option<&str>) -> Option<u16> {
+    let host = host?;
+    if host.ends_with(']') {
+        return None;
+    }
+    let port: u16 = host.rsplit_once(':')?.1.parse().ok()?;
+    (port != 80 && port != 443).then_some(port)
 }
 
 #[cfg(test)]
@@ -113,6 +157,18 @@ mod tests {
         assert_eq!(c.cookie_domain(Some("10.0.0.20:8080")), None);
         assert_eq!(c.cookie_domain(Some("evilstrata01.regie.exemple.fr")), None);
         assert_eq!(c.cookie_domain(None), None);
+        assert_eq!(c.app_url_at("livecut", Some("10.0.0.20:8080")), "https://livecut.strata01.regie.exemple.fr:8080/");
+        assert_eq!(c.app_url_at("livecut", Some("strata01.regie.exemple.fr:443")), "https://livecut.strata01.regie.exemple.fr/");
+        assert_eq!(c.app_url_at("livecut", Some("[::1]")), "https://livecut.strata01.regie.exemple.fr/");
+        assert_eq!(c.core_url_at(Some("livecut.strata01.regie.exemple.fr:8090")), "https://strata01.regie.exemple.fr:8090/");
+        let app = "https://livecut.strata01.regie.exemple.fr:8090/rushes?x=1";
+        assert_eq!(c.safe_return(Some(app)), app);
+        assert_eq!(c.safe_return(Some("/reglages")), "/reglages");
+        assert_eq!(c.safe_return(Some("https://evil.com/")), "/");
+        assert_eq!(c.safe_return(Some("https://livecut.strata01.regie.exemple.fr.evil.com/")), "/");
+        assert_eq!(c.safe_return(Some("https://user@livecut.strata01.regie.exemple.fr/")), "/");
+        assert_eq!(c.safe_return(Some("javascript:alert(1)")), "/");
+        assert_eq!(c.safe_return(None), "/");
     }
 
     #[test]

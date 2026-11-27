@@ -23,8 +23,11 @@ tracing.workspace = true
 uuid.workspace = true
 semver.workspace = true
 axum = { version = "0.8", features = ["ws"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "signal", "net"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "signal", "net", "process", "io-util"] }
 tower-http = { version = "0.6", features = ["fs", "trace"] }
+# Le relais vers les applis (HTTP/1.1, WebSocket).
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
 rust-embed = { version = "8", features = ["mime-guess", "include-exclude"] }
 clap = { version = "4", features = ["derive", "env"] }
 argon2 = "0.5"

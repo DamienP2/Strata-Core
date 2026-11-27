@@ -6,14 +6,14 @@ import { KeyRound, LayoutGrid, Users as UsersIcon, UsersRound } from 'lucide-rea
 import { NavItem, NavSection, SidePage, t } from '@strata/ui';
 import { appIcon } from '../icons';
 import { navigate } from '../router';
-import { AppPage, Library, useApps } from './Library';
+import { AppPage, Library, serviceTone, useApps } from './Library';
 import { Directory } from './Directory';
 import { Groups } from './Groups';
 import { Users } from './Users';
 
 /** `path` : ce qui suit /reglages/ (« bibliotheque », « applis/livecut », « utilisateurs », « groupes », « annuaire »). */
 export function Settings({ path }: { path: string }) {
-  const { apps, core, setActive } = useApps();
+  const { apps, core, reload, setActive, restart } = useApps();
   const appId = path.startsWith('applis/') ? path.slice('applis/'.length) : null;
   const app = appId ? apps?.find((a) => a.id === appId) : undefined;
 
@@ -22,7 +22,7 @@ export function Settings({ path }: { path: string }) {
   if (path === 'utilisateurs') page = <Users />;
   else if (path === 'groupes') page = <Groups />;
   else if (path === 'annuaire') page = <Directory />;
-  else if (apps && app) page = <AppPage app={app} core={core} setActive={setActive} />;
+  else if (apps && app) page = <AppPage app={app} core={core} setActive={setActive} restart={restart} reload={reload} />;
   else if (apps) page = <Library apps={apps} setActive={setActive} />;
 
   const nav = (
@@ -31,7 +31,7 @@ export function Settings({ path }: { path: string }) {
         <NavSection title={t('Apps')} />
         <NavItem icon={LayoutGrid} label={t('Library')} on={!appId && !people} onClick={() => navigate('/reglages/bibliotheque')} count={apps?.length} />
         {apps?.map((a) => (
-          <NavItem key={a.id} icon={appIcon(a.icon)} label={a.name} on={a.id === appId} onClick={() => navigate(`/reglages/applis/${a.id}`)} status={a.active ? 'ok' : null} />
+          <NavItem key={a.id} icon={appIcon(a.icon)} label={a.name} on={a.id === appId} onClick={() => navigate(`/reglages/applis/${a.id}`)} status={serviceTone(a)} />
         ))}
       </div>
       <div>
