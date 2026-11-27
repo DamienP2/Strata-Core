@@ -231,4 +231,4 @@ Chaque appli fournit :
 
 1. Maquette interactive du cockpit (proposition C retenue, plusieurs serveurs) : [`docs/maquettes/cockpit.html`](../maquettes/cockpit.html), à valider.
 2. Comparaison fine, composant par composant, pour confirmer les versions de départ marquées « à vérifier ».
-3. Écriture du paquet `@strata/ui` ([`packages/ui`](../../packages/ui)) : commencé (jetons, base, police, thème, langues, marque, boutons, badges, interrupteur, contrôle segmenté, cartes et champs, barre d’enregistrement, état vide, infobulles, Échap, dialogues, toasts).
+3. Écriture du paquet `@strata/ui` ([`packages/ui`](../../packages/ui)) : jetons, base, police, thème, langues, formats ; marque, boutons, badges, interrupteur, contrôle segmenté, liste déroulante, menu contextuel, champs nombre et texte, recherche ; cartes et champs de réglages, barre d’enregistrement, état vide ; page à liste de gauche, sous-onglets, barre du haut, pastille de connexion, menu utilisateur, page de connexion ; infobulles, Échap, dialogues, toasts. Reste : la coquille de la proposition C (lanceur, cockpit).
