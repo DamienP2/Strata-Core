@@ -166,6 +166,11 @@ fn scan() -> Vec<Gpu> {
         }
         let pci = e.file_name().to_string_lossy().into_owned();
         let vendor = vendor_of(&read(&d.join("vendor")));
+        // Seulement NVIDIA, Intel et AMD : l'écran virtuel d'une VM (QEMU, VMware, VirtualBox,
+        // Hyper-V, virtio) ou celui du contrôleur d'un serveur (ASPEED, Matrox) n'encode rien.
+        if vendor == "other" {
+            continue;
+        }
         let driver = std::fs::read_link(d.join("driver")).ok().and_then(|p| p.file_name().map(|f| f.to_string_lossy().into_owned()));
         let render_node = std::fs::read_dir(d.join("drm"))
             .ok()
