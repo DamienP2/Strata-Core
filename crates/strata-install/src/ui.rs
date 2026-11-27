@@ -1,7 +1,11 @@
-//! L'écran plein terminal de l'installateur (ratatui), aux couleurs de Strata, piloté au clavier :
-//! accueil, système, nom, applis, matériel, réglages, compte administrateur, récapitulatif,
-//! installation, fin. Sur un serveur déjà installé : mettre à jour, ajouter des applis, installer
-//! DeckLink / NDI, réparer, désinstaller.
+//! L'écran plein terminal de l'installateur (ratatui) : un assistant pas à pas, une question par
+//! écran, sur fond sombre. Le choix en cours est une barre pleine, le champ en cours a un cadre
+//! épais et un curseur ; les touches utiles sont rappelées en bas.
+//!
+//! Installation : système, nom DNS, nom d'usage, fuseau, applis, pilote Blackmagic, NDI, GPU,
+//! pare-feu, compte administrateur, mot de passe, récapitulatif, installation, fin. Les étapes
+//! sans objet (pas de carte Blackmagic, NDI déjà là…) sont sautées. Sur un serveur déjà installé :
+//! mettre à jour, ajouter des applis, matériel, réparer, désinstaller, tout effacer.
 use std::{
     path::PathBuf,
     sync::mpsc::{channel, Receiver, Sender},
@@ -10,10 +14,10 @@ use std::{
 
 use crossterm::event::{self, Event as Ev, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
-    layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style, Stylize},
+    layout::{Constraint, Layout, Margin, Rect},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, BorderType, Paragraph, Wrap},
     DefaultTerminal, Frame,
 };
 
@@ -24,27 +28,39 @@ use crate::{
     Args,
 };
 
-// Les couleurs de Strata, sur un fond noir posé par l'installateur (lisibles quel que soit le
-// thème du terminal, clair ou sombre).
-const BG: Color = Color::Rgb(0, 0, 0);
+// Fond sombre, texte clair ; posés partout (le thème du terminal ne compte pas).
+const BG: Color = Color::Rgb(11, 13, 19);
+const PANEL: Color = Color::Rgb(22, 26, 36);
+const LINE: Color = Color::Rgb(52, 58, 74);
 const FG: Color = Color::Rgb(236, 238, 243);
+const DIM: Color = Color::Rgb(150, 156, 172);
 const ACCENT: Color = Color::Rgb(143, 163, 255);
-const OK: Color = Color::Rgb(34, 197, 94);
-const WARN: Color = Color::Rgb(245, 165, 36);
-const BAD: Color = Color::Rgb(255, 59, 92);
-const MUTED: Color = Color::Rgb(140, 146, 160);
+/// Le texte sur la barre de sélection.
+const ON_ACCENT: Color = Color::Rgb(10, 12, 22);
+const OK: Color = Color::Rgb(52, 211, 113);
+const WARN: Color = Color::Rgb(250, 178, 60);
+const BAD: Color = Color::Rgb(255, 92, 118);
+
+/// La largeur du contenu, centré : lisible même sur un grand écran.
+const WIDTH: u16 = 92;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Screen {
     Welcome,
     Menu,
     Checks,
+    Dns,
     Name,
+    Timezone,
     Apps,
-    Hardware,
+    Blackmagic,
+    BlackmagicWait,
+    Ndi,
     License,
-    Settings,
-    Admin,
+    Gpu,
+    Firewall,
+    AdminUser,
+    AdminPassword,
     Summary,
     Progress,
     End,
@@ -73,6 +89,12 @@ struct Input {
 }
 
 impl Input {
+    fn text(v: &str) -> Self {
+        Input { value: v.into(), secret: false }
+    }
+    fn secret() -> Self {
+        Input { value: String::new(), secret: true }
+    }
     fn key(&mut self, k: KeyEvent) {
         match k.code {
             KeyCode::Char(c) if !k.modifiers.contains(KeyModifiers::CONTROL) => self.value.push(c),
@@ -95,45 +117,39 @@ struct App {
     args: Args,
     screen: Screen,
     history: Vec<Screen>,
+    /// Les écrans du parcours choisi, dans l'ordre (pour « Étape n sur N » et « suivant »).
+    flow: Vec<Screen>,
     plan: Plan,
     installed: Option<String>,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
-    checks: Option<Vec<Check>>,
-    // Nom
-    name: Input,
-    dns: Input,
-    tz: Input,
+    /// Le choix en cours (barre pleine) sur un écran à choix.
+    sel: usize,
+    /// Le champ en cours sur un écran à plusieurs champs.
     focus: usize,
+    tick: u64,
+    checks: Option<Vec<Check>>,
+    dns: Input,
+    name: Input,
+    tz_choices: Vec<String>,
+    tz_other: Input,
     dns_check: Option<Check>,
-    // Applis
     app_input: Input,
-    // Matériel
     cards: usize,
     dv_installed: Option<String>,
-    dv_wanted: bool,
-    dv_waiting: bool,
     last_scan: Instant,
     ndi_present: Option<PathBuf>,
-    ndi_wanted: bool,
     ndi_fetching: bool,
     ndi_sdk: Option<ndi::Sdk>,
     ndi_error: Option<String>,
-    hw_focus: usize,
-    /// GPU : ce qui manque (pilote NVIDIA, paquets VA-API), et si on l'installe.
     gpu_nvidia: bool,
     gpu_vaapi: Vec<String>,
     gpu_names: Vec<String>,
-    gpu_wanted: bool,
     secure_boot: bool,
     license_scroll: u16,
-    // Réglages, compte
     admin_user: Input,
     admin_pw: Input,
     admin_pw2: Input,
-    // Menu d'un serveur déjà installé
-    menu: usize,
-    // Installation
     labels: Vec<String>,
     states: Vec<StepState>,
     result: Option<bool>,
@@ -141,15 +157,18 @@ struct App {
     quit: bool,
 }
 
-const MENU: [&str; 7] = [
-    "Mettre à jour Strata Core",
-    "Ajouter des applis",
-    "Installer DeckLink / NDI",
-    "Réparer",
-    "Désinstaller (données gardées)",
-    "Tout effacer (repartir de zéro)",
-    "Quitter",
+/// Le menu d'un serveur déjà installé : (choix, ce qu'il fait).
+const MENU: [(&str, &str); 7] = [
+    ("Mettre à jour Strata Core", "la dernière version, les réglages et les données gardés"),
+    ("Ajouter des applis", "depuis leur dépôt GitHub ou leur archive"),
+    ("Installer un pilote ou NDI", "Blackmagic Desktop Video, NDI, pilotes GPU"),
+    ("Réparer", "remet les fichiers du système et les droits, puis relance"),
+    ("Désinstaller", "le programme et le service ; les données sont gardées"),
+    ("Tout effacer", "repartir de zéro : programme, données, comptes, applis"),
+    ("Quitter", ""),
 ];
+
+const ZONES: [&str; 8] = ["Europe/Paris", "Europe/London", "Europe/Brussels", "Europe/Zurich", "Europe/Madrid", "America/New_York", "America/Montreal", "UTC"];
 
 pub fn run(args: Args) -> std::io::Result<()> {
     let mut app = new_app(args);
@@ -163,67 +182,74 @@ fn new_app(args: Args) -> App {
     let (tx, rx) = channel();
     let root = args.root.clone().unwrap_or_else(|| PathBuf::from("/"));
     let installed = checks::installed_core(&root);
-    let mut app = App {
-        plan: Plan { package: args.package.clone(), version: args.version_core.clone(), firewall: !args.no_firewall, ..Plan::default() },
+    // Le fuseau du système d'abord, s'il en a un vrai.
+    let mut tz_choices: Vec<String> = ZONES.iter().map(|s| s.to_string()).collect();
+    if let Some(sys) = std::fs::read_to_string("/etc/timezone").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && s != "Etc/UTC") {
+        tz_choices.retain(|z| *z != sys);
+        tz_choices.insert(0, sys);
+    }
+    let gpus = checks::gpus();
+    let (gpu_nvidia, gpu_vaapi) = checks::gpu_needs(&gpus);
+    App {
+        plan: Plan {
+            package: args.package.clone(),
+            version: args.version_core.clone(),
+            firewall: !args.no_firewall,
+            timezone: tz_choices[0].clone(),
+            ..Plan::default()
+        },
         args,
         screen: Screen::Welcome,
         history: Vec::new(),
+        flow: Vec::new(),
         installed,
         tx,
         rx,
-        checks: None,
-        name: Input::default(),
-        dns: Input::default(),
-        tz: Input { value: "Europe/Paris".into(), secret: false },
+        sel: 0,
         focus: 0,
+        tick: 0,
+        checks: None,
+        dns: Input::default(),
+        name: Input::default(),
+        tz_choices,
+        tz_other: Input::default(),
         dns_check: None,
         app_input: Input::default(),
         cards: checks::blackmagic_cards(),
         dv_installed: checks::desktop_video(),
-        dv_wanted: false,
-        dv_waiting: false,
         last_scan: Instant::now(),
         ndi_present: checks::ndi(),
-        ndi_wanted: false,
         ndi_fetching: false,
         ndi_sdk: None,
         ndi_error: None,
-        hw_focus: 0,
-        gpu_nvidia: false,
-        gpu_vaapi: Vec::new(),
-        gpu_names: Vec::new(),
-        gpu_wanted: false,
+        gpu_names: gpus.iter().map(|(v, d)| format!("{v} ({})", d.as_deref().unwrap_or("sans pilote"))).collect(),
+        gpu_nvidia,
+        gpu_vaapi,
         secure_boot: checks::secure_boot(),
         license_scroll: 0,
-        admin_user: Input { value: "admin".into(), secret: false },
-        admin_pw: Input { value: String::new(), secret: true },
-        admin_pw2: Input { value: String::new(), secret: true },
-        menu: 0,
+        admin_user: Input::text("admin"),
+        admin_pw: Input::secret(),
+        admin_pw2: Input::secret(),
         labels: Vec::new(),
         states: Vec::new(),
         result: None,
         error: None,
         quit: false,
-    };
-    app.dv_wanted = app.cards > 0 && app.dv_installed.is_none();
-    let gpus = checks::gpus();
-    app.gpu_names = gpus.iter().map(|(v, d)| format!("{v} ({})", d.as_deref().unwrap_or("sans pilote"))).collect();
-    (app.gpu_nvidia, app.gpu_vaapi) = checks::gpu_needs(&gpus);
-    app.gpu_wanted = app.gpu_nvidia || !app.gpu_vaapi.is_empty();
-    app
+    }
 }
 
 fn main_loop(term: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
     while !app.quit {
+        app.tick += 1;
         term.draw(|f| draw(f, app))?;
         while let Ok(m) = app.rx.try_recv() {
             app.message(m);
         }
-        if app.dv_waiting && app.last_scan.elapsed() > Duration::from_secs(2) {
+        if app.screen == Screen::BlackmagicWait && app.last_scan.elapsed() > Duration::from_secs(2) {
             app.last_scan = Instant::now();
             if let Some(p) = checks::find_desktop_video() {
                 app.plan.desktop_video = Some(p);
-                app.dv_waiting = false;
+                app.next_after(Screen::Blackmagic);
             }
         }
         if event::poll(Duration::from_millis(120))? {
@@ -242,10 +268,33 @@ impl App {
         self.args.root.clone().unwrap_or_else(|| PathBuf::from("/"))
     }
 
+    /// Les écrans de l'installation, sans ceux qui n'ont pas d'objet ici.
+    fn install_flow(&self) -> Vec<Screen> {
+        let mut v = vec![Screen::Checks, Screen::Dns, Screen::Name, Screen::Timezone, Screen::Apps];
+        if self.cards > 0 && self.dv_installed.is_none() {
+            v.push(Screen::Blackmagic);
+        }
+        if self.ndi_present.is_none() {
+            v.push(Screen::Ndi);
+        }
+        if self.gpu_nvidia || !self.gpu_vaapi.is_empty() {
+            v.push(Screen::Gpu);
+        }
+        v.extend([Screen::Firewall, Screen::AdminUser, Screen::AdminPassword, Screen::Summary]);
+        v
+    }
+
+    fn start(&mut self, flow: Vec<Screen>) {
+        self.flow = flow;
+        let first = self.flow[0];
+        self.go(first);
+    }
+
     fn go(&mut self, s: Screen) {
         self.history.push(self.screen);
         self.screen = s;
         self.error = None;
+        self.sel = 0;
         self.focus = 0;
         if s == Screen::Checks && self.checks.is_none() {
             let tx = self.tx.clone();
@@ -254,6 +303,22 @@ impl App {
                 let _ = tx.send(Msg::Checks(checks::system(offline)));
             });
         }
+        if s == Screen::Name && self.name.value.is_empty() {
+            self.name.value = self.plan.dns_name.split('.').next().unwrap_or_default().to_string();
+        }
+    }
+
+    /// L'écran qui suit `s` dans le parcours.
+    fn next_after(&mut self, s: Screen) {
+        let i = self.flow.iter().position(|x| *x == s).map_or(self.flow.len(), |i| i + 1);
+        match self.flow.get(i).copied() {
+            Some(n) => self.go(n),
+            None => self.go(Screen::Summary),
+        }
+    }
+
+    fn next(&mut self) {
+        self.next_after(self.screen);
     }
 
     fn back(&mut self) {
@@ -263,6 +328,8 @@ impl App {
         if let Some(s) = self.history.pop() {
             self.screen = s;
             self.error = None;
+            self.sel = 0;
+            self.focus = 0;
         }
     }
 
@@ -278,10 +345,9 @@ impl App {
                         self.license_scroll = 0;
                         self.go(Screen::License);
                     }
-                    // Sans le SDK : NDI repasse à « non », Entrée continue sans lui.
                     Err(e) => {
                         self.ndi_error = Some(e);
-                        self.ndi_wanted = false;
+                        self.sel = 1;
                     }
                 }
             }
@@ -290,9 +356,7 @@ impl App {
                 Event::Progress(i, m) => self.states[i] = StepState::Running(m),
                 Event::Done(i, Ok(m)) => self.states[i] = StepState::Done(m),
                 Event::Done(i, Err(e)) => self.states[i] = StepState::Failed(e),
-                Event::End(ok) => {
-                    self.result = Some(ok);
-                }
+                Event::End(ok) => self.result = Some(ok),
             },
         }
     }
@@ -314,6 +378,15 @@ impl App {
         self.go(Screen::Progress);
     }
 
+    /// ↑↓ sur un écran à `n` choix.
+    fn pick(&mut self, k: KeyEvent, n: usize) {
+        match k.code {
+            KeyCode::Up | KeyCode::BackTab => self.sel = (self.sel + n - 1) % n,
+            KeyCode::Down | KeyCode::Tab => self.sel = (self.sel + 1) % n,
+            _ => {}
+        }
+    }
+
     fn key(&mut self, k: KeyEvent) {
         if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('c') {
             if self.screen != Screen::Progress || self.result.is_some() {
@@ -322,91 +395,115 @@ impl App {
             return;
         }
         if k.code == KeyCode::Esc {
-            if self.screen == Screen::Welcome || (self.screen == Screen::End) {
-                self.quit = true;
-            } else {
-                self.back();
+            match self.screen {
+                Screen::Welcome | Screen::End => self.quit = true,
+                _ => self.back(),
             }
             return;
         }
+        let enter = k.code == KeyCode::Enter;
         match self.screen {
             Screen::Welcome => {
-                if k.code == KeyCode::Enter {
+                if enter {
                     if self.installed.is_some() {
                         self.go(Screen::Menu);
                     } else {
-                        self.go(Screen::Checks);
+                        let flow = self.install_flow();
+                        self.start(flow);
                     }
                 }
             }
-            Screen::Menu => match k.code {
-                KeyCode::Up => self.menu = self.menu.saturating_sub(1),
-                KeyCode::Down => self.menu = (self.menu + 1).min(MENU.len() - 1),
-                KeyCode::Enter => match self.menu {
-                    0 => {
-                        self.plan.action = Action::Update;
-                        self.go(Screen::Summary);
+            Screen::Menu => {
+                self.pick(k, MENU.len());
+                if enter {
+                    match self.sel {
+                        0 => {
+                            self.plan.action = Action::Update;
+                            self.start(vec![Screen::Summary]);
+                        }
+                        1 => {
+                            self.plan.action = Action::Update;
+                            self.start(vec![Screen::Apps, Screen::Summary]);
+                        }
+                        2 => {
+                            self.plan.action = Action::Update;
+                            let mut v = vec![Screen::Blackmagic, Screen::Ndi];
+                            if self.gpu_nvidia || !self.gpu_vaapi.is_empty() {
+                                v.push(Screen::Gpu);
+                            }
+                            v.push(Screen::Summary);
+                            self.start(v);
+                        }
+                        3 => {
+                            self.plan.action = Action::Repair;
+                            self.start(vec![Screen::Summary]);
+                        }
+                        4 | 5 => {
+                            self.plan.action = Action::Uninstall { purge: self.sel == 5 };
+                            self.start(vec![Screen::Summary]);
+                        }
+                        _ => self.quit = true,
                     }
-                    1 => {
-                        self.plan.action = Action::Update;
-                        self.go(Screen::Apps);
-                    }
-                    2 => {
-                        self.plan.action = Action::Update;
-                        self.go(Screen::Hardware);
-                    }
-                    3 => {
-                        self.plan.action = Action::Repair;
-                        self.go(Screen::Summary);
-                    }
-                    4 => {
-                        self.plan.action = Action::Uninstall { purge: false };
-                        self.go(Screen::Summary);
-                    }
-                    5 => {
-                        self.plan.action = Action::Uninstall { purge: true };
-                        self.go(Screen::Summary);
-                    }
-                    _ => self.quit = true,
-                },
-                _ => {}
-            },
+                }
+            }
             Screen::Checks => {
-                if k.code == KeyCode::Enter {
+                if enter {
                     if let Some(c) = &self.checks {
                         if c.iter().any(|c| c.level == Level::Bad) && self.args.root.is_none() {
-                            self.error = Some("Ce serveur ne peut pas recevoir Strata : voir les ✗.".into());
+                            self.error = Some("Ce serveur ne peut pas recevoir Strata : voir les ✗ ci-dessus.".into());
                         } else {
-                            self.go(Screen::Name);
+                            self.next();
                         }
                     }
                 }
             }
-            Screen::Name => match k.code {
-                KeyCode::Tab | KeyCode::Down => self.focus = (self.focus + 1) % 3,
-                KeyCode::BackTab | KeyCode::Up => self.focus = (self.focus + 2) % 3,
-                KeyCode::Enter => {
+            Screen::Dns => {
+                if enter {
                     let dns = self.dns.value.trim().trim_end_matches('.').to_lowercase();
                     if !checks::valid_dns(&dns) {
-                        self.error = Some("Le nom DNS : des mots de lettres, chiffres et tirets, séparés par des points (strata01.regie.exemple.fr).".into());
+                        self.error = Some("Des mots (lettres, chiffres, tirets) séparés par des points : strata01.regie.exemple.fr".into());
                         return;
                     }
+                    if dns != self.plan.dns_name {
+                        self.name.value.clear();
+                    }
                     self.plan.dns_name = dns.clone();
-                    self.plan.name = if self.name.value.trim().is_empty() {
-                        dns.split('.').next().unwrap_or_default().to_string()
-                    } else {
-                        self.name.value.trim().to_string()
-                    };
-                    self.plan.timezone = self.tz.value.trim().to_string();
                     self.dns_check = None;
                     let tx = self.tx.clone();
                     std::thread::spawn(move || {
                         let _ = tx.send(Msg::Dns(checks::dns(&dns)));
                     });
-                    self.go(Screen::Apps);
+                    self.next();
+                } else {
+                    self.dns.key(k);
                 }
-                _ => [&mut self.name, &mut self.dns, &mut self.tz][self.focus].key(k),
-            },
+            }
+            Screen::Name => {
+                if enter {
+                    let n = self.name.value.trim();
+                    self.plan.name = if n.is_empty() { self.plan.dns_name.split('.').next().unwrap_or_default().to_string() } else { n.to_string() };
+                    self.next();
+                } else {
+                    self.name.key(k);
+                }
+            }
+            Screen::Timezone => {
+                let n = self.tz_choices.len() + 1;
+                match k.code {
+                    KeyCode::Up | KeyCode::Down | KeyCode::Tab | KeyCode::BackTab => self.pick(k, n),
+                    KeyCode::Enter => {
+                        let tz = if self.sel < self.tz_choices.len() { self.tz_choices[self.sel].clone() } else { self.tz_other.value.trim().to_string() };
+                        if !tz.contains('/') && tz != "UTC" {
+                            self.error = Some("Un fuseau comme Europe/Paris ou America/New_York.".into());
+                            return;
+                        }
+                        self.plan.timezone = tz;
+                        self.next();
+                    }
+                    _ if self.sel == self.tz_choices.len() => self.tz_other.key(k),
+                    _ => {}
+                }
+            }
             Screen::Apps => match k.code {
                 KeyCode::Enter if !self.app_input.value.trim().is_empty() => {
                     let v = self.app_input.value.trim().to_string();
@@ -415,473 +512,569 @@ impl App {
                     }
                     self.app_input.value.clear();
                 }
-                KeyCode::Enter => {
-                    if self.plan.action == Action::Update {
-                        self.go(Screen::Summary);
-                    } else {
-                        self.go(Screen::Hardware);
-                    }
-                }
+                KeyCode::Enter => self.next(),
                 KeyCode::Delete => {
                     self.plan.apps.pop();
                 }
                 _ => self.app_input.key(k),
             },
-            Screen::Hardware => match k.code {
-                KeyCode::Down | KeyCode::Tab => self.hw_focus = (self.hw_focus + 1) % 3,
-                KeyCode::Up | KeyCode::BackTab => self.hw_focus = (self.hw_focus + 2) % 3,
-                KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') => {
-                    if self.hw_focus == 0 {
-                        self.dv_wanted = !self.dv_wanted;
-                        if !self.dv_wanted {
-                            self.dv_waiting = false;
-                            self.plan.desktop_video = None;
-                        }
-                    } else if self.hw_focus == 1 {
-                        self.ndi_wanted = !self.ndi_wanted;
-                        if !self.ndi_wanted {
-                            self.plan.ndi = None;
+            Screen::Blackmagic => {
+                self.pick(k, 2);
+                if enter {
+                    if self.sel == 0 {
+                        match checks::find_desktop_video() {
+                            Some(p) => {
+                                self.plan.desktop_video = Some(p);
+                                self.next();
+                            }
+                            None => self.go(Screen::BlackmagicWait),
                         }
                     } else {
-                        self.gpu_wanted = !self.gpu_wanted;
+                        self.plan.desktop_video = None;
+                        self.next();
                     }
                 }
-                KeyCode::Char('p') => {
-                    self.dv_wanted = false;
-                    self.dv_waiting = false;
+            }
+            Screen::BlackmagicWait => {
+                if matches!(k.code, KeyCode::Char('p') | KeyCode::Char('P')) {
+                    self.plan.desktop_video = None;
+                    self.next_after(Screen::Blackmagic);
                 }
-                KeyCode::Enter => {
-                    // Le pilote Blackmagic : l'archive, ou l'attendre.
-                    if self.dv_wanted && self.plan.desktop_video.is_none() {
-                        match checks::find_desktop_video() {
-                            Some(p) => self.plan.desktop_video = Some(p),
-                            None => {
-                                self.dv_waiting = true;
-                                return;
-                            }
-                        }
-                    }
-                    // NDI : le SDK et sa licence, avant d'aller plus loin.
-                    if self.ndi_wanted && self.plan.ndi.is_none() && !self.ndi_fetching {
+            }
+            Screen::Ndi => {
+                if self.ndi_fetching {
+                    return;
+                }
+                self.pick(k, 2);
+                if enter {
+                    if self.sel == 0 {
                         self.ndi_fetching = true;
                         self.ndi_error = None;
                         let tx = self.tx.clone();
                         std::thread::spawn(move || {
                             let _ = tx.send(Msg::Ndi(ndi::get(&std::env::temp_dir().join("strata-install-ndi"))));
                         });
-                        return;
-                    }
-                    if self.ndi_fetching {
-                        return;
-                    }
-                    self.plan.nvidia = self.gpu_wanted && self.gpu_nvidia;
-                    self.plan.vaapi = if self.gpu_wanted { self.gpu_vaapi.clone() } else { Vec::new() };
-                    if self.plan.action == Action::Update {
-                        self.go(Screen::Summary);
                     } else {
-                        self.go(Screen::Settings);
+                        self.plan.ndi = None;
+                        self.next();
                     }
                 }
-                _ => {}
-            },
+            }
             Screen::License => match k.code {
-                KeyCode::Down => self.license_scroll = self.license_scroll.saturating_add(1),
-                KeyCode::Up => self.license_scroll = self.license_scroll.saturating_sub(1),
                 KeyCode::PageDown | KeyCode::Char(' ') => self.license_scroll = self.license_scroll.saturating_add(15),
                 KeyCode::PageUp => self.license_scroll = self.license_scroll.saturating_sub(15),
-                KeyCode::Char('a') | KeyCode::Char('A') => {
-                    self.plan.ndi = self.ndi_sdk.as_ref().map(|s| s.lib.clone());
-                    self.back();
-                }
-                KeyCode::Char('r') | KeyCode::Char('R') => {
-                    self.ndi_wanted = false;
-                    self.plan.ndi = None;
-                    self.back();
-                }
-                _ => {}
+                KeyCode::Char('a') | KeyCode::Char('A') => self.license(true),
+                KeyCode::Char('r') | KeyCode::Char('R') => self.license(false),
+                KeyCode::Enter => self.license(self.sel == 0),
+                _ => self.pick(k, 2),
             },
-            Screen::Settings => match k.code {
-                KeyCode::Char(' ') | KeyCode::Left | KeyCode::Right => self.plan.firewall = !self.plan.firewall,
-                KeyCode::Enter => self.go(Screen::Admin),
-                _ => {}
-            },
-            Screen::Admin => match k.code {
-                KeyCode::Tab | KeyCode::Down => self.focus = (self.focus + 1) % 3,
-                KeyCode::BackTab | KeyCode::Up => self.focus = (self.focus + 2) % 3,
-                KeyCode::Enter => {
-                    let (u, p, p2) = (self.admin_user.value.trim().to_string(), self.admin_pw.value.clone(), self.admin_pw2.value.clone());
+            Screen::Gpu => {
+                self.pick(k, 2);
+                if enter {
+                    let yes = self.sel == 0;
+                    self.plan.nvidia = yes && self.gpu_nvidia;
+                    self.plan.vaapi = if yes { self.gpu_vaapi.clone() } else { Vec::new() };
+                    self.next();
+                }
+            }
+            Screen::Firewall => {
+                self.pick(k, 2);
+                if enter {
+                    self.plan.firewall = self.sel == 0;
+                    self.next();
+                }
+            }
+            Screen::AdminUser => {
+                if enter {
+                    let u = self.admin_user.value.trim().to_string();
                     if u.is_empty() || !u.chars().all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '@')) {
-                        self.error = Some("Le nom : lettres, chiffres et . - _ @".into());
-                    } else if p.chars().count() < 8 {
-                        self.error = Some("Le mot de passe a 8 caractères au moins.".into());
-                    } else if p != p2 {
-                        self.error = Some("Les deux mots de passe diffèrent.".into());
+                        self.error = Some("Lettres, chiffres et . - _ @ seulement.".into());
                     } else {
-                        self.plan.admin = Some((u, p));
-                        self.go(Screen::Summary);
+                        self.next();
+                    }
+                } else {
+                    self.admin_user.key(k);
+                }
+            }
+            Screen::AdminPassword => match k.code {
+                KeyCode::Tab | KeyCode::Down | KeyCode::BackTab | KeyCode::Up => self.focus = 1 - self.focus,
+                KeyCode::Enter if self.focus == 0 => self.focus = 1,
+                KeyCode::Enter => {
+                    let (p, p2) = (self.admin_pw.value.clone(), self.admin_pw2.value.clone());
+                    if p.chars().count() < 8 {
+                        self.error = Some("8 caractères au moins.".into());
+                        self.focus = 0;
+                    } else if p != p2 {
+                        self.error = Some("Les deux saisies diffèrent : retapez la seconde.".into());
+                        self.admin_pw2.value.clear();
+                    } else {
+                        self.plan.admin = Some((self.admin_user.value.trim().to_string(), p));
+                        self.next();
                     }
                 }
-                _ => [&mut self.admin_user, &mut self.admin_pw, &mut self.admin_pw2][self.focus].key(k),
+                _ => [&mut self.admin_pw, &mut self.admin_pw2][self.focus].key(k),
             },
             Screen::Summary => {
-                if k.code == KeyCode::Enter {
-                    self.launch();
+                self.pick(k, 2);
+                if enter {
+                    if self.sel == 0 {
+                        self.launch();
+                    } else {
+                        self.back();
+                    }
                 }
             }
             Screen::Progress => {
-                if k.code == KeyCode::Enter && self.result.is_some() {
+                if enter && self.result.is_some() {
                     self.go(Screen::End);
                 }
             }
             Screen::End => {
-                if k.code == KeyCode::Enter || k.code == KeyCode::Char('q') {
+                if enter || k.code == KeyCode::Char('q') {
                     self.quit = true;
                 }
             }
         }
     }
+
+    fn license(&mut self, accept: bool) {
+        self.plan.ndi = if accept { self.ndi_sdk.as_ref().map(|s| s.lib.clone()) } else { None };
+        self.next_after(Screen::Ndi);
+    }
 }
 
 // ---------- Le dessin ----------
 
-fn title(t: &str) -> Line<'static> {
-    Line::from(vec![Span::styled(format!(" {t} "), Style::new().fg(ACCENT).add_modifier(Modifier::BOLD))])
+fn s(fg: Color) -> Style {
+    Style::new().fg(fg)
+}
+
+fn bold(fg: Color) -> Style {
+    Style::new().fg(fg).add_modifier(Modifier::BOLD)
 }
 
 fn mark(l: Level) -> Span<'static> {
     match l {
-        Level::Ok => Span::styled("✓", Style::new().fg(OK)),
-        Level::Warn => Span::styled("!", Style::new().fg(WARN)),
-        Level::Bad => Span::styled("✗", Style::new().fg(BAD)),
+        Level::Ok => Span::styled("✓", bold(OK)),
+        Level::Warn => Span::styled("!", bold(WARN)),
+        Level::Bad => Span::styled("✗", bold(BAD)),
     }
 }
 
-fn field(f: &mut Frame, area: Rect, label: &str, input: &Input, focused: bool) {
-    let style = if focused { Style::new().fg(ACCENT) } else { Style::new().fg(MUTED) };
-    let b = Block::bordered().border_type(BorderType::Rounded).border_style(style).title(Span::styled(format!(" {label} "), style));
-    let inner = b.inner(area);
-    f.render_widget(Paragraph::new(input.shown()).block(b), area);
-    if focused {
-        f.set_cursor_position((inner.x + input.shown().chars().count() as u16, inner.y));
+/// Un écran : son titre et sa phrase d'explication ; rend la zone qui reste.
+fn heading(f: &mut Frame, area: Rect, title: &str, sub: &str) -> Rect {
+    let h = if sub.is_empty() { 2 } else { 2 + (sub.chars().count() as u16 / area.width.max(1)) + 2 };
+    let [t, rest] = Layout::vertical([Constraint::Length(h), Constraint::Min(1)]).areas(area);
+    let mut lines = vec![Line::from(Span::styled(title.to_string(), bold(FG))), Line::from("")];
+    if !sub.is_empty() {
+        lines.push(Line::from(Span::styled(sub.to_string(), s(DIM))));
+    }
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), t);
+    rest
+}
+
+/// Des choix, l'un sous l'autre : le choix en cours est une barre pleine.
+fn choices(f: &mut Frame, area: Rect, opts: &[(String, String)], sel: usize) {
+    let w = area.width as usize;
+    let mut lines = Vec::new();
+    for (i, (label, desc)) in opts.iter().enumerate() {
+        let on = i == sel;
+        let text = format!(" {}  {label}", if on { "▶" } else { " " });
+        let pad = w.saturating_sub(text.chars().count());
+        if on {
+            lines.push(Line::from(Span::styled(format!("{text}{}", " ".repeat(pad)), Style::new().fg(ON_ACCENT).bg(ACCENT).add_modifier(Modifier::BOLD))));
+        } else {
+            lines.push(Line::from(Span::styled(text, s(FG))));
+        }
+        if !desc.is_empty() {
+            lines.push(Line::from(Span::styled(format!("     {desc}"), s(if on { FG } else { DIM }))));
+        }
+        lines.push(Line::from(""));
+    }
+    f.render_widget(Paragraph::new(lines), area);
+}
+
+/// Un champ : cadre épais et curseur quand on y tape.
+fn field(f: &mut Frame, area: Rect, label: &str, input: &Input, focused: bool, placeholder: &str) {
+    let area = Rect { height: 3.min(area.height), ..area };
+    let b = Block::bordered()
+        .border_type(if focused { BorderType::Thick } else { BorderType::Rounded })
+        .border_style(s(if focused { ACCENT } else { LINE }))
+        .title(Span::styled(format!(" {label} "), if focused { bold(ACCENT) } else { s(DIM) }))
+        .style(Style::new().bg(PANEL));
+    let mut spans = vec![Span::raw(" ")];
+    if input.value.is_empty() && !placeholder.is_empty() {
+        if focused {
+            spans.push(Span::styled(" ", Style::new().bg(FG)));
+        }
+        spans.push(Span::styled(placeholder.to_string(), s(LINE)));
+    } else {
+        spans.push(Span::styled(input.shown(), bold(FG)));
+        if focused {
+            spans.push(Span::styled(" ", Style::new().bg(FG)));
+        }
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)).block(b), area);
+}
+
+/// Les touches de l'écran, en bas : [Entrée] Continuer …
+fn keys(app: &App) -> Vec<(&'static str, &'static str)> {
+    let back = ("Échap", "Retour");
+    match app.screen {
+        Screen::Welcome => vec![("Entrée", "Commencer"), ("Échap", "Quitter")],
+        Screen::Menu | Screen::Timezone | Screen::Blackmagic | Screen::Gpu | Screen::Firewall => vec![("↑ ↓", "Choisir"), ("Entrée", "Valider"), back],
+        Screen::Ndi if app.ndi_fetching => vec![],
+        Screen::Ndi => vec![("↑ ↓", "Choisir"), ("Entrée", "Valider"), back],
+        Screen::Summary => vec![("↑ ↓", "Choisir"), ("Entrée", "Valider"), back],
+        Screen::Checks => vec![("Entrée", "Continuer"), back],
+        Screen::Dns | Screen::Name | Screen::AdminUser => vec![("Entrée", "Continuer"), back],
+        Screen::AdminPassword => vec![("Tab", "Champ suivant"), ("Entrée", "Continuer"), back],
+        Screen::Apps => vec![("Entrée", "Ajouter / continuer"), ("Suppr", "Retirer la dernière"), back],
+        Screen::BlackmagicWait => vec![("P", "Passer, sans pilote Blackmagic"), back],
+        Screen::License => vec![("PgPréc PgSuiv", "Lire"), ("↑ ↓", "Choisir"), ("Entrée", "Valider")],
+        Screen::Progress if app.result.is_some() => vec![("Entrée", "Continuer")],
+        Screen::Progress => vec![],
+        Screen::End => vec![("Entrée", "Quitter")],
     }
 }
 
 fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
     f.render_widget(Block::new().style(Style::new().bg(BG).fg(FG)), area);
-    let [head, body, foot] = Layout::vertical([Constraint::Length(3), Constraint::Min(5), Constraint::Length(2)]).areas(area);
+    let [head, _, body, err, foot] =
+        Layout::vertical([Constraint::Length(3), Constraint::Length(1), Constraint::Min(5), Constraint::Length(2), Constraint::Length(2)]).areas(area);
+
+    // En-tête : Strata, l'étape, la barre d'avancement.
+    let pos = app
+        .flow
+        .iter()
+        .position(|s| *s == app.screen)
+        .or_else(|| (app.screen == Screen::BlackmagicWait).then(|| app.flow.iter().position(|s| *s == Screen::Blackmagic)).flatten());
+    let step = match pos {
+        Some(i) if app.flow.len() > 1 => format!("Étape {} sur {}", i + 1, app.flow.len()),
+        _ => String::new(),
+    };
+    let what = match app.plan.action {
+        Action::Install => "Installation",
+        Action::Update => "Mise à jour",
+        Action::Repair => "Réparation",
+        Action::Uninstall { .. } => "Désinstallation",
+    };
     let dry = if app.args.root.is_some() { "  ·  essai à blanc" } else { "" };
+    let left = format!("  ▲ Strata   {what}{dry}");
+    let pad = (head.width as usize).saturating_sub(left.chars().count() + step.chars().count() + 2);
+    let bar_w = head.width.saturating_sub(4) as usize;
+    let filled = match pos {
+        Some(i) => bar_w * (i + 1) / app.flow.len().max(1),
+        None if matches!(app.screen, Screen::Progress | Screen::End) => bar_w,
+        None => 0,
+    };
     f.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("  ▲ Strata", Style::new().fg(FG).add_modifier(Modifier::BOLD)),
-            Span::styled(" Install", Style::new().fg(ACCENT)),
-            Span::styled(format!("   {}{dry}", env!("CARGO_PKG_VERSION")), Style::new().fg(MUTED)),
-        ]))
-        .block(Block::new().borders(Borders::BOTTOM).border_style(Style::new().fg(Color::Rgb(45, 50, 62)))),
+        Paragraph::new(vec![
+            Line::from(vec![
+                Span::styled("  ▲ Strata", bold(FG)),
+                Span::styled(format!("   {what}{dry}"), s(ACCENT)),
+                Span::raw(" ".repeat(pad)),
+                Span::styled(step, bold(FG)),
+            ]),
+            Line::from(""),
+            Line::from(vec![Span::raw("  "), Span::styled("━".repeat(filled), s(ACCENT)), Span::styled("━".repeat(bar_w - filled), s(LINE))]),
+        ]),
         head,
     );
-    let body = body.inner(ratatui::layout::Margin { horizontal: 3, vertical: 1 });
-    let hint = match app.screen {
-        Screen::Welcome => "Entrée : commencer   ·   Échap : quitter",
-        Screen::Menu => "↑↓ : choisir   ·   Entrée : valider   ·   Échap : retour",
-        Screen::Name | Screen::Admin => "Tab : champ suivant   ·   Entrée : continuer   ·   Échap : retour",
-        Screen::Apps => "Entrée : ajouter (champ rempli) ou continuer   ·   Suppr : retirer la dernière   ·   Échap : retour",
-        Screen::Hardware => "↑↓ : DeckLink / NDI / GPU   ·   Espace : oui / non   ·   Entrée : continuer   ·   Échap : retour",
-        Screen::License => "↑↓ PgPréc PgSuiv : lire   ·   A : accepter   ·   R : refuser",
-        Screen::Settings => "Espace : oui / non   ·   Entrée : continuer   ·   Échap : retour",
-        Screen::Summary => "Entrée : lancer   ·   Échap : retour",
-        Screen::Progress => {
-            if app.result.is_some() {
-                "Entrée : continuer"
-            } else {
-                "Installation en cours…"
-            }
-        }
-        Screen::End => "Entrée : quitter",
-        Screen::Checks => "Entrée : continuer   ·   Échap : retour",
-    };
-    let mut foot_line = vec![Span::styled(format!("  {hint}"), Style::new().fg(MUTED))];
+
+    // Le contenu, centré.
+    let w = body.width.min(WIDTH);
+    let body = Rect { x: body.x + (body.width - w) / 2, width: w, ..body }.inner(Margin { horizontal: 2, vertical: 0 });
+    let inner = Rect { x: err.x + (err.width - w) / 2, width: w, ..err }.inner(Margin { horizontal: 2, vertical: 0 });
     if let Some(e) = &app.error {
-        foot_line = vec![Span::styled(format!("  ✗ {e}"), Style::new().fg(BAD))];
+        f.render_widget(Paragraph::new(Line::from(vec![Span::styled("✗ ", bold(BAD)), Span::styled(e.clone(), s(BAD))])).wrap(Wrap { trim: false }), inner);
     }
-    f.render_widget(Paragraph::new(Line::from(foot_line)), foot);
+    let mut spans = vec![Span::raw("  ")];
+    for (k, l) in keys(app) {
+        spans.push(Span::styled(format!(" {k} "), Style::new().fg(FG).bg(LINE).add_modifier(Modifier::BOLD)));
+        spans.push(Span::styled(format!(" {l}     "), s(DIM)));
+    }
+    f.render_widget(Paragraph::new(vec![Line::from(""), Line::from(spans)]).style(Style::new().bg(PANEL)), foot);
 
     match app.screen {
-        Screen::Welcome => {
-            let mut lines = vec![
-                Line::from(""),
-                Line::from(Span::styled("Bienvenue", Style::new().add_modifier(Modifier::BOLD))),
-                Line::from(""),
-                Line::from("Cet installateur pose Strata Core sur ce serveur : le cockpit, les comptes, le matériel,"),
-                Line::from("la santé et les mises à jour. Les applis (LiveCut, CG, Multiview…) s'ajoutent ensuite."),
-                Line::from(""),
-            ];
-            let what = match (&app.plan.package, &app.plan.version) {
-                (Some(p), _) => format!("Strata Core depuis {}", p.display()),
-                (None, Some(v)) => format!("Strata Core {v}"),
-                (None, None) => "Strata Core, dernière version".into(),
-            };
-            lines.push(Line::from(vec![Span::styled("À installer : ", Style::new().fg(MUTED)), Span::raw(what)]));
-            if let Some(v) = &app.installed {
-                lines.push(Line::from(vec![
-                    Span::styled("Déjà installé : ", Style::new().fg(MUTED)),
-                    Span::styled(format!("Strata Core {v}"), Style::new().fg(OK)),
-                ]));
-            }
-            f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
-        }
+        Screen::Welcome => draw_welcome(f, body, app),
         Screen::Menu => {
-            let mut lines = vec![title("Ce serveur a déjà Strata"), Line::from("")];
-            for (i, m) in MENU.iter().enumerate() {
-                let on = i == app.menu;
-                lines.push(Line::from(vec![
-                    Span::styled(if on { " › " } else { "   " }, Style::new().fg(ACCENT)),
-                    Span::styled(m.to_string(), if on { Style::new().fg(ACCENT).add_modifier(Modifier::BOLD) } else { Style::new() }),
-                ]));
-            }
-            f.render_widget(Paragraph::new(lines), body);
+            let r = heading(
+                f,
+                body,
+                "Strata est déjà installé sur ce serveur",
+                &format!("Strata Core {}. Que voulez-vous faire ?", app.installed.clone().unwrap_or_default()),
+            );
+            choices(f, r, &MENU.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect::<Vec<_>>(), app.sel);
         }
-        Screen::Checks => {
-            let mut lines = vec![title("Le système"), Line::from("")];
-            match &app.checks {
-                None => lines.push(Line::from(Span::styled("Vérification…", Style::new().fg(MUTED)))),
-                Some(list) => {
-                    for c in list {
-                        lines.push(Line::from(vec![
-                            mark(c.level),
-                            Span::raw(format!("  {:12}", c.label)),
-                            Span::styled(c.detail.clone(), Style::new().fg(if c.level == Level::Ok { MUTED } else { FG })),
-                        ]));
-                    }
-                }
-            }
-            f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
+        Screen::Checks => draw_checks(f, body, app),
+        Screen::Dns => {
+            let r = heading(
+                f,
+                body,
+                "Le nom DNS du serveur",
+                "Le cockpit répondra à ce nom, et chaque appli à un sous-domaine (livecut.<nom>). Il faudra deux enregistrements DNS : le nom, et *.le nom.",
+            );
+            field(f, r, "Nom DNS", &app.dns, true, "strata01.regie.exemple.fr");
         }
         Screen::Name => {
-            let [t, a, b, c, n] =
-                Layout::vertical([Constraint::Length(3), Constraint::Length(3), Constraint::Length(3), Constraint::Length(3), Constraint::Min(1)]).areas(body);
-            f.render_widget(
-                Paragraph::new(vec![
-                    title("Le serveur"),
-                    Line::from(Span::styled(
-                        "Le nom DNS donne les adresses : le cockpit à strata01.regie.exemple.fr, chaque appli à livecut.strata01…",
-                        Style::new().fg(MUTED),
-                    )),
-                ])
-                .wrap(Wrap { trim: false }),
-                t,
-            );
-            field(f, a, "Nom d'usage (« Régie A »)", &app.name, app.focus == 0);
-            field(f, b, "Nom DNS", &app.dns, app.focus == 1);
-            field(f, c, "Fuseau horaire", &app.tz, app.focus == 2);
-            f.render_widget(Paragraph::new(Span::styled("Il faudra deux enregistrements DNS : le nom, et *.le nom (les applis).", Style::new().fg(MUTED))), n);
+            let r = heading(f, body, "Le nom d'usage", "Le nom que les équipes voient dans le cockpit, par exemple « Régie A ».");
+            field(f, r, "Nom d'usage", &app.name, true, "Régie A");
+        }
+        Screen::Timezone => {
+            let r = heading(f, body, "Le fuseau horaire", "Pour l'heure affichée et le timecode maison.");
+            let mut opts: Vec<(String, String)> = app.tz_choices.iter().map(|z| (z.clone(), String::new())).collect();
+            opts.push(("Autre…".into(), String::new()));
+            let compact: Vec<Line> = opts
+                .iter()
+                .enumerate()
+                .map(|(i, (l, _))| {
+                    let on = i == app.sel;
+                    let text = format!(" {}  {l}", if on { "▶" } else { " " });
+                    if on {
+                        Line::from(Span::styled(
+                            format!("{text}{}", " ".repeat((r.width as usize).saturating_sub(text.chars().count()))),
+                            Style::new().fg(ON_ACCENT).bg(ACCENT).add_modifier(Modifier::BOLD),
+                        ))
+                    } else {
+                        Line::from(Span::styled(text, s(FG)))
+                    }
+                })
+                .collect();
+            let n = compact.len() as u16;
+            let [l, _, o] = Layout::vertical([Constraint::Length(n), Constraint::Length(1), Constraint::Min(1)]).areas(r);
+            f.render_widget(Paragraph::new(compact), l);
+            if app.sel == app.tz_choices.len() {
+                field(f, o, "Fuseau", &app.tz_other, true, "Asia/Tokyo");
+            }
         }
         Screen::Apps => {
-            let [t, a, l] = Layout::vertical([Constraint::Length(3), Constraint::Length(3), Constraint::Min(1)]).areas(body);
-            f.render_widget(
-                Paragraph::new(vec![
-                    title("Les applis"),
-                    Line::from(Span::styled(
-                        "Leur dépôt GitHub (owner/repo) ou leur archive ; installées et activées. Aussi plus tard, depuis la Bibliothèque.",
-                        Style::new().fg(MUTED),
-                    )),
-                ])
-                .wrap(Wrap { trim: false }),
-                t,
+            let r = heading(
+                f,
+                body,
+                "Les applis",
+                "Le dépôt GitHub (owner/repo) ou l'archive de chaque appli à installer et activer. Rien à mettre ? Entrée : elles s'ajoutent aussi plus tard, depuis la Bibliothèque.",
             );
-            field(f, a, "Ajouter une appli", &app.app_input, true);
+            let [a, _, l] = Layout::vertical([Constraint::Length(3), Constraint::Length(1), Constraint::Min(1)]).areas(r);
+            field(f, a, "Ajouter une appli", &app.app_input, true, "DamienP2/strata-cut");
             let mut lines: Vec<Line> =
-                app.plan.apps.iter().map(|x| Line::from(vec![Span::styled("  • ", Style::new().fg(ACCENT)), Span::raw(x.clone())])).collect();
+                app.plan.apps.iter().map(|x| Line::from(vec![Span::styled("  ✓  ", bold(OK)), Span::styled(x.clone(), s(FG))])).collect();
             if lines.is_empty() {
-                lines.push(Line::from(Span::styled("  Aucune pour l'instant.", Style::new().fg(MUTED))));
+                lines.push(Line::from(Span::styled("  Aucune appli pour l'instant.", s(DIM))));
             }
             f.render_widget(Paragraph::new(lines), l);
         }
-        Screen::Hardware => draw_hardware(f, body, app),
+        Screen::Blackmagic => {
+            let state = match (&app.dv_installed, app.cards) {
+                (Some(v), n) => format!("Pilote Desktop Video {v} déjà installé · {n} carte(s)."),
+                (None, 0) => "Aucune carte Blackmagic vue sur ce serveur.".into(),
+                (None, n) => format!("{n} carte(s) Blackmagic vue(s), pilote Desktop Video absent."),
+            };
+            let mut sub = format!("{state} Le pilote vient du site de Blackmagic : il faudra le copier sur ce serveur (la marche à suivre s'affiche).");
+            if app.secure_boot {
+                sub.push_str(" Secure Boot est actif : au redémarrage, enrôlez la clé MOK.");
+            }
+            let r = heading(f, body, "Le pilote des cartes Blackmagic", &sub);
+            choices(
+                f,
+                r,
+                &[("Installer le pilote Desktop Video".into(), "DeckLink, UltraStudio, Intensity".into()), ("Passer".into(), "sans pilote Blackmagic".into())],
+                app.sel,
+            );
+        }
+        Screen::BlackmagicWait => draw_wait(f, body, app),
+        Screen::Ndi => {
+            let r = heading(
+                f,
+                body,
+                "NDI",
+                "La bibliothèque NDI, pour recevoir et envoyer des sources NDI. Son SDK est téléchargé, puis sa licence s'affiche : à accepter pour l'installer.",
+            );
+            if app.ndi_fetching {
+                let spin = ["◐", "◓", "◑", "◒"][(app.tick / 3 % 4) as usize];
+                f.render_widget(
+                    Paragraph::new(Line::from(vec![Span::styled(format!("{spin}  "), bold(ACCENT)), Span::styled("Téléchargement du SDK NDI…", s(FG))])),
+                    r,
+                );
+            } else {
+                let [c, e] = Layout::vertical([Constraint::Length(6), Constraint::Min(1)]).areas(r);
+                choices(
+                    f,
+                    c,
+                    &[("Installer NDI".into(), "télécharger le SDK, lire et accepter sa licence".into()), ("Passer".into(), "sans NDI".into())],
+                    app.sel,
+                );
+                if let Some(err) = &app.ndi_error {
+                    f.render_widget(
+                        Paragraph::new(vec![Line::from(Span::styled(format!("✗ {err}"), s(BAD))), Line::from(Span::styled("Réessayer, ou passer.", s(DIM)))])
+                            .wrap(Wrap { trim: false }),
+                        e,
+                    );
+                }
+            }
+        }
         Screen::License => {
-            let [text_area, ask] = Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).areas(body);
+            let [text_area, _, ask] = Layout::vertical([Constraint::Min(3), Constraint::Length(1), Constraint::Length(4)]).areas(body);
             let text = app.ndi_sdk.as_ref().map(|s| s.license.clone()).unwrap_or_default();
-            let b = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(ACCENT)).title(title("Licence du SDK NDI"));
+            let b = Block::bordered()
+                .border_type(BorderType::Rounded)
+                .border_style(s(LINE))
+                .title(Span::styled(" Licence du SDK NDI ", bold(FG)))
+                .style(Style::new().bg(PANEL));
             f.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }).scroll((app.license_scroll, 0)).block(b), text_area);
-            f.render_widget(
-                Paragraph::new(vec![
-                    Line::from(""),
-                    Line::from(vec![
-                        Span::styled(" A ", Style::new().fg(BG).bg(OK).add_modifier(Modifier::BOLD)),
-                        Span::styled("  j'accepte la licence : la bibliothèque NDI sera installée", Style::new().fg(FG)),
-                        Span::raw("        "),
-                        Span::styled(" R ", Style::new().fg(BG).bg(BAD).add_modifier(Modifier::BOLD)),
-                        Span::styled("  je refuse : sans NDI", Style::new().fg(FG)),
-                    ]),
-                ]),
-                ask,
+            let opts = [("J'accepte la licence".to_string(), String::new()), ("Je refuse (sans NDI)".to_string(), String::new())];
+            let compact: Vec<Line> = opts
+                .iter()
+                .enumerate()
+                .map(|(i, (l, _))| {
+                    let on = i == app.sel;
+                    let text = format!(" {}  {l}", if on { "▶" } else { " " });
+                    if on {
+                        Line::from(Span::styled(
+                            format!("{text}{}", " ".repeat((ask.width as usize).saturating_sub(text.chars().count()))),
+                            Style::new().fg(ON_ACCENT).bg(ACCENT).add_modifier(Modifier::BOLD),
+                        ))
+                    } else {
+                        Line::from(Span::styled(text, s(FG)))
+                    }
+                })
+                .collect();
+            f.render_widget(Paragraph::new(compact), ask);
+        }
+        Screen::Gpu => {
+            let need = match (app.gpu_nvidia, app.gpu_vaapi.is_empty()) {
+                (true, true) => "le pilote NVIDIA (NVENC / NVDEC)".to_string(),
+                (false, false) => format!("VA-API ({})", app.gpu_vaapi.join(", ")),
+                (true, false) => format!("le pilote NVIDIA et VA-API ({})", app.gpu_vaapi.join(", ")),
+                (false, true) => "rien".to_string(),
+            };
+            let mut sub = format!("{} : il manque {need} pour encoder et décoder sur le GPU.", app.gpu_names.join(", "));
+            if app.secure_boot && app.gpu_nvidia {
+                sub.push_str(" Secure Boot est actif : au redémarrage, enrôlez la clé MOK.");
+            }
+            let r = heading(f, body, "Les pilotes GPU", &sub);
+            choices(
+                f,
+                r,
+                &[(format!("Installer {need}"), "un redémarrage sera nécessaire".into()), ("Passer".into(), "les applis encodent avec les processeurs".into())],
+                app.sel,
             );
         }
-        Screen::Settings => {
-            let ufw = if app.plan.firewall { Span::styled("[x] ", Style::new().fg(ACCENT)) } else { Span::styled("[ ] ", Style::new().fg(MUTED)) };
-            let lines = vec![
-                title("Réglages"),
-                Line::from(""),
-                Line::from(vec![Span::styled("Données      ", Style::new().fg(MUTED)), Span::raw(paths::DATA)]),
-                Line::from(vec![Span::styled("Programme    ", Style::new().fg(MUTED)), Span::raw(paths::BIN)]),
-                Line::from(vec![Span::styled("Cockpit      ", Style::new().fg(MUTED)), Span::raw(format!("port {} (et 443 en HTTPS)", paths::PORT))]),
-                Line::from(""),
-                Line::from(vec![ufw, Span::raw("Ouvrir les ports 80 et 443 dans le pare-feu (si ufw est actif)")]),
-            ];
-            f.render_widget(Paragraph::new(lines), body);
+        Screen::Firewall => {
+            let r = heading(f, body, "Le pare-feu", "Si ufw est actif, le cockpit a besoin des ports 80 (HTTP) et 443 (HTTPS).");
+            choices(f, r, &[("Ouvrir les ports 80 et 443".into(), "recommandé".into()), ("Ne pas toucher au pare-feu".into(), String::new())], app.sel);
         }
-        Screen::Admin => {
-            let [t, a, b, c] = Layout::vertical([Constraint::Length(3), Constraint::Length(3), Constraint::Length(3), Constraint::Length(3)]).areas(body);
-            f.render_widget(
-                Paragraph::new(vec![
-                    title("Le compte administrateur"),
-                    Line::from(Span::styled("Il règle le serveur depuis le cockpit ; c'est aussi le compte de secours.", Style::new().fg(MUTED))),
-                ])
-                .wrap(Wrap { trim: false }),
-                t,
+        Screen::AdminUser => {
+            let r = heading(
+                f,
+                body,
+                "Le compte administrateur",
+                "Il règle le serveur depuis le cockpit ; c'est aussi le compte de secours si l'annuaire ne répond plus.",
             );
-            field(f, a, "Nom", &app.admin_user, app.focus == 0);
-            field(f, b, "Mot de passe (8 caractères au moins)", &app.admin_pw, app.focus == 1);
-            field(f, c, "Le même, encore", &app.admin_pw2, app.focus == 2);
+            field(f, r, "Nom du compte", &app.admin_user, true, "admin");
+        }
+        Screen::AdminPassword => {
+            let r = heading(f, body, &format!("Le mot de passe de « {} »", app.admin_user.value.trim()), "8 caractères au moins.");
+            let [a, _, b] = Layout::vertical([Constraint::Length(3), Constraint::Length(1), Constraint::Length(3)]).areas(r);
+            field(f, a, "Mot de passe", &app.admin_pw, app.focus == 0, "");
+            field(f, b, "Le même, encore", &app.admin_pw2, app.focus == 1, "");
         }
         Screen::Summary => draw_summary(f, body, app),
-        Screen::Progress => {
-            let mut lines = vec![
-                title(match app.plan.action {
-                    Action::Uninstall { .. } => "Désinstallation",
-                    Action::Update => "Mise à jour",
-                    Action::Repair => "Réparation",
-                    Action::Install => "Installation",
-                }),
-                Line::from(""),
-            ];
-            for (i, l) in app.labels.iter().enumerate() {
-                let (m, detail, style) = match &app.states[i] {
-                    StepState::Waiting => (Span::styled("·", Style::new().fg(MUTED)), String::new(), Style::new().fg(MUTED)),
-                    StepState::Running(d) => (Span::styled("…", Style::new().fg(ACCENT)), d.clone(), Style::new().fg(FG)),
-                    StepState::Done(d) => (Span::styled("✓", Style::new().fg(OK)), d.clone(), Style::new()),
-                    StepState::Failed(e) => (Span::styled("✗", Style::new().fg(BAD)), e.clone(), Style::new().fg(BAD)),
-                };
-                lines.push(Line::from(vec![m, Span::styled(format!("  {:34}", l), style), Span::styled(detail, Style::new().fg(MUTED))]));
-            }
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(format!("Journal complet : {}", paths::under(&app.root(), paths::LOG).display()), Style::new().fg(MUTED))));
-            f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
-        }
+        Screen::Progress => draw_progress(f, body, app),
         Screen::End => draw_end(f, body, app),
     }
-    if app.screen == Screen::Hardware && app.dv_waiting {
-        draw_wait(f, area);
-    }
 }
 
-fn yes_no(on: bool, focused: bool) -> Span<'static> {
-    let t = if on { "[ Installer ]" } else { "[ Passer ]" };
-    Span::styled(t, if focused { Style::new().fg(ACCENT).add_modifier(Modifier::BOLD) } else { Style::new().fg(MUTED) })
-}
-
-fn draw_hardware(f: &mut Frame, body: Rect, app: &App) {
-    let mut lines = vec![title("Le matériel"), Line::from("")];
-    lines.push(Line::from(Span::styled("DeckLink (Blackmagic)", Style::new().add_modifier(Modifier::BOLD))));
-    let state = match (&app.dv_installed, app.cards) {
-        (Some(v), n) => format!("pilote Desktop Video {v} installé · {n} carte(s)"),
-        (None, 0) => "aucune carte Blackmagic sur ce serveur".into(),
-        (None, n) => format!("{n} carte(s) Blackmagic, pilote Desktop Video absent"),
+fn draw_welcome(f: &mut Frame, body: Rect, app: &App) {
+    let what = match (&app.plan.package, &app.plan.version) {
+        (Some(p), _) => format!("Strata Core depuis {}", p.display()),
+        (None, Some(v)) => format!("Strata Core {v}"),
+        (None, None) => "Strata Core, dernière version".into(),
     };
-    lines.push(Line::from(vec![Span::styled("  ", Style::new()), Span::styled(state, Style::new().fg(MUTED))]));
-    lines.push(Line::from(vec![Span::raw("  Pilote Desktop Video : "), yes_no(app.dv_wanted, app.hw_focus == 0)]));
-    if let Some(p) = &app.plan.desktop_video {
-        lines.push(Line::from(vec![Span::styled("  ✓ ", Style::new().fg(OK)), Span::raw(format!("archive : {}", p.display()))]));
+    let mut lines = vec![
+        Line::from(Span::styled("Bienvenue", bold(FG))),
+        Line::from(""),
+        Line::from(Span::styled("Cet assistant installe Strata Core sur ce serveur : le cockpit, les comptes, le matériel, la santé", s(FG))),
+        Line::from(Span::styled("et les mises à jour. Une question par écran ; Échap revient en arrière à tout moment.", s(FG))),
+        Line::from(""),
+        Line::from(vec![Span::styled("À installer     ", s(DIM)), Span::styled(what, bold(FG))]),
+    ];
+    if let Some(v) = &app.installed {
+        lines.push(Line::from(vec![Span::styled("Déjà installé   ", s(DIM)), Span::styled(format!("Strata Core {v}"), bold(OK))]));
     }
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("NDI", Style::new().add_modifier(Modifier::BOLD))));
-    let ndi_state = match (&app.ndi_present, &app.plan.ndi) {
-        (_, Some(_)) => "licence acceptée : la bibliothèque sera installée".to_string(),
-        (Some(p), None) => format!("bibliothèque présente ({})", p.display()),
-        (None, None) => "bibliothèque absente. Oui : le SDK NDI est téléchargé, puis sa licence s'affiche, à accepter (A)".into(),
-    };
-    lines.push(Line::from(Span::styled(format!("  {ndi_state}"), Style::new().fg(MUTED))));
-    lines.push(Line::from(vec![Span::raw("  Bibliothèque NDI : "), yes_no(app.ndi_wanted, app.hw_focus == 1)]));
-    if app.ndi_fetching {
-        lines.push(Line::from(Span::styled("  Téléchargement du SDK NDI…", Style::new().fg(ACCENT))));
-    }
-    if let Some(e) = &app.ndi_error {
-        lines.push(Line::from(Span::styled(format!("  ✗ {e}"), Style::new().fg(BAD))));
-        lines.push(Line::from(Span::styled("  NDI ne sera pas installé (Entrée pour continuer, ou Oui pour réessayer).", Style::new().fg(MUTED))));
-    }
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("GPU", Style::new().add_modifier(Modifier::BOLD))));
-    let gpu_state = if app.gpu_names.is_empty() {
-        "aucun GPU : les applis encodent avec les processeurs".to_string()
-    } else {
-        let need = match (app.gpu_nvidia, app.gpu_vaapi.is_empty()) {
-            (false, true) => " · prêts".to_string(),
-            (true, true) => " · pilote NVIDIA à installer (NVENC / NVDEC)".to_string(),
-            (false, false) => format!(" · VA-API à installer ({})", app.gpu_vaapi.join(", ")),
-            (true, false) => format!(" · pilote NVIDIA et VA-API ({}) à installer", app.gpu_vaapi.join(", ")),
-        };
-        format!("{}{need}", app.gpu_names.join(", "))
-    };
-    lines.push(Line::from(Span::styled(format!("  {gpu_state}"), Style::new().fg(MUTED))));
-    if app.gpu_nvidia || !app.gpu_vaapi.is_empty() {
-        lines.push(Line::from(vec![Span::raw("  Pilotes GPU : "), yes_no(app.gpu_wanted, app.hw_focus == 2)]));
-    }
-    if app.secure_boot && (app.dv_wanted || (app.gpu_wanted && app.gpu_nvidia)) {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "  ! Secure Boot est actif : au redémarrage, enrôlez la clé MOK (écran bleu « Perform MOK management »), sinon les pilotes Blackmagic et NVIDIA ne se chargent pas.",
-            Style::new().fg(WARN),
-        )));
-    }
+    lines.push(Line::from(Span::styled("Appuyez sur Entrée pour commencer.", bold(ACCENT))));
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
 }
 
-/// La marche à suivre pour le pilote Blackmagic, en attendant l'archive. Plein écran et sans
-/// cadre : les commandes se copient à la souris telles quelles, chacune sur une ligne.
-fn draw_wait(f: &mut Frame, area: Rect) {
-    let r = Rect { x: area.x, y: area.y + 3, width: area.width, height: area.height.saturating_sub(5) };
-    f.render_widget(Clear, r);
-    f.render_widget(Block::new().style(Style::new().bg(BG).fg(FG)), r);
+fn draw_checks(f: &mut Frame, body: Rect, app: &App) {
+    let r = heading(f, body, "La vérification du serveur", "Ce qu'il faut à Strata. Un ✗ bloque l'installation ; un ! est à savoir.");
+    let mut lines = Vec::new();
+    match &app.checks {
+        None => {
+            let spin = ["◐", "◓", "◑", "◒"][(app.tick / 3 % 4) as usize];
+            lines.push(Line::from(vec![Span::styled(format!("{spin}  "), bold(ACCENT)), Span::styled("Vérification…", s(FG))]));
+        }
+        Some(list) => {
+            for c in list {
+                lines.push(Line::from(vec![
+                    Span::raw(" "),
+                    mark(c.level),
+                    Span::styled(format!("  {:12}", c.label), bold(FG)),
+                    Span::styled(c.detail.clone(), s(if c.level == Level::Ok { DIM } else { FG })),
+                ]));
+            }
+        }
+    }
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), r);
+}
+
+/// La marche à suivre pour le pilote Blackmagic, en attendant le fichier. Sans cadre : les
+/// commandes se copient à la souris telles quelles, chacune sur une ligne.
+fn draw_wait(f: &mut Frame, body: Rect, app: &App) {
     let who = std::env::var("SUDO_USER").unwrap_or_else(|_| "root".into());
     let host = checks::local_ips().first().map(|i| i.to_string()).unwrap_or_else(|| "<ce serveur>".into());
-    let cmd = |c: String| Line::from(Span::styled(c, Style::new().fg(ACCENT)));
+    let cmd = |c: String| Line::from(Span::styled(c, bold(ACCENT)));
+    let spin = ["◐", "◓", "◑", "◒"][(app.tick / 3 % 4) as usize];
     let lines = vec![
-        title("Pilote Blackmagic Desktop Video"),
+        Line::from(Span::styled("Copiez le pilote Blackmagic sur ce serveur", bold(FG))),
         Line::from(""),
-        Line::from("1. Sur votre ordinateur, téléchargez « Desktop Video » pour Linux :"),
-        Line::from("   blackmagicdesign.com › Support › Capture and Playback (Blackmagic demande un formulaire)."),
+        Line::from(Span::styled("1. Sur votre ordinateur, téléchargez « Desktop Video » pour Linux :", s(FG))),
+        Line::from(Span::styled("   blackmagicdesign.com › Support › Capture and Playback (Blackmagic demande un formulaire).", s(DIM))),
         Line::from(""),
-        Line::from("2. Copiez-le sur ce serveur tel quel (.tar.gz), ou ce qu'il contient (.sh, .deb)."),
-        Line::from("   Dans un terminal de votre ordinateur :"),
+        Line::from(Span::styled("2. Copiez-le ici tel quel, depuis un terminal de votre ordinateur :", s(FG))),
         Line::from(""),
-        Line::from(Span::styled("   Mac, Linux :", Style::new().fg(MUTED))),
-        Line::from(""),
+        Line::from(Span::styled("   Mac, Linux", s(DIM))),
         cmd(format!("scp ~/Downloads/Blackmagic_Desktop_Video_Linux_* {who}@{host}:")),
         Line::from(""),
-        Line::from(Span::styled("   Windows (PowerShell) :", Style::new().fg(MUTED))),
-        Line::from(""),
+        Line::from(Span::styled("   Windows (PowerShell)", s(DIM))),
         cmd(format!("Get-ChildItem $HOME\\Downloads\\Blackmagic_Desktop_Video_Linux_* | % {{ scp $_.FullName {who}@{host}: }}")),
         Line::from(""),
-        Line::from("3. Le fichier est trouvé tout seul (dossier personnel, /root, /tmp) : l'installation continue."),
+        Line::from(Span::styled("3. Le fichier est trouvé tout seul une fois la copie finie : l'installation continue.", s(FG))),
         Line::from(""),
-        Line::from(Span::styled("En attente du fichier…   P : passer, sans pilote Blackmagic", Style::new().fg(WARN))),
+        Line::from(vec![Span::styled(format!("{spin}  "), bold(WARN)), Span::styled("En attente du fichier…", bold(WARN))]),
     ];
-    // Sans retour à la ligne : une commande n'est jamais coupée en deux.
-    f.render_widget(Paragraph::new(lines), r.inner(ratatui::layout::Margin { horizontal: 3, vertical: 1 }));
+    // Sans retour à la ligne : une commande n'est jamais coupée en deux. Toute la largeur.
+    let area = f.area();
+    let wide = Rect { x: area.x + 2, width: area.width.saturating_sub(4), ..body };
+    f.render_widget(Block::new().style(Style::new().bg(BG)), wide);
+    f.render_widget(Paragraph::new(lines), wide);
 }
 
 fn draw_summary(f: &mut Frame, body: Rect, app: &App) {
     let p = &app.plan;
-    let row = |k: &str, v: String| Line::from(vec![Span::styled(format!("{k:16}"), Style::new().fg(MUTED)), Span::raw(v)]);
-    let mut lines = vec![title("Récapitulatif"), Line::from("")];
-    match &p.action {
+    let row = |k: &str, v: String| Line::from(vec![Span::styled(format!("  {k:16}"), s(DIM)), Span::styled(v, s(FG))]);
+    let mut lines = Vec::new();
+    let (title, go) = match &p.action {
         Action::Install => {
-            lines.push(row("Serveur", format!("{} · {} · {}", p.name, p.dns_name, p.timezone)));
+            lines.push(row("Serveur", format!("{} · {}", p.name, p.dns_name)));
             if let Some(c) = &app.dns_check {
-                lines.push(Line::from(vec![Span::raw(" ".repeat(16)), mark(c.level), Span::styled(format!(" {}", c.detail), Style::new().fg(MUTED))]));
+                lines.push(Line::from(vec![Span::raw(" ".repeat(18)), mark(c.level), Span::styled(format!(" {}", c.detail), s(DIM))]));
             }
-            lines.push(row("Applis", if p.apps.is_empty() { "aucune".into() } else { p.apps.join(", ") }));
-            lines.push(row("DeckLink", p.desktop_video.as_ref().map_or("—".into(), |d| format!("pilote depuis {}", d.display()))));
+            lines.push(row("Fuseau", p.timezone.clone()));
+            lines.push(row("Applis", if p.apps.is_empty() { "aucune pour l'instant".into() } else { p.apps.join(", ") }));
+            lines.push(row("Blackmagic", p.desktop_video.as_ref().map_or("—".into(), |d| format!("pilote depuis {}", d.display()))));
             lines.push(row("NDI", if p.ndi.is_some() { "bibliothèque (licence acceptée)".into() } else { "—".into() }));
             let gpu = [p.nvidia.then(|| "pilote NVIDIA".to_string()), (!p.vaapi.is_empty()).then(|| format!("VA-API ({})", p.vaapi.join(", ")))]
                 .into_iter()
@@ -890,55 +1083,96 @@ fn draw_summary(f: &mut Frame, body: Rect, app: &App) {
             lines.push(row("GPU", if gpu.is_empty() { "—".into() } else { gpu.join(", ") }));
             lines.push(row("Pare-feu", if p.firewall { "80 et 443 ouverts (ufw)".into() } else { "inchangé".into() }));
             lines.push(row("Administrateur", p.admin.as_ref().map_or("—".into(), |a| a.0.clone())));
+            ("Tout est prêt", "Installer Strata")
         }
         Action::Update => {
             lines.push(row("Mettre à jour", "Strata Core (dernière version)".into()));
             if !p.apps.is_empty() {
                 lines.push(row("Applis", p.apps.join(", ")));
             }
-            if p.desktop_video.is_some() || p.ndi.is_some() {
-                lines.push(row(
-                    "Matériel",
-                    [p.desktop_video.as_ref().map(|_| "pilote Blackmagic"), p.ndi.as_ref().map(|_| "NDI")].into_iter().flatten().collect::<Vec<_>>().join(", "),
-                ));
+            let hw = [
+                p.desktop_video.as_ref().map(|_| "pilote Blackmagic"),
+                p.ndi.as_ref().map(|_| "NDI"),
+                p.nvidia.then_some("pilote NVIDIA"),
+                (!p.vaapi.is_empty()).then_some("VA-API"),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+            if !hw.is_empty() {
+                lines.push(row("Matériel", hw.join(", ")));
             }
+            ("La mise à jour", "Lancer la mise à jour")
         }
-        Action::Repair => lines.push(row("Réparer", "fichiers du système, droits, puis relance".into())),
+        Action::Repair => {
+            lines.push(row("Réparer", "fichiers du système, droits, puis relance".into()));
+            ("La réparation", "Réparer")
+        }
         Action::Uninstall { purge } => {
-            lines.push(row("Désinstaller", "le service, le programme, les fichiers du système".into()));
+            lines.push(row("Retirer", "le service, le programme, les fichiers du système".into()));
             if *purge {
                 lines.push(Line::from(vec![
-                    Span::styled(format!("{:16}", "Effacer"), Style::new().fg(MUTED)),
-                    Span::styled(format!("les données ({}) : comptes, réglages, applis ; le compte « {} »", paths::DATA, paths::USER), Style::new().fg(BAD)),
+                    Span::styled(format!("  {:16}", "Effacer"), s(DIM)),
+                    Span::styled(format!("les données ({}) : comptes, réglages, applis ; le compte « {} »", paths::DATA, paths::USER), bold(BAD)),
                 ]));
             } else {
                 lines.push(row("Garder", format!("les données ({})", paths::DATA)));
             }
             lines.push(row("Garder", "les pilotes (Blackmagic, NDI, NVIDIA)".into()));
+            if *purge {
+                ("Tout effacer", "Tout effacer")
+            } else {
+                ("Désinstaller", "Désinstaller")
+            }
         }
+    };
+    let r = heading(f, body, title, "Vérifiez, puis lancez.");
+    let n = lines.len() as u16 + 2;
+    let [l, _, c] = Layout::vertical([Constraint::Length(n), Constraint::Length(1), Constraint::Min(4)]).areas(r);
+    f.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(Block::bordered().border_type(BorderType::Rounded).border_style(s(LINE)).style(Style::new().bg(PANEL))),
+        l,
+    );
+    choices(f, c, &[(go.into(), String::new()), ("Revenir".into(), String::new())], app.sel);
+}
+
+fn draw_progress(f: &mut Frame, body: Rect, app: &App) {
+    let title = match (app.result, &app.plan.action) {
+        (Some(true), _) => "Terminé",
+        (Some(false), _) => "Arrêté sur une erreur",
+        (None, Action::Uninstall { .. }) => "Désinstallation en cours",
+        (None, Action::Update) => "Mise à jour en cours",
+        (None, Action::Repair) => "Réparation en cours",
+        (None, Action::Install) => "Installation en cours",
+    };
+    let r = heading(f, body, title, "");
+    let spin = ["◐", "◓", "◑", "◒"][(app.tick / 3 % 4) as usize];
+    let mut lines = Vec::new();
+    for (i, l) in app.labels.iter().enumerate() {
+        let (m, detail, style) = match &app.states[i] {
+            StepState::Waiting => (Span::styled(" ·", s(LINE)), String::new(), s(DIM)),
+            StepState::Running(d) => (Span::styled(format!(" {spin}"), bold(ACCENT)), d.clone(), bold(FG)),
+            StepState::Done(d) => (Span::styled(" ✓", bold(OK)), d.clone(), s(FG)),
+            StepState::Failed(e) => (Span::styled(" ✗", bold(BAD)), e.clone(), bold(BAD)),
+        };
+        lines.push(Line::from(vec![m, Span::styled(format!("  {:34}", l), style), Span::styled(detail, s(DIM))]));
     }
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("Entrée pour lancer.", Style::new().fg(ACCENT))));
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
+    lines.push(Line::from(Span::styled(format!("Journal complet : {}", paths::under(&app.root(), paths::LOG).display()), s(DIM))));
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), r);
 }
 
 fn draw_end(f: &mut Frame, body: Rect, app: &App) {
     let ok = app.result == Some(true);
-    let mut lines = vec![
-        Line::from(if ok {
-            Span::styled("Terminé.", Style::new().fg(OK).add_modifier(Modifier::BOLD))
-        } else {
-            Span::styled("Arrêté sur une erreur.", Style::new().fg(BAD).bold())
-        }),
-        Line::from(""),
-    ];
+    let mut lines =
+        vec![Line::from(if ok { Span::styled("✓  Terminé", bold(OK)) } else { Span::styled("✗  Arrêté sur une erreur", bold(BAD)) }), Line::from("")];
     if ok && app.plan.action == Action::Install {
-        lines.push(Line::from(vec![
-            Span::styled("Le cockpit   ", Style::new().fg(MUTED)),
-            Span::styled(format!("http://{}/", app.plan.dns_name), Style::new().fg(ACCENT)),
-        ]));
+        lines.push(Line::from(Span::styled("Le cockpit", s(DIM))));
+        lines.push(Line::from(Span::styled(format!("http://{}/", app.plan.dns_name), bold(ACCENT))));
         for ip in checks::local_ips().iter().take(2) {
-            lines.push(Line::from(vec![Span::raw(" ".repeat(13)), Span::raw(format!("http://{ip}/"))]));
+            lines.push(Line::from(Span::styled(format!("http://{ip}/"), s(FG))));
         }
         lines.push(Line::from(""));
         let mut todo = Vec::new();
@@ -955,19 +1189,19 @@ fn draw_end(f: &mut Frame, body: Rect, app: &App) {
             todo.push("Secure Boot : au redémarrage, enrôler la clé MOK (écran « Perform MOK management »).".into());
         }
         if !todo.is_empty() {
-            lines.push(Line::from(Span::styled("Reste à faire", Style::new().add_modifier(Modifier::BOLD))));
+            lines.push(Line::from(Span::styled("Reste à faire", bold(FG))));
             for t in todo {
-                lines.push(Line::from(format!("  • {t}")));
+                lines.push(Line::from(vec![Span::styled("  •  ", bold(WARN)), Span::styled(t, s(FG))]));
             }
         }
     }
     if !ok {
         if let Some(StepState::Failed(e)) = app.states.iter().find(|s| matches!(s, StepState::Failed(_))) {
-            lines.push(Line::from(Span::styled(e.clone(), Style::new().fg(BAD))));
+            lines.push(Line::from(Span::styled(e.clone(), s(BAD))));
         }
     }
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(format!("Journal : {}", paths::under(&app.root(), paths::LOG).display()), Style::new().fg(MUTED))));
+    lines.push(Line::from(Span::styled(format!("Journal : {}", paths::under(&app.root(), paths::LOG).display()), s(DIM))));
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
 }
 
@@ -976,49 +1210,177 @@ mod tests {
     use super::*;
     use ratatui::{backend::TestBackend, Terminal};
 
+    fn render(app: &App, w: u16, h: u16) -> (Vec<String>, ratatui::buffer::Buffer) {
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        term.draw(|f| draw(f, app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        let rows = (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>()).collect();
+        (rows, buf)
+    }
+
+    fn key(app: &mut App, c: KeyCode) {
+        app.key(KeyEvent::new(c, KeyModifiers::NONE));
+    }
+
+    fn typed(app: &mut App, t: &str) {
+        for c in t.chars() {
+            key(app, KeyCode::Char(c));
+        }
+    }
+
     #[test]
-    fn black_background_everywhere() {
+    fn every_screen_has_a_dark_background() {
         let mut app = new_app(Args::default());
-        for screen in [Screen::Welcome, Screen::Hardware, Screen::Summary] {
+        app.flow = app.install_flow();
+        for screen in [Screen::Welcome, Screen::Dns, Screen::Timezone, Screen::Blackmagic, Screen::BlackmagicWait, Screen::Firewall, Screen::Summary] {
             app.screen = screen;
-            app.dv_waiting = screen == Screen::Hardware;
-            let mut term = Terminal::new(TestBackend::new(110, 36)).unwrap();
-            term.draw(|f| draw(f, &app)).unwrap();
-            let buf = term.backend().buffer();
-            assert!(buf.content().iter().all(|c| c.bg == BG), "{screen:?}");
+            let (_, buf) = render(&app, 110, 36);
+            assert!(buf.content().iter().all(|c| c.bg != Color::Reset), "{screen:?}");
             assert!(buf.content().iter().all(|c| c.fg != Color::Reset), "{screen:?}");
         }
     }
 
     #[test]
+    fn the_selected_choice_is_a_full_bar() {
+        let mut app = new_app(Args::default());
+        app.flow = vec![Screen::Firewall, Screen::Summary];
+        app.screen = Screen::Firewall;
+        key(&mut app, KeyCode::Down);
+        let (rows, buf) = render(&app, 110, 30);
+        let y = rows.iter().position(|r| r.contains("▶  Ne pas toucher")).unwrap();
+        let bar = (0..110).filter(|x| buf[(*x, y as u16)].bg == ACCENT).count();
+        assert!(bar > 60, "{bar}");
+        assert!(rows.iter().any(|r| r.contains("Étape 1 sur 2")));
+    }
+
+    #[test]
+    fn a_whole_install_step_by_step() {
+        let mut app = new_app(Args { root: Some("/tmp/strata-ui-test".into()), ..Args::default() });
+        app.cards = 1;
+        app.dv_installed = None;
+        app.ndi_present = Some("/usr/local/lib/libndi.so".into());
+        app.gpu_nvidia = false;
+        app.gpu_vaapi = Vec::new();
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(app.screen, Screen::Checks);
+        app.checks = Some(Vec::new());
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(app.screen, Screen::Dns);
+        typed(&mut app, "pas un nom");
+        key(&mut app, KeyCode::Enter);
+        assert!(app.error.is_some());
+        app.dns.value = "strata01.regie.lan".into();
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(app.screen, Screen::Name);
+        assert_eq!(app.name.value, "strata01");
+        key(&mut app, KeyCode::Enter);
+        assert_eq!((app.screen, app.plan.name.as_str()), (Screen::Timezone, "strata01"));
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(app.screen, Screen::Apps);
+        key(&mut app, KeyCode::Enter);
+        // Une carte Blackmagic, NDI déjà là, pas de GPU à équiper : Blackmagic, puis le pare-feu.
+        assert_eq!(app.screen, Screen::Blackmagic);
+        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(app.screen, Screen::Firewall);
+        key(&mut app, KeyCode::Enter);
+        assert!(app.plan.firewall);
+        assert_eq!(app.screen, Screen::AdminUser);
+        key(&mut app, KeyCode::Enter);
+        typed(&mut app, "motdepasse");
+        key(&mut app, KeyCode::Enter);
+        typed(&mut app, "autrechose");
+        key(&mut app, KeyCode::Enter);
+        assert!(app.error.is_some());
+        typed(&mut app, "motdepasse");
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(app.screen, Screen::Summary);
+        assert_eq!(app.plan.admin, Some(("admin".into(), "motdepasse".into())));
+        // Échap revient en arrière, écran par écran.
+        key(&mut app, KeyCode::Esc);
+        assert_eq!(app.screen, Screen::AdminPassword);
+    }
+
+    #[test]
     fn the_copy_commands_stay_on_one_line() {
         let mut app = new_app(Args::default());
-        app.screen = Screen::Hardware;
-        app.dv_waiting = true;
-        let mut term = Terminal::new(TestBackend::new(130, 36)).unwrap();
-        term.draw(|f| draw(f, &app)).unwrap();
-        let buf = term.backend().buffer();
-        let rows: Vec<String> = (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>()).collect();
+        app.flow = app.install_flow();
+        app.screen = Screen::BlackmagicWait;
+        let (rows, _) = render(&app, 130, 36);
         if std::env::var("SHOW").is_ok() {
             println!("{}", rows.join("\n"));
         }
         let line = |start: &str| rows.iter().map(|r| r.trim()).find(|r| r.starts_with(start)).map(str::to_string);
         assert!(line("scp ~/Downloads/Blackmagic_Desktop_Video_Linux_* ").unwrap().ends_with(':'));
         assert!(line("Get-ChildItem $HOME\\Downloads\\Blackmagic_Desktop_Video_Linux_* | % { scp $_.FullName ").unwrap().ends_with(": }"));
-        // Rien d'autre sur la ligne d'une commande (pas de cadre).
         assert!(!rows.iter().any(|r| r.contains('│')));
     }
 
     #[test]
-    fn the_license_says_how_to_accept() {
+    fn the_license_is_accepted_or_refused() {
         let mut app = new_app(Args::default());
-        app.screen = Screen::License;
+        app.flow = vec![Screen::Ndi, Screen::Firewall, Screen::Summary];
+        app.screen = Screen::Ndi;
         app.ndi_sdk = Some(ndi::Sdk { lib: "/tmp/libndi.so.6".into(), license: "NDI SDK License Agreement\nTerms.".into() });
-        let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
-        term.draw(|f| draw(f, &app)).unwrap();
-        let buf = term.backend().buffer();
-        let text: String = buf.content().iter().map(|c| c.symbol()).collect();
-        assert!(text.contains("NDI SDK License Agreement"));
-        assert!(text.contains(" A   j'accepte la licence") && text.contains(" R   je refuse"));
+        app.go(Screen::License);
+        let (rows, _) = render(&app, 120, 30);
+        if std::env::var("SHOW").is_ok() {
+            println!("{}", rows.join("\n"));
+        }
+        let text = rows.join("\n");
+        assert!(text.contains("NDI SDK License Agreement") && text.contains("▶  J'accepte la licence") && text.contains("Je refuse"));
+        key(&mut app, KeyCode::Enter);
+        assert_eq!((app.screen, app.plan.ndi.is_some()), (Screen::Firewall, true));
+    }
+
+    /// Des captures en HTML (couleurs comprises) : `SNAP_DIR=… cargo test -p strata-install snapshots -- --ignored`.
+    #[test]
+    #[ignore]
+    fn snapshots() {
+        let dir = PathBuf::from(std::env::var("SNAP_DIR").unwrap());
+        let mut app = new_app(Args::default());
+        app.flow = app.install_flow();
+        if !app.flow.contains(&Screen::Blackmagic) {
+            app.flow.insert(5, Screen::Blackmagic);
+        }
+        app.installed = Some("0.3.6".into());
+        app.dns.value = "strata01.regie.lan".into();
+        app.plan.dns_name = "strata01.regie.lan".into();
+        app.plan.name = "Régie A".into();
+        app.plan.apps = vec!["DamienP2/strata-cut".into()];
+        app.plan.admin = Some(("admin".into(), "x".into()));
+        app.checks = Some(checks::system(true));
+        app.cards = 2;
+        let color = |c: Color| match c {
+            Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+            _ => "#0b0d13".into(),
+        };
+        for (name, screen, sel) in [
+            ("1-welcome", Screen::Welcome, 0),
+            ("2-checks", Screen::Checks, 0),
+            ("3-dns", Screen::Dns, 0),
+            ("4-timezone", Screen::Timezone, 1),
+            ("5-blackmagic", Screen::Blackmagic, 0),
+            ("6-wait", Screen::BlackmagicWait, 0),
+            ("7-firewall", Screen::Firewall, 0),
+            ("8-summary", Screen::Summary, 0),
+            ("9-menu", Screen::Menu, 2),
+        ] {
+            app.screen = screen;
+            app.sel = sel;
+            let (_, buf) = render(&app, 120, 34);
+            let mut html = String::from("<html><body style='margin:0;background:#000'><pre style='margin:0;font:15px/1.25 DejaVu Sans Mono,monospace'>");
+            for y in 0..buf.area.height {
+                for x in 0..buf.area.width {
+                    let c = &buf[(x, y)];
+                    let sym = c.symbol().replace('&', "&amp;").replace('<', "&lt;");
+                    let w = if c.modifier.contains(Modifier::BOLD) { "font-weight:bold;" } else { "" };
+                    html.push_str(&format!("<span style='color:{};background:{};{w}'>{sym}</span>", color(c.fg), color(c.bg)));
+                }
+                html.push('\n');
+            }
+            html.push_str("</pre></body></html>");
+            std::fs::write(dir.join(format!("{name}.html")), html).unwrap();
+        }
     }
 }
