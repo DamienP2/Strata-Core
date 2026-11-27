@@ -112,6 +112,10 @@ export interface NmosSettings {
   port: number;
   /** L'interface où le Core s'annonce ; vide : celle de gestion. */
   interface: string;
+  /** Les contrôleurs autorisés (adresses, réseaux) ; vide : tous. */
+  allowed?: string[];
+  /** Les pages web autorisées à brancher (contrôleur dans un navigateur). */
+  origins?: string[];
 }
 
 /** L'état de NMOS (`GET /api/hardware/nmos`). */

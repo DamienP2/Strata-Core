@@ -2230,6 +2230,7 @@ dependencies = [
  "clap",
  "directories",
  "flate2",
+ "futures-util",
  "gethostname",
  "http-body-util",
  "hyper",

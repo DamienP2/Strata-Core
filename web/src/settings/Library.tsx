@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowUpRight, Cloud, LayoutGrid, PackagePlus, Power, RotateCw, ScrollText, Server } from 'lucide-react';
 import { Badge, Card, Empty, Field, FieldGrid, PageHead, Switch, formatDuration, openAppTab, t, tn, toast } from '@strata/ui';
 import { api } from '../api';
-import { friendly } from '../errors';
+import { friendly, pollError } from '../errors';
 import { appIcon } from '../icons';
 import { navigate } from '../router';
 import { InstallModal, JobLine, RemoveCard, SourceCard, running, type Job } from './Install';
@@ -74,7 +74,7 @@ export function useApps() {
       setCore(r.core);
       setJobs(r.jobs);
     } catch (e) {
-      toast(friendly(e), 'error');
+      pollError(e);
     }
   }, []);
   useEffect(() => {

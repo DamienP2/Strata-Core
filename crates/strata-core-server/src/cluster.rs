@@ -404,10 +404,10 @@ fn forget_master(s: &AppState) {
     let _ = s.cluster.save(&f2);
     *s.cluster.master_ok.lock().unwrap() = None;
     *s.cluster.master_error.lock().unwrap() = None;
-    let mut cfg = (**s.config.load()).clone();
-    cfg.member_url = None;
-    let _ = cfg.save(&s.data_dir);
-    s.config.store(Arc::new(cfg));
+    let _ = s.update_config(|c| {
+        c.member_url = None;
+        Ok(())
+    });
 }
 
 // ---------- Les routes ----------
@@ -610,10 +610,15 @@ async fn join(State(s): State<Shared>, CurrentUser(me): CurrentUser, headers: He
         drop(f);
         s.cluster.save(&f2).map_err(bad)?;
     }
-    let mut cfg2 = (**cfg).clone();
-    cfg2.member_url = Some(my_url);
-    cfg2.save(&s.data_dir).map_err(|e| bad(format!("cannot save the settings: {e}")))?;
-    s.config.store(Arc::new(cfg2));
+    let s2 = s.clone();
+    blocking(move || {
+        s2.update_config(|c| {
+            c.member_url = Some(my_url);
+            Ok(())
+        })
+    })
+    .await?
+    .map_err(bad)?;
     tracing::info!("joined the cockpit of {} ({}) by {}", m.name, m.url, me.username);
     Ok(Json(json!({"ok": true, "master": {"name": m.name, "url": m.url}})))
 }

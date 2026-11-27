@@ -52,6 +52,7 @@ pub fn app(s: Shared, web_dir: Option<PathBuf>) -> Router {
     router
         .layer(axum::middleware::from_fn_with_state(s.clone(), guard::csrf))
         .layer(axum::middleware::from_fn(guard::every_answer))
+        .layer(axum::middleware::from_fn_with_state(s.clone(), auth::refresh_cookie))
         .layer(axum::middleware::from_fn_with_state(s.clone(), relay::relay))
         .layer(axum::middleware::from_fn_with_state(s.clone(), tls::redirect))
         .with_state(s)
@@ -144,7 +145,7 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
     let keeper = {
         let s = s.clone();
         tokio::spawn(async move {
-            let mut tick = 0u64;
+            let mut tls_at = std::time::Instant::now();
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 apps::reconcile(&s).await;
@@ -152,9 +153,14 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
                 nmos::apply(&s).await;
                 let s2 = s.clone();
                 let _ = tokio::task::spawn_blocking(move || s2.previews.sweep()).await;
-                updates::tick(&s).await;
-                tick += 1;
-                if tick.is_multiple_of(12 * 3600 / 5) {
+                // La recherche quotidienne à part : sans internet, ses délais ne figent pas ce
+                // gardien.
+                let s2 = s.clone();
+                tokio::spawn(async move { updates::tick(&s2).await });
+                // Le certificat fait par Strata : revu toutes les 12 h (à l'horloge, pas au compte
+                // des tours).
+                if tls_at.elapsed() >= std::time::Duration::from_secs(12 * 3600) {
+                    tls_at = std::time::Instant::now();
                     tls::apply(&s).await;
                 }
             }

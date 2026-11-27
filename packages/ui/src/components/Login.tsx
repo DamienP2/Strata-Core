@@ -81,7 +81,7 @@ export function Login({ module, serverName, setup = false, sso, ssoHref, notice,
       if (!setup && status === 401) setError(t('Wrong user name or password.'));
       else if (status === 429) setError(t('Too many tries: wait a moment, then try again.'));
       else if (!setup && status === 403 && sso) setError(t('Sign in with {name}', { name: sso }));
-      else setError((err as Error).message || t('The server does not answer.'));
+      else setError((err as Error).message ? t((err as Error).message) : t('The server does not answer.'));
     }
     setBusy(false);
   };

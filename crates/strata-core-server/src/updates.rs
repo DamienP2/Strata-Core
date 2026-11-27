@@ -297,6 +297,8 @@ pub fn replace_binary(exe: &Path, archive: &Path, expected: Option<&Version>) ->
     let previous = dir.join(format!("{name}.previous"));
     std::fs::copy(exe, &previous).map_err(|e| format!("cannot keep the current Core: {e}"))?;
     std::fs::rename(&new.0, exe).map_err(|e| format!("cannot replace {}: {e}", exe.display()))?;
+    // À confirmer : s'il ne tient pas une minute après trois démarrages, l'ancien revient.
+    let _ = std::fs::write(pending_path(exe), "0");
     // Les bibliothèques livrées avec lui (MXL, MTL), à côté : `<bin>/../lib`.
     match put_libs(archive, &dir.join("../lib")) {
         Ok(n) if n > 0 => tracing::info!("{n} library files put in {}", dir.join("../lib").display()),
@@ -305,6 +307,41 @@ pub fn replace_binary(exe: &Path, archive: &Path, expected: Option<&Version>) ->
     }
     tracing::info!("Core {version} put in place of {} (previous kept)", strata_core::VERSION);
     Ok(version)
+}
+
+/// Le marqueur d'une mise à jour pas encore confirmée : `<exe>.pending`, le nombre de démarrages.
+fn pending_path(exe: &Path) -> PathBuf {
+    let mut p = exe.as_os_str().to_owned();
+    p.push(".pending");
+    PathBuf::from(p)
+}
+
+/// Au démarrage : un Core tout juste mis à jour qui a déjà démarré trois fois sans tenir une minute
+/// (il plante, ne trouve pas ses bibliothèques…) laisse la place à l'ancien. Vrai si l'ancien est
+/// remis : il faut alors le relancer.
+pub fn guard_start(exe: &Path) -> bool {
+    let marker = pending_path(exe);
+    let Ok(text) = std::fs::read_to_string(&marker) else { return false };
+    let tries: u32 = text.trim().parse().unwrap_or(0) + 1;
+    let previous = exe.with_file_name(format!("{}.previous", exe.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()));
+    if tries > 3 && previous.exists() {
+        let _ = std::fs::remove_file(&marker);
+        match std::fs::rename(&previous, exe) {
+            Ok(()) => {
+                eprintln!("strata-core: the new Core did not hold after 3 starts: the previous one is back");
+                return true;
+            }
+            Err(e) => eprintln!("strata-core: cannot put the previous Core back: {e}"),
+        }
+        return false;
+    }
+    let _ = std::fs::write(&marker, tries.to_string());
+    false
+}
+
+/// Le Core tient (une minute de marche) : la mise à jour est confirmée.
+pub fn confirm_start(exe: &Path) {
+    let _ = std::fs::remove_file(pending_path(exe));
 }
 
 /// Sort `lib/` de l'archive du Core (MXL ; MTL et DPDK sous `mtl/`) dans `dir`.
@@ -469,12 +506,15 @@ struct SettingsBody {
 
 async fn settings(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(b): Json<SettingsBody>) -> ApiResult<Json<Value>> {
     require(me.admin)?;
-    let mut cfg = (**s.config.load()).clone();
-    cfg.updates.daily = b.daily;
-    let dir = s.data_dir.clone();
-    let saved = cfg.clone();
-    blocking(move || saved.save(&dir)).await?.map_err(|e| bad(format!("cannot save the settings: {e}")))?;
-    s.config.store(std::sync::Arc::new(cfg));
+    let s2 = s.clone();
+    blocking(move || {
+        s2.update_config(|cfg| {
+            cfg.updates.daily = b.daily;
+            Ok(())
+        })
+    })
+    .await?
+    .map_err(bad)?;
     Ok(Json(state(&s)))
 }
 
@@ -505,8 +545,33 @@ async fn upload_core(State(s): State<Shared>, CurrentUser(me): CurrentUser, mut 
         }
         f.flush().await.map_err(crate::api::internal)?;
     }
+    // Une mise à jour à la fois (depuis GitHub ou une archive) : le même fichier `.new` et un
+    // seul redémarrage.
+    {
+        let mut slot = s.updates.job.lock().unwrap();
+        if slot.as_ref().is_some_and(|j| j.running()) {
+            return Err((StatusCode::CONFLICT, "the Core is already being updated".into()));
+        }
+        *slot = Some(Job::new("archive"));
+    }
     let exe = s.updates.exe();
-    let v = blocking(move || replace_binary(&exe, &tmp.0, None)).await?.map_err(bad)?;
+    let r = blocking(move || replace_binary(&exe, &tmp.0, None)).await?;
+    let v = match r {
+        Ok(v) => {
+            s.updates.set_job(|j| {
+                j.version = Some(v.to_string());
+                j.finish(Step::Done);
+            });
+            v
+        }
+        Err(e) => {
+            s.updates.set_job(|j| {
+                j.error = Some(e.clone());
+                j.finish(Step::Failed);
+            });
+            return Err(bad(e));
+        }
+    };
     tracing::info!("Core {v} installed from an archive by {}", me.username);
     restart_soon(&s);
     Ok(Json(json!({ "version": v.to_string() })))

@@ -197,8 +197,17 @@ async fn check_then_update_the_core() {
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
     assert!(srv.s.restart_asked());
-    let leftovers: Vec<String> = std::fs::read_dir(srv.dir.join("bin")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into()).collect();
-    assert_eq!(leftovers.len(), 2, "{leftovers:?}");
+    let mut leftovers: Vec<String> = std::fs::read_dir(srv.dir.join("bin")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into()).collect();
+    leftovers.sort();
+    // Le nouveau, l'ancien, et le marqueur à confirmer (l'ancien revient s'il ne tient pas).
+    assert_eq!(leftovers, ["strata-core", "strata-core.pending", "strata-core.previous"], "{leftovers:?}");
+    // Trois démarrages ratés : l'ancien est remis.
+    for _ in 0..3 {
+        assert!(!strata_core_server::updates::guard_start(&srv.exe));
+    }
+    assert!(strata_core_server::updates::guard_start(&srv.exe));
+    assert_eq!(std::fs::read_to_string(&srv.exe).unwrap(), "old core");
+    assert!(!srv.dir.join("bin/strata-core.pending").exists());
 }
 
 #[tokio::test]

@@ -87,6 +87,8 @@ struct Watch {
     log: Mutex<VecDeque<LogLine>>,
     /// La tâche qui la garde en marche, et de quoi l'arrêter.
     task: Mutex<Option<Keeper>>,
+    /// Un démarrage, un arrêt ou une relance à la fois (le gardien, l'API, une mise à jour).
+    ops: tokio::sync::Mutex<()>,
 }
 
 /// L'ordre d'arrêt, la tâche, et comment elle a été lancée.
@@ -149,45 +151,58 @@ impl Supervisor {
     /// (une mise à jour a changé sa fiche) : relancée.
     pub async fn start(&self, id: &str, launch: Launch) {
         let w = self.watch(id);
-        let same = w.task.lock().unwrap().as_ref().is_some_and(|(_, _, l)| *l == launch);
-        if same {
-            return;
-        }
-        self.stop(id).await;
-        {
-            let mut st = w.status.lock().unwrap();
-            st.restarts = 0;
-            st.exit = None;
-        }
-        let (tx, rx) = watch::channel(false);
-        let handle = tokio::spawn(keep(id.to_string(), w.clone(), launch.clone(), rx));
-        *w.task.lock().unwrap() = Some((tx, handle, launch));
+        let _one = w.ops.lock().await;
+        start_now(id, &w, launch).await;
     }
 
     /// Arrête l'appli (et attend qu'elle soit arrêtée). Son journal reste.
     pub async fn stop(&self, id: &str) {
         let Some(w) = self.apps.lock().unwrap().get(id).cloned() else { return };
-        let task = w.task.lock().unwrap().take();
-        if let Some((tx, handle, _)) = task {
-            let _ = tx.send(true);
-            let _ = handle.await;
-        }
+        let _one = w.ops.lock().await;
+        stop_now(&w).await;
     }
 
     /// Arrête puis relance.
     pub async fn restart(&self, id: &str, launch: Launch) {
-        self.stop(id).await;
-        self.watch(id).line("core", "restart asked");
-        self.start(id, launch).await;
+        let w = self.watch(id);
+        let _one = w.ops.lock().await;
+        stop_now(&w).await;
+        w.line("core", "restart asked");
+        start_now(id, &w, launch).await;
     }
 
     /// Arrête tout (à l'arrêt du Core).
     pub async fn stop_all(&self) {
         let ids: Vec<String> = self.apps.lock().unwrap().keys().cloned().collect();
-        let stops = ids.iter().map(|id| self.stop(id));
-        for s in stops {
-            s.await;
-        }
+        // Toutes ensemble : le délai d'arrêt de systemd (20 s) tient même avec plusieurs applis
+        // lentes à finir (10 s chacune au plus).
+        futures_util::future::join_all(ids.iter().map(|id| self.stop(id))).await;
+    }
+}
+
+/// Lance (sous `ops`) ; déjà lancée de la même façon : rien ; autrement : relancée.
+async fn start_now(id: &str, w: &Arc<Watch>, launch: Launch) {
+    let same = w.task.lock().unwrap().as_ref().is_some_and(|(_, _, l)| *l == launch);
+    if same {
+        return;
+    }
+    stop_now(w).await;
+    {
+        let mut st = w.status.lock().unwrap();
+        st.restarts = 0;
+        st.exit = None;
+    }
+    let (tx, rx) = watch::channel(false);
+    let handle = tokio::spawn(keep(id.to_string(), w.clone(), launch.clone(), rx));
+    *w.task.lock().unwrap() = Some((tx, handle, launch));
+}
+
+/// Arrête (sous `ops`) et attend la fin.
+async fn stop_now(w: &Watch) {
+    let task = w.task.lock().unwrap().take();
+    if let Some((tx, handle, _)) = task {
+        let _ = tx.send(true);
+        let _ = handle.await;
     }
 }
 
@@ -257,6 +272,15 @@ async fn keep(id: String, w: Arc<Watch>, l: Launch, mut stop: watch::Receiver<bo
                     w.set(RunState::Stopped, None);
                     return;
                 };
+                // Sortie seule : ses enfants (un ffmpeg qui tient un port, une carte) partent avec
+                // elle avant qu'elle soit relancée.
+                #[cfg(unix)]
+                if let Some(pid) = pid {
+                    // SAFETY: a signal to the app's own process group (it was made its leader).
+                    unsafe {
+                        libc::kill(-(pid as i32), libc::SIGKILL);
+                    }
+                }
                 let how = match r {
                     Ok(st) => describe(st),
                     Err(e) => e.to_string(),

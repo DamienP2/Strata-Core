@@ -7,6 +7,7 @@ import { api } from '../../api';
 import { friendly } from '../../errors';
 import { HwSaveBar, useHardware } from './common';
 import { Meter } from '../health/Resources';
+import { TagInput } from '../TagInput';
 import { FlowsCard, InputsCard, OutputsCard, usePoll } from './Inputs';
 import { DeckLink3D, Pcie3D, SDI_COLOR, nicLook, printedOf, type Jack } from './Card3D';
 import { cardOf, editCard, editHw, loadHw, type DetectedCard, type Flow, type Fn, type Capacity, type HwConfig, type Nic, type NmosStatus, type Port, type Snapshot } from './store';
@@ -386,6 +387,14 @@ function NmosCard({ draft, opts, status }: { draft: HwConfig; opts: DropOption<s
             </Field>
             <Field label={t('Port')}>
               <NumberField value={n.port} min={1} max={65535} onChange={(v) => set((x) => void (x.port = v))} />
+            </Field>
+          </FieldGrid>
+          <FieldGrid two>
+            <Field label={t('Allowed controllers')} hint={t('Addresses or networks (10.0.0.0/24); empty: any address of this network.')}>
+              <TagInput value={n.allowed ?? []} onChange={(v) => set((x) => void (x.allowed = v))} placeholder="10.10.0.0/24" />
+            </Field>
+            <Field label={t('Web pages allowed to connect')} hint={t('Only for a controller that runs in a web browser (http://10.0.0.5:8080). Others can only read.')}>
+              <TagInput value={n.origins ?? []} onChange={(v) => set((x) => void (x.origins = v))} placeholder="http://10.10.0.5:8080" />
             </Field>
           </FieldGrid>
           {status?.error ? (

@@ -1,5 +1,6 @@
 // Les erreurs du serveur (texte court en anglais) dans la langue de l'interface.
-import { t } from '@strata/ui';
+import { t, toast } from '@strata/ui';
+import { ApiError } from './api';
 
 /** Les erreurs qui portent un nom ou un nombre : leur forme, et le texte à traduire. */
 const SHAPED: [RegExp, string, string[]][] = [
@@ -75,4 +76,11 @@ export function friendly(e: unknown): string {
     if (m) return t(text, Object.fromEntries(names.map((n, i) => [n, m[i + 1]])));
   }
   return t(raw);
+}
+
+/** L'erreur d'un sondage régulier : dite, sauf quand le serveur ne répond pas (il redémarre, ou
+ *  se met à jour : l'état de la connexion le montre déjà, sans un message toutes les secondes). */
+export function pollError(e: unknown) {
+  if (e instanceof ApiError && e.status === 0) return;
+  toast(friendly(e), 'error');
 }

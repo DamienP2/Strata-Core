@@ -92,6 +92,18 @@ fn run(a: RunArgs) -> anyhow::Result<()> {
     }
     // Retenu avant tout : une mise à jour remplace le fichier, et son chemin ne se relirait plus.
     let exe = std::env::current_exe()?;
+    // Une mise à jour qui ne tient pas : l'ancien Core est remis et relancé.
+    if strata_core_server::updates::guard_start(&exe) {
+        return restart(&exe);
+    }
+    // Une minute de marche confirme une mise à jour.
+    {
+        let exe = exe.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+            strata_core_server::updates::confirm_start(&exe);
+        });
+    }
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     let ending = rt.block_on(strata_core_server::serve(a.bind, data_dir, a.web_dir))?;
     rt.shutdown_timeout(std::time::Duration::from_secs(2));

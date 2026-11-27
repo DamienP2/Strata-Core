@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
 import { ExternalLink, Link2, Plus, Server as ServerIcon, Unlink } from 'lucide-react';
 import { Badge, Card, Empty, Field, Modal, PageHead, confirmDialog, t, timeAgo, tn, toast } from '@strata/ui';
 import { api } from '../api';
-import { friendly } from '../errors';
+import { friendly, pollError } from '../errors';
 
 interface Member {
   id: string;
@@ -100,7 +100,7 @@ export function Servers() {
   const read = () =>
     api<ClusterState>('GET', '/api/cluster')
       .then(setSt)
-      .catch((e) => toast(friendly(e), 'error'));
+      .catch(pollError);
   useEffect(() => {
     void read();
     const id = setInterval(read, 3000);

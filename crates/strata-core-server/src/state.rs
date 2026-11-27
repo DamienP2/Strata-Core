@@ -66,6 +66,8 @@ pub struct AppState {
     pub started_at: Instant,
     /// Le Core s'arrête : les entrées et sorties ne sont plus (re)lancées.
     pub stopping: AtomicBool,
+    /// Une modification de `config.json` à la fois (voir `update_config`).
+    config_write: Mutex<()>,
 }
 
 impl AppState {
@@ -101,6 +103,7 @@ impl AppState {
             restart_signal: tokio::sync::Notify::new(),
             started_at: Instant::now(),
             stopping: AtomicBool::new(false),
+            config_write: Mutex::new(()),
             data_dir,
         })
     }
@@ -119,6 +122,18 @@ impl AppState {
     pub fn ask_restart(&self) {
         self.restart.store(true, Ordering::SeqCst);
         self.restart_signal.notify_waiters();
+    }
+
+    /// Change les réglages du serveur : relus, changés par `f`, enregistrés puis pris, sous un
+    /// verrou (deux modifications en même temps, le nom et le rattachement au cockpit par exemple,
+    /// ne s'effacent pas l'une l'autre). Bloquant (écrit le fichier).
+    pub fn update_config<R>(&self, f: impl FnOnce(&mut ServerConfig) -> Result<R, String>) -> Result<R, String> {
+        let _one = self.config_write.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cfg = (**self.config.load()).clone();
+        let r = f(&mut cfg)?;
+        cfg.save(&self.data_dir).map_err(|e| format!("cannot save the settings: {e}"))?;
+        self.config.store(Arc::new(cfg));
+        Ok(r)
     }
 
     pub fn restart_asked(&self) -> bool {

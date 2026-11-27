@@ -833,4 +833,10 @@ export const fr: Record<string, string> = {
   'Still room to receive': 'Encore en réception',
   'Still room to send': 'Encore en envoi',
   'The ST 2110 flows changed meanwhile (NMOS or another administrator): check them, then save again.': 'Les flux ST 2110 ont changé entre-temps (NMOS ou un autre administrateur) : vérifiez-les, puis enregistrez de nouveau.',
+  'Allowed controllers': 'Contrôleurs autorisés',
+  'Addresses or networks (10.0.0.0/24); empty: any address of this network.': 'Adresses ou réseaux (10.0.0.0/24) ; vide : toute adresse de ce réseau.',
+  'Web pages allowed to connect': 'Pages web autorisées à brancher',
+  'Only for a controller that runs in a web browser (http://10.0.0.5:8080). Others can only read.': 'Seulement pour un contrôleur qui tourne dans un navigateur (http://10.0.0.5:8080). Les autres pages ne peuvent que lire.',
+  'this address may not use the NMOS API': "cette adresse ne peut pas utiliser l'API NMOS",
+  'the hardware settings changed meanwhile (NMOS or another administrator)': 'les réglages du matériel ont changé entre-temps (NMOS ou un autre administrateur)',
 };

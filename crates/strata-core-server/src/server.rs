@@ -8,7 +8,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{net::IpAddr, sync::Arc, time::Duration};
+use std::{net::IpAddr, time::Duration};
 
 use crate::{
     api::{bad, blocking, require, ApiResult},
@@ -99,12 +99,15 @@ async fn write(State(s): State<Shared>, CurrentUser(me): CurrentUser, headers: H
     if !valid_timezone(b.timezone.trim()) {
         return Err(bad(format!("not a time zone: {}", b.timezone)));
     }
-    let mut cfg = (**s.config.load()).clone();
-    let renamed = cfg.dns_name != dns;
-    cfg.name = name;
-    cfg.dns_name = dns;
-    cfg.timezone = b.timezone.trim().to_string();
-    save(&s, cfg).await?;
+    let tz = b.timezone.trim().to_string();
+    let renamed = update(&s, move |cfg| {
+        let renamed = cfg.dns_name != dns;
+        cfg.name = name;
+        cfg.dns_name = dns;
+        cfg.timezone = tz;
+        Ok(renamed)
+    })
+    .await?;
     tracing::info!("server settings changed by {}", me.username);
     if renamed {
         // Le certificat fait par Strata suit le nouveau nom.
@@ -113,12 +116,10 @@ async fn write(State(s): State<Shared>, CurrentUser(me): CurrentUser, headers: H
     read(State(s), CurrentUser(me), headers).await
 }
 
-async fn save(s: &Shared, cfg: ServerConfig) -> ApiResult<()> {
-    let dir = s.data_dir.clone();
-    let saved = cfg.clone();
-    blocking(move || saved.save(&dir)).await?.map_err(|e| bad(format!("cannot save the settings: {e}")))?;
-    s.config.store(Arc::new(cfg));
-    Ok(())
+/// Change les réglages du serveur sous le verrou d'écriture (`AppState::update_config`).
+async fn update<R: Send + 'static>(s: &Shared, f: impl FnOnce(&mut ServerConfig) -> Result<R, String> + Send + 'static) -> ApiResult<R> {
+    let s2 = s.clone();
+    blocking(move || s2.update_config(f)).await?.map_err(bad)
 }
 
 /// Le nom DNS et ses sous-domaines mènent-ils à ce serveur ?
@@ -197,13 +198,16 @@ async fn set_https(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(b
     if s.tls.http_addr().is_some_and(|a| a.port() == b.port) {
         return Err(bad(format!("port {} is already the HTTP one", b.port)));
     }
-    let mut cfg = (**s.config.load()).clone();
-    if b.mode == HttpsMode::Company && s.tls.company(&cfg.dns_name).is_none() {
+    if b.mode == HttpsMode::Company && s.tls.company(&s.config.load().dns_name).is_none() {
         return Err(bad("import the company certificate first"));
     }
-    cfg.https.mode = b.mode;
-    cfg.https.port = b.port;
-    save(&s, cfg).await?;
+    let (mode, port) = (b.mode, b.port);
+    update(&s, move |cfg| {
+        cfg.https.mode = mode;
+        cfg.https.port = port;
+        Ok(())
+    })
+    .await?;
     tracing::info!("HTTPS set to {:?} on port {} by {}", b.mode, b.port, me.username);
     tls::apply(&s).await;
     Ok(Json(https_state(&s).await))

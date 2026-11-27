@@ -573,6 +573,38 @@ pub fn routes() -> Router<Shared> {
         .route("/api/auth/setup", post(setup))
 }
 
+/// La session reste ouverte tant qu'on s'en sert (côté serveur) ; le cookie aussi : il est
+/// renvoyé, au plus une fois par jour et par session, sur une réponse à une requête qui le porte.
+pub async fn refresh_cookie(axum::extract::State(s): axum::extract::State<Shared>, req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let token = cookie(req.headers(), COOKIE);
+    let headers = req.headers().clone();
+    let mut res = next.run(req).await;
+    let Some(token) = token else { return res };
+    if res.headers().contains_key(header::SET_COOKIE) || !res.status().is_success() {
+        return res;
+    }
+    static LAST: Mutex<Option<HashMap<String, i64>>> = Mutex::new(None);
+    let now = unix_now() as i64 * 1000;
+    let due = {
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        let map = last.get_or_insert_with(HashMap::new);
+        map.retain(|_, at| now - *at < 86_400_000);
+        let key = token_key(&token);
+        match map.entry(key) {
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(now);
+                true
+            }
+            std::collections::hash_map::Entry::Occupied(_) => false,
+        }
+    };
+    if due && s.auth.user_for_token(&token).is_some_and(|u| !u.disabled) {
+        let domain = s.config.load().cookie_domain(host(&headers));
+        res.headers_mut().insert(header::SET_COOKIE, session_cookie(&token, &headers, domain.as_deref()));
+    }
+    res
+}
+
 /// Ouvre une session : `{user, token}` et le cookie.
 pub fn signed_in(s: &Shared, user: &User, headers: &HeaderMap) -> Response {
     let token = s.auth.open_session(&user.id);

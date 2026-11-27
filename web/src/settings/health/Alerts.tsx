@@ -86,7 +86,7 @@ export function AlertsPage({ onCount }: { onCount?: (n: number) => void }) {
     setSaving(true);
     try {
       const r = await api<{ settings: Settings }>('PUT', '/api/health/alerts', draft);
-      setSt({ ...st, settings: r.settings });
+      setSt((cur) => cur && { ...cur, settings: r.settings });
       setDraft(r.settings);
       toast(t('Settings saved'));
     } catch (e) {

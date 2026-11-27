@@ -54,6 +54,7 @@ x509-parser = "0.18.1"
 if-addrs = "0.15.0"
 # NMOS : l'annonce mDNS du nœud (IS-04 en pair-à-pair).
 mdns-sd = "0.22"
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tower = { version = "0.5", features = ["util"] }
 # Matériel : les cartes DeckLink (pont vers le SDK), la bibliothèque NDI (chargée au lancement).

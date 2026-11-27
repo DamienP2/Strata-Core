@@ -155,6 +155,33 @@ fn give_back(dir: &Path, file: &str) {
     let _ = (dir, file);
 }
 
+/// Comme `give_back`, pour un dossier et tout ce qu'il contient.
+fn give_back_tree(dir: &Path, rel: &str) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // SAFETY: geteuid n'a aucune précondition.
+        if unsafe { libc::geteuid() } != 0 {
+            return;
+        }
+        let Ok(m) = std::fs::metadata(dir) else { return };
+        if m.uid() == 0 {
+            return;
+        }
+        fn walk(p: &Path, uid: u32, gid: u32) {
+            let _ = std::os::unix::fs::lchown(p, Some(uid), Some(gid));
+            if p.is_dir() && !p.is_symlink() {
+                for e in std::fs::read_dir(p).into_iter().flatten().flatten() {
+                    walk(&e.path(), uid, gid);
+                }
+            }
+        }
+        walk(&dir.join(rel), m.uid(), m.gid());
+    }
+    #[cfg(not(unix))]
+    let _ = (dir, rel);
+}
+
 fn data_dir(given: Option<PathBuf>) -> anyhow::Result<PathBuf> {
     let dir = crate::cli_data_dir(given);
     std::fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
@@ -256,6 +283,13 @@ pub fn app(cmd: AppCmd) -> anyhow::Result<()> {
                 s.apps.set_active(&app.manifest.id, true).map_err(|e| anyhow!(e))?;
                 println!("{} active", app.manifest.name);
             }
+            // Lancé avec sudo : ce qui vient d'être posé revient au compte du service, qui doit
+            // pouvoir le lire et le mettre à jour.
+            for f in ["apps", "apps.json", "sources.json", "app-secret"] {
+                give_back(&dir, f);
+            }
+            give_back_tree(&dir, &format!("apps/{}", app.manifest.id));
+            give_back_tree(&dir, &format!("app-data/{}", app.manifest.id));
         }
         AppCmd::Deactivate { id, data_dir: d } => {
             let dir = data_dir(d)?;

@@ -432,7 +432,8 @@ fn look(s: &AppState) -> Vec<Problem> {
         }
         for o in cfg.outputs.iter().filter(|o| o.enabled) {
             let Some(st) = s.streams.output_status(&o.id) else { continue };
-            for d in st.destinations.iter().filter(|d| d.state == St::Error) {
+            // En train de réessayer après un échec : toujours en panne (sinon l'alerte bat).
+            for d in st.destinations.iter().filter(|d| d.state == St::Error || (d.state == St::Starting && d.error.is_some())) {
                 let label = o
                     .destinations
                     .iter()
@@ -523,9 +524,11 @@ fn round(s: &AppState) -> Vec<(&'static str, String, String)> {
         if a.enabled && !p.told && (p.once || now - p.since >= delay) {
             p.told = true;
             out.push(("problem", p.key.clone(), p.text.clone()));
-            if p.key == "restart" {
-                *s.alerts.restart_told.lock().unwrap() = true;
-            }
+        }
+        // Le redémarrage n'est qu'un événement : vu un tour (dit si les alertes sont actives),
+        // puis fini — il ne reste pas compté dans les problèmes jusqu'au prochain redémarrage.
+        if p.key == "restart" {
+            *s.alerts.restart_told.lock().unwrap() = true;
         }
     }
     // Fini : dit s'il avait été dit.
@@ -555,7 +558,9 @@ pub fn start(s: &Shared) {
                 continue;
             }
             let s2 = s.clone();
-            tokio::task::spawn_blocking(move || {
+            // Attendu : les messages partent dans l'ordre (un « réglé » jamais avant son problème),
+            // même avec un serveur de courriel lent.
+            let _ = tokio::task::spawn_blocking(move || {
                 let a = s2.alerts.settings.load_full();
                 let server = s2.config.load().name.clone();
                 for (level, key, text) in out {
@@ -574,7 +579,8 @@ pub fn start(s: &Shared) {
                     }
                     recent.push_front(Sent { at: now_ms(), level, text, results });
                 }
-            });
+            })
+            .await;
         }
     });
 }

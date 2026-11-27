@@ -260,14 +260,16 @@ pub(crate) struct ReleaseAsset {
     pub sha256: String,
 }
 
-/// Un client sans limite de durée totale (les archives sont grosses), mais qui n'attend pas un
-/// serveur muet ; les en-têtes d'autorisation ne suivent pas une redirection (le stockage de GitHub).
+/// Un client qui n'attend pas un serveur muet (connexion, réponse), et dont un téléchargement ne
+/// peut pas rester bloqué pour toujours (30 min au plus : les archives sont grosses, les liens
+/// parfois lents) ; les en-têtes d'autorisation ne suivent pas une redirection (le stockage de GitHub).
 pub(crate) fn agent() -> ureq::Agent {
     let tls = ureq::tls::TlsConfig::builder().root_certs(ureq::tls::RootCerts::PlatformVerifier).build();
     ureq::Agent::config_builder()
         .tls_config(tls)
         .timeout_connect(Some(Duration::from_secs(15)))
         .timeout_recv_response(Some(Duration::from_secs(60)))
+        .timeout_recv_body(Some(Duration::from_secs(1800)))
         .max_redirects(5)
         .http_status_as_error(false)
         .user_agent(format!("strata-core/{}", strata_core::VERSION))

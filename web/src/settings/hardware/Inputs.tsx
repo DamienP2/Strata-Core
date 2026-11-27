@@ -68,6 +68,9 @@ export function usePoll<T>(path: string): T | null {
   useEffect(() => {
     if (!visible) return;
     let gone = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // La lecture suivante part une seconde après la réponse : jamais deux en même temps, jamais
+    // une vieille réponse par-dessus une plus récente.
     const read = async () => {
       try {
         const r = await api<T>('GET', path);
@@ -75,12 +78,12 @@ export function usePoll<T>(path: string): T | null {
       } catch {
         /* le serveur redémarre : on réessaie */
       }
+      if (!gone) timer = setTimeout(read, 1000);
     };
     void read();
-    const id = setInterval(read, 1000);
     return () => {
       gone = true;
-      clearInterval(id);
+      clearTimeout(timer);
     };
   }, [path, visible]);
   return data;

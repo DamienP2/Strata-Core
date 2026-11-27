@@ -623,15 +623,18 @@ async fn write(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(mut b
     if b.enabled && !(b.issuer.starts_with("https://") || local) {
         return Err(bad("the issuer is an https:// address"));
     }
-    let mut cfg = (**s.config.load()).clone();
-    if b.client_secret == MASK {
-        b.client_secret = cfg.sso.client_secret.clone();
-    }
-    cfg.sso = b;
-    let dir = s.data_dir.clone();
-    let saved = cfg.clone();
-    blocking(move || saved.save(&dir)).await?.map_err(|e| bad(format!("cannot save the settings: {e}")))?;
-    s.config.store(std::sync::Arc::new(cfg));
+    let s2 = s.clone();
+    blocking(move || {
+        s2.update_config(|cfg| {
+            if b.client_secret == MASK {
+                b.client_secret = cfg.sso.client_secret.clone();
+            }
+            cfg.sso = b;
+            Ok(())
+        })
+    })
+    .await?
+    .map_err(bad)?;
     tracing::info!("SSO settings changed by {}", me.username);
     read(State(s), CurrentUser(me)).await
 }
