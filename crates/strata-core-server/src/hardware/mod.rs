@@ -215,7 +215,12 @@ fn video_pt() -> u8 {
 /// Une vidéo d'après son nom : « 1080i50 », « 720p59.94 », « 2160p25 ».
 pub fn parse_format(s: &str) -> Option<(u32, u32, (u32, u32), bool)> {
     let s = s.trim().to_ascii_lowercase();
-    let (h, rest, interlaced) = if let Some((h, r)) = s.split_once('i') { (h, r, true) } else { let (h, r) = s.split_once('p')?; (h, r, false) };
+    let (h, rest, interlaced) = if let Some((h, r)) = s.split_once('i') {
+        (h, r, true)
+    } else {
+        let (h, r) = s.split_once('p')?;
+        (h, r, false)
+    };
     let height: u32 = h.parse().ok()?;
     let width = match height {
         480 => 720,
@@ -229,11 +234,7 @@ pub fn parse_format(s: &str) -> Option<(u32, u32, (u32, u32), bool)> {
     // En entrelacé, le nom donne les trames par seconde (1080i50 : 25 images).
     let field_rate: f64 = rest.parse().ok()?;
     let frame_rate = if interlaced { field_rate / 2.0 } else { field_rate };
-    let rate = if (frame_rate - frame_rate.round()).abs() < 0.001 {
-        (frame_rate.round() as u32, 1)
-    } else {
-        ((frame_rate.ceil() as u32) * 1000, 1001)
-    };
+    let rate = if (frame_rate - frame_rate.round()).abs() < 0.001 { (frame_rate.round() as u32, 1) } else { ((frame_rate.ceil() as u32) * 1000, 1001) };
     Some((width, height, rate, interlaced))
 }
 

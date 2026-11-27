@@ -19,8 +19,8 @@ use std::{
     thread::JoinHandle,
     time::{Duration, Instant},
 };
-use strata_mxl::Mxl;
 use strata_mtl::{Leg, Mtl, Pmd, Port};
+use strata_mxl::Mxl;
 
 use super::{net, parse_format, Direction, Essence, HardwareConfig, MediaIo, MediaMode};
 
@@ -133,7 +133,8 @@ fn plan(cfg: &HardwareConfig) -> Result<Option<Plan>, String> {
     };
     let mut flows = Vec::new();
     for f in video {
-        let (width, height, rate, interlaced) = if f.format.trim().is_empty() { house } else { parse_format(&f.format).ok_or(format!("{}: unknown format {}", f.name, f.format))? };
+        let (width, height, rate, interlaced) =
+            if f.format.trim().is_empty() { house } else { parse_format(&f.format).ok_or(format!("{}: unknown format {}", f.name, f.format))? };
         let legs = match (r.media_mode, f.blue) {
             (MediaMode::Redundant, Some(b)) => vec![(0, *f.red.ip(), f.red.port()), (1, *b.ip(), b.port())],
             (MediaMode::Separate, _) if f.port == 2 => vec![(1.min(ports.len() - 1), *f.red.ip(), f.red.port())],

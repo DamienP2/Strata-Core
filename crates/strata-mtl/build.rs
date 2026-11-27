@@ -7,12 +7,7 @@ fn main() {
     println!("cargo:rerun-if-changed=shim/mtl.c");
     println!("cargo:rerun-if-changed=include");
     println!("cargo:rerun-if-env-changed=STRATA_MTL_REQUIRED");
-    let r = cc::Build::new()
-        .file("shim/mtl.c")
-        .include("include")
-        .flag_if_supported("-Wno-unused-parameter")
-        .warnings(false)
-        .try_compile("strata_mtl");
+    let r = cc::Build::new().file("shim/mtl.c").include("include").flag_if_supported("-Wno-unused-parameter").warnings(false).try_compile("strata_mtl");
     match r {
         Ok(()) => {
             println!("cargo:rustc-cfg=mtl_shim");

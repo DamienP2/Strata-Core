@@ -236,7 +236,14 @@ impl Mtl {
             let mut err = [0 as c_char; 256];
             // SAFETY: `raw` holds `n` ports; `err` sized as passed.
             let h = unsafe {
-                ffi::smtl_open(raw.as_ptr(), raw.len() as c_int, tai_offset, lc.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()), err.as_mut_ptr(), err.len() as c_int)
+                ffi::smtl_open(
+                    raw.as_ptr(),
+                    raw.len() as c_int,
+                    tai_offset,
+                    lc.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
+                    err.as_mut_ptr(),
+                    err.len() as c_int,
+                )
             };
             if h.is_null() {
                 Err(ffi::text(&err))
@@ -262,7 +269,18 @@ impl Mtl {
             let vv = ffi::Video { width: v.width, height: v.height, fps, interlaced: v.interlaced as c_int };
             // SAFETY: arrays of `legs.len()` entries; `err` sized as passed.
             let h = unsafe {
-                ffi::smtl_rx_open(self.h, n.as_ptr(), legs.len() as c_int, idx.as_ptr(), ips.as_ptr(), udps.as_ptr(), payload_type, vv, err.as_mut_ptr(), err.len() as c_int)
+                ffi::smtl_rx_open(
+                    self.h,
+                    n.as_ptr(),
+                    legs.len() as c_int,
+                    idx.as_ptr(),
+                    ips.as_ptr(),
+                    udps.as_ptr(),
+                    payload_type,
+                    vv,
+                    err.as_mut_ptr(),
+                    err.len() as c_int,
+                )
             };
             if h.is_null() {
                 Err(ffi::text(&err))
@@ -288,7 +306,18 @@ impl Mtl {
             let vv = ffi::Video { width: v.width, height: v.height, fps, interlaced: v.interlaced as c_int };
             // SAFETY: arrays of `legs.len()` entries; `err` sized as passed.
             let h = unsafe {
-                ffi::smtl_tx_open(self.h, n.as_ptr(), legs.len() as c_int, idx.as_ptr(), ips.as_ptr(), udps.as_ptr(), payload_type, vv, err.as_mut_ptr(), err.len() as c_int)
+                ffi::smtl_tx_open(
+                    self.h,
+                    n.as_ptr(),
+                    legs.len() as c_int,
+                    idx.as_ptr(),
+                    ips.as_ptr(),
+                    udps.as_ptr(),
+                    payload_type,
+                    vv,
+                    err.as_mut_ptr(),
+                    err.len() as c_int,
+                )
             };
             if h.is_null() {
                 Err(ffi::text(&err))

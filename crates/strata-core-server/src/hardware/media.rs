@@ -305,7 +305,9 @@ fn bind_vfio(sys: &SysRoot, p: &DpdkPort, main: Option<&str>) -> Result<(), Stri
 
 /// Le groupe VFIO du port au compte du service.
 fn give_group(sys: &SysRoot, pci: &str, user: &str) -> Result<(), String> {
-    let group = std::fs::read_link(sys.p(&format!("/sys/bus/pci/devices/{pci}/iommu_group"))).ok().and_then(|p| p.file_name().map(|f| f.to_string_lossy().into_owned()));
+    let group = std::fs::read_link(sys.p(&format!("/sys/bus/pci/devices/{pci}/iommu_group")))
+        .ok()
+        .and_then(|p| p.file_name().map(|f| f.to_string_lossy().into_owned()));
     let Some(g) = group else { return Err(format!("{pci}: no IOMMU group")) };
     let node = sys.p(&format!("/dev/vfio/{g}"));
     if sys.0 == Path::new("/") {

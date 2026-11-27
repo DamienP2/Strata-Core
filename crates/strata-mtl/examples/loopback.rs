@@ -1,7 +1,10 @@
 //! Essai : un flux 1080p25 envoyé et reçu par le même port (socket du noyau).
 //!
 //! `STRATA_MTL_LIB=…/libmtl.so cargo run -p strata-mtl --example loopback -- <interface> <ip>`
-use std::{net::Ipv4Addr, time::{Duration, Instant}};
+use std::{
+    net::Ipv4Addr,
+    time::{Duration, Instant},
+};
 use strata_mtl::{load, Leg, Mtl, Pmd, Port, Video};
 
 fn main() -> Result<(), String> {
