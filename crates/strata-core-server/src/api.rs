@@ -38,6 +38,7 @@ pub fn router() -> Router<Shared> {
         .merge(crate::apps::routes())
         .merge(crate::install::routes())
         .merge(crate::server::routes())
+        .merge(crate::updates::routes())
         .merge(crate::users::routes())
         .merge(crate::groups::routes())
         .merge(crate::sso::routes())

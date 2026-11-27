@@ -40,7 +40,7 @@ use crate::{
 };
 
 /// L'archive d'une appli : 2 Gio au plus ; dépaquetée : 8 Gio au plus.
-const MAX_ARCHIVE: u64 = 2 << 30;
+pub(crate) const MAX_ARCHIVE: u64 = 2 << 30;
 const MAX_UNPACKED: u64 = 8 << 30;
 const DEFAULT_API: &str = "https://api.github.com";
 
@@ -56,6 +56,9 @@ pub struct Source {
 struct SourcesFile {
     #[serde(default)]
     apps: BTreeMap<String, Source>,
+    /// La clé du dépôt du Core (dépôt privé), pour ses mises à jour.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    core_key: String,
 }
 
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,6 +93,22 @@ pub struct Job {
     ended: Option<Instant>,
 }
 
+impl Job {
+    /// Une installation qui commence.
+    pub fn new(repo: &str) -> Self {
+        Job { repo: repo.to_string(), step: Step::Looking, done: 0, total: 0, version: None, app: None, error: None, ended: None }
+    }
+
+    pub fn finish(&mut self, step: Step) {
+        self.step = step;
+        self.ended = Some(Instant::now());
+    }
+
+    pub fn running(&self) -> bool {
+        self.ended.is_none()
+    }
+}
+
 pub struct Installer {
     jobs: Mutex<HashMap<String, Job>>,
     api: RwLock<String>,
@@ -109,7 +128,7 @@ impl Installer {
         *self.api.write().unwrap() = url.trim_end_matches('/').to_string();
     }
 
-    fn api(&self) -> String {
+    pub(crate) fn api(&self) -> String {
         self.api.read().unwrap().clone()
     }
 
@@ -145,6 +164,22 @@ impl Installer {
 
     fn read_sources(&self) -> SourcesFile {
         strata_core::files::read_json(&self.sources).unwrap_or_default()
+    }
+
+    /// La clé du dépôt du Core.
+    pub fn core_key(&self) -> String {
+        self.read_sources().core_key
+    }
+
+    pub fn set_core_key(&self, key: &str) -> Result<(), String> {
+        let mut f = self.read_sources();
+        f.core_key = key.trim().to_string();
+        strata_core::files::write_json(&self.sources, &f, true).map_err(|e| format!("cannot save the sources: {e}"))
+    }
+
+    /// Les applis installées depuis GitHub, et leur dépôt.
+    pub fn sources(&self) -> BTreeMap<String, Source> {
+        self.read_sources().apps
     }
 
     pub fn source(&self, id: &str) -> Option<Source> {
@@ -183,22 +218,22 @@ pub fn parse_repo(text: &str) -> Result<String, String> {
 // ---------- GitHub ----------
 
 #[derive(Deserialize)]
-struct GhRelease {
-    tag_name: String,
+pub(crate) struct GhRelease {
+    pub tag_name: String,
     #[serde(default)]
-    draft: bool,
+    pub draft: bool,
     #[serde(default)]
-    prerelease: bool,
+    pub prerelease: bool,
     #[serde(default)]
-    assets: Vec<GhAsset>,
+    pub assets: Vec<GhAsset>,
 }
 
 #[derive(Deserialize, Clone)]
-struct GhAsset {
-    id: u64,
-    name: String,
+pub(crate) struct GhAsset {
+    pub id: u64,
+    pub name: String,
     #[serde(default)]
-    size: u64,
+    pub size: u64,
 }
 
 /// La fiche d'une release (`release.json`, écrite par scripts/release-manifest.mjs).
@@ -207,27 +242,27 @@ pub struct ReleaseFile {
     pub name: String,
     pub version: Version,
     #[serde(default)]
-    requires: ReleaseRequires,
+    pub(crate) requires: ReleaseRequires,
     #[serde(default)]
-    assets: Vec<ReleaseAsset>,
+    pub(crate) assets: Vec<ReleaseAsset>,
 }
 
 #[derive(Deserialize, Clone, Debug, Default)]
-struct ReleaseRequires {
-    core: Option<VersionReq>,
+pub(crate) struct ReleaseRequires {
+    pub core: Option<VersionReq>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
-struct ReleaseAsset {
-    name: String,
+pub(crate) struct ReleaseAsset {
+    pub name: String,
     #[serde(default)]
-    kind: String,
-    sha256: String,
+    pub kind: String,
+    pub sha256: String,
 }
 
 /// Un client sans limite de durée totale (les archives sont grosses), mais qui n'attend pas un
 /// serveur muet ; les en-têtes d'autorisation ne suivent pas une redirection (le stockage de GitHub).
-fn agent() -> ureq::Agent {
+pub(crate) fn agent() -> ureq::Agent {
     let tls = ureq::tls::TlsConfig::builder().root_certs(ureq::tls::RootCerts::PlatformVerifier).build();
     ureq::Agent::config_builder()
         .tls_config(tls)
@@ -240,7 +275,7 @@ fn agent() -> ureq::Agent {
         .into()
 }
 
-fn gh_get(agent: &ureq::Agent, url: &str, repo: &str, key: &str, accept: &str) -> Result<ureq::http::Response<ureq::Body>, String> {
+pub(crate) fn gh_get(agent: &ureq::Agent, url: &str, repo: &str, key: &str, accept: &str) -> Result<ureq::http::Response<ureq::Body>, String> {
     let mut req = agent.get(url).header("Accept", accept).header("X-GitHub-Api-Version", "2022-11-28");
     if !key.is_empty() {
         req = req.header("Authorization", &format!("Bearer {key}"));
@@ -255,13 +290,13 @@ fn gh_get(agent: &ureq::Agent, url: &str, repo: &str, key: &str, accept: &str) -
     }
 }
 
-fn asset_url(api: &str, repo: &str, id: u64) -> String {
+pub(crate) fn asset_url(api: &str, repo: &str, id: u64) -> String {
     format!("{api}/repos/{repo}/releases/assets/{id}")
 }
 
 /// La release à installer : la plus récente (hors brouillons et préversions) dont la fiche accepte ce
 /// Core.
-fn pick(agent: &ureq::Agent, api: &str, repo: &str, key: &str) -> Result<(GhRelease, ReleaseFile), String> {
+pub(crate) fn pick(agent: &ureq::Agent, api: &str, repo: &str, key: &str) -> Result<(GhRelease, ReleaseFile), String> {
     let core = Version::parse(strata_core::VERSION).expect("the Core's version");
     let mut res = gh_get(agent, &format!("{api}/repos/{repo}/releases?per_page=30"), repo, key, "application/vnd.github+json")?;
     let bytes = res.body_mut().with_config().limit(16 << 20).read_to_vec().map_err(|e| format!("GitHub's answer is unreadable: {e}"))?;
@@ -294,7 +329,7 @@ fn archive_of(file: &ReleaseFile) -> Option<&ReleaseAsset> {
 }
 
 /// Télécharge vers `to` en calculant l'empreinte ; `progress(fait, total)`.
-fn download(agent: &ureq::Agent, url: &str, repo: &str, key: &str, to: &Path, progress: impl Fn(u64, u64)) -> Result<String, String> {
+pub(crate) fn download(agent: &ureq::Agent, url: &str, repo: &str, key: &str, to: &Path, progress: impl Fn(u64, u64)) -> Result<String, String> {
     let res = gh_get(agent, url, repo, key, "application/octet-stream")?;
     let total = res.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.parse().ok()).unwrap_or(0);
     if total > MAX_ARCHIVE {
@@ -322,7 +357,7 @@ fn download(agent: &ureq::Agent, url: &str, repo: &str, key: &str, to: &Path, pr
     Ok(hex(&hash.finalize()))
 }
 
-fn hex(b: &[u8]) -> String {
+pub(crate) fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
@@ -525,7 +560,7 @@ fn fetch_and_commit(s: &Shared, repo: &str, key: &str, only: Option<&str>) -> Re
 }
 
 /// Un fichier effacé quand on en a fini.
-struct TempFile(PathBuf);
+pub(crate) struct TempFile(pub PathBuf);
 
 impl Drop for TempFile {
     fn drop(&mut self) {

@@ -19,6 +19,7 @@ pub mod sso;
 pub mod state;
 pub mod supervisor;
 pub mod tls;
+pub mod updates;
 pub mod users;
 pub mod web;
 
@@ -107,6 +108,7 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 apps::reconcile(&s).await;
+                updates::tick(&s).await;
                 tick += 1;
                 if tick % (12 * 3600 / 5) == 0 {
                     tls::apply(&s).await;

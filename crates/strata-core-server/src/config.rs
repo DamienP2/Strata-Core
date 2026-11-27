@@ -22,6 +22,26 @@ pub struct ServerConfig {
     pub https: HttpsConfig,
     /// La connexion par l'annuaire de l'entreprise (OpenID Connect).
     pub sso: crate::sso::SsoConfig,
+    /// Les mises à jour du Core et des applis.
+    pub updates: UpdatesConfig,
+}
+
+/// Le dépôt des releases du Core.
+pub const CORE_REPO: &str = "DamienP2/Strata-Core";
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UpdatesConfig {
+    /// Chercher les mises à jour chaque jour (sans les installer).
+    pub daily: bool,
+    /// Le dépôt GitHub des releases du Core.
+    pub core_repo: String,
+}
+
+impl Default for UpdatesConfig {
+    fn default() -> Self {
+        UpdatesConfig { daily: true, core_repo: CORE_REPO.into() }
+    }
 }
 
 /// D'où vient le HTTPS.
@@ -76,6 +96,7 @@ impl Default for ServerConfig {
             trusted_origins: Vec::new(),
             timezone: "Europe/Paris".into(),
             https: HttpsConfig::default(),
+            updates: UpdatesConfig::default(),
             sso: crate::sso::SsoConfig::default(),
         }
     }
@@ -125,6 +146,9 @@ impl ServerConfig {
         }
         if self.dns_name.is_empty() {
             self.dns_name = format!("{}.local", hostname());
+        }
+        if crate::install::parse_repo(&self.updates.core_repo).is_err() {
+            self.updates.core_repo = CORE_REPO.into();
         }
         if self.https.port == 0 {
             self.https.port = 443;

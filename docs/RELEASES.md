@@ -46,6 +46,21 @@ Autre façon de publier, sans étiquette à pousser : *Actions › Release › R
 }
 ```
 
+## Comment un serveur se met à jour
+
+*Réglages › Ce serveur › Mises à jour* : le Core cherche la release la plus récente de son dépôt
+(hors préversions), et celles des applis installées depuis GitHub (seulement des versions qui
+acceptent le Core en place). Il cherche chaque jour si on le veut, mais n'installe jamais rien seul.
+
+Pour le Core : l'archive `strata-core-<version>-linux-x86_64.tar.gz` est téléchargée et son empreinte
+vérifiée ; le nouveau programme est écrit à côté de l'actuel et lancé une fois (`strata-core
+--version` doit dire la version attendue) ; il prend alors la place de l'ancien, gardé en
+`strata-core.previous`, et le Core redémarre (les sessions restent ouvertes). Le dossier du programme
+doit donc être modifiable par le service. Sans internet : la même archive, envoyée depuis la page.
+
+Revenir en arrière : remettre `strata-core.previous` à la place de `strata-core`, puis relancer le
+service.
+
 ## Les versions
 
 Le Core suit les versions sémantiques `MAJEUR.MINEUR.CORRECTIF` (brief, § 6). Le paquet web et le crate Rust portent le numéro du Core.

@@ -2,7 +2,8 @@
 // (vue d'ensemble, nom et adresses, HTTPS), Applis (la Bibliothèque, puis une page par appli installée)
 // et Personnes (Utilisateurs, Groupes, Annuaire). Les autres sections viendront avec leurs briques
 // (Mises à jour, Matériel, Surveillance).
-import { Globe, KeyRound, LayoutDashboard, LayoutGrid, Lock, Users as UsersIcon, UsersRound } from 'lucide-react';
+import { CloudDownload, Globe, KeyRound, LayoutDashboard, LayoutGrid, Lock, Users as UsersIcon, UsersRound } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { NavItem, NavSection, SidePage, t } from '@strata/ui';
 import { appIcon } from '../icons';
 import { navigate } from '../router';
@@ -11,18 +12,28 @@ import { Directory } from './Directory';
 import { Groups } from './Groups';
 import { Users } from './Users';
 import { Addresses, Https, Overview } from './Server';
+import { Updates } from './Updates';
+import { api } from '../api';
 
 /** `path` : ce qui suit /reglages/ (« serveur », « adresses », « https », « bibliotheque », « applis/livecut », « utilisateurs »…). */
 export function Settings({ path }: { path: string }) {
   const { apps, core, jobs, reload, setActive, restart, dismiss } = useApps();
+  // Le nombre de mises à jour qui attendent (dernière recherche), relu à chaque page.
+  const [pending, setPending] = useState(0);
+  useEffect(() => {
+    api<{ count: number }>('GET', '/api/updates')
+      .then((u) => setPending(u.count))
+      .catch(() => {});
+  }, [path]);
   const appId = path.startsWith('applis/') ? path.slice('applis/'.length) : null;
   const app = appId ? apps?.find((a) => a.id === appId) : undefined;
 
   let page: React.ReactNode = null;
-  const fixed = ['serveur', 'adresses', 'https', 'utilisateurs', 'groupes', 'annuaire'].includes(path);
+  const fixed = ['serveur', 'adresses', 'https', 'mises-a-jour', 'utilisateurs', 'groupes', 'annuaire'].includes(path);
   if (path === 'serveur') page = <Overview apps={apps} />;
   else if (path === 'adresses') page = <Addresses />;
   else if (path === 'https') page = <Https />;
+  else if (path === 'mises-a-jour') page = <Updates apps={apps} jobs={jobs} reloadApps={reload} onCount={setPending} />;
   else if (path === 'utilisateurs') page = <Users />;
   else if (path === 'groupes') page = <Groups />;
   else if (path === 'annuaire') page = <Directory />;
@@ -36,6 +47,7 @@ export function Settings({ path }: { path: string }) {
         <NavItem icon={LayoutDashboard} label={t('Overview')} on={path === 'serveur'} onClick={() => navigate('/reglages/serveur')} />
         <NavItem icon={Globe} label={t('Name and addresses')} on={path === 'adresses'} onClick={() => navigate('/reglages/adresses')} />
         <NavItem icon={Lock} label="HTTPS" on={path === 'https'} onClick={() => navigate('/reglages/https')} />
+        <NavItem icon={CloudDownload} label={t('Updates')} on={path === 'mises-a-jour'} onClick={() => navigate('/reglages/mises-a-jour')} count={pending || undefined} />
       </div>
       <div>
         <NavSection title={t('Apps')} />

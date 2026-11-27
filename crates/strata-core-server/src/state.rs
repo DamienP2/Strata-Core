@@ -9,7 +9,7 @@ use std::{
     time::Instant,
 };
 
-use crate::{apps::Apps, auth::Auth, config::ServerConfig, groups::Groups, install::Installer, relay, supervisor::Supervisor, tls::Tls};
+use crate::{apps::Apps, auth::Auth, config::ServerConfig, groups::Groups, install::Installer, relay, supervisor::Supervisor, tls::Tls, updates::Updates};
 
 pub type Shared = Arc<AppState>;
 
@@ -27,6 +27,8 @@ pub struct AppState {
     pub relay: relay::HttpClient,
     /// Le port où le Core écoute (donné aux applis : `STRATA_CORE_URL`).
     core_port: AtomicU16,
+    /// Les mises à jour du Core et des applis.
+    pub updates: Updates,
     /// Le HTTPS : certificat et écoute.
     pub tls: Tls,
     /// Un redémarrage est demandé.
@@ -48,6 +50,7 @@ impl AppState {
             relay: relay::client(),
             core_port: AtomicU16::new(8080),
             tls: Tls::new(&data_dir),
+            updates: Updates::default(),
             restart: AtomicBool::new(false),
             restart_signal: tokio::sync::Notify::new(),
             started_at: Instant::now(),

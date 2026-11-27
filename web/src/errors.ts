@@ -31,6 +31,15 @@ const SHAPED: [RegExp, string, string[]][] = [
   [/^port (\d+) is already the HTTP one$/, 'Port {port} is already the HTTP one', ['port']],
   [/^the certificate does not cover (.+)$/, 'The certificate does not cover {names}', ['names']],
   [/^the certificate expired on (.+)$/, 'The certificate expired on {date}', ['date']],
+  // Mises à jour
+  [/^(.+) has no release of the Core$/, '{repo} has no release of the Core', ['repo']],
+  [/^this Core is already the latest \((.+)\)$/, 'This Core is already the latest ({version})', ['version']],
+  [/^the archive holds the Core (.+), not (.+)$/, 'The archive holds the Core {got}, not {want}', ['got', 'want']],
+  [/^this archive holds the Core (.+); this one is already (.+)$/, 'This archive holds the Core {got}; this one is already {core}', ['got', 'core']],
+  [/^the new Core does not start: (.+)$/, 'The new Core does not start: {why}', ['why']],
+  [/^cannot replace (.+): (.+)$/, 'Cannot replace {path}: {why}', ['path', 'why']],
+  [/^cannot keep the current Core: (.+)$/, 'Cannot keep the current Core: {why}', ['why']],
+  [/^release (.+) has no Core archive$/, 'Release {tag} has no Core archive', ['tag']],
   [/^the certificate is valid only from (.+)$/, 'The certificate is valid only from {date}', ['date']],
 ];
 

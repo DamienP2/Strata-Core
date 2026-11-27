@@ -54,11 +54,13 @@ fn main() -> anyhow::Result<()> {
 fn run(a: RunArgs) -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,tower_http=warn".into())).init();
     let data_dir = a.data_dir.unwrap_or_else(strata_core_server::user_data_dir);
+    // Retenu avant tout : une mise à jour remplace le fichier, et son chemin ne se relirait plus.
+    let exe = std::env::current_exe()?;
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     let ending = rt.block_on(strata_core_server::serve(a.bind, data_dir, a.web_dir))?;
     rt.shutdown_timeout(std::time::Duration::from_secs(2));
     if ending == strata_core_server::Ending::Restart {
-        restart()?;
+        restart(&exe)?;
     }
     Ok(())
 }
@@ -66,14 +68,13 @@ fn run(a: RunArgs) -> anyhow::Result<()> {
 /// Redémarre le Core : le même programme, avec les mêmes arguments, à la place de celui-ci
 /// (sous systemd, le service garde son numéro de processus).
 #[cfg(unix)]
-fn restart() -> anyhow::Result<()> {
+fn restart(exe: &std::path::Path) -> anyhow::Result<()> {
     use std::os::unix::process::CommandExt;
-    let exe = std::env::current_exe()?;
     tracing::info!("restarting");
     Err(std::process::Command::new(exe).args(std::env::args_os().skip(1)).exec().into())
 }
 
 #[cfg(not(unix))]
-fn restart() -> anyhow::Result<()> {
+fn restart(_exe: &std::path::Path) -> anyhow::Result<()> {
     anyhow::bail!("restart is only supported on Linux")
 }
