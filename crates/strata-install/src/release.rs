@@ -114,6 +114,28 @@ pub fn extract_core(archive: &Path, to: &Path) -> Result<(), String> {
     Err("this archive holds no strata-core".into())
 }
 
+/// Sort les bibliothèques embarquées avec le Core (`lib/libmxl.so*` : MXL) dans `dir`. Rend
+/// combien.
+pub fn extract_libs(archive: &Path, dir: &Path) -> Result<usize, String> {
+    let f = std::fs::File::open(archive).map_err(|e| format!("cannot open {}: {e}", archive.display()))?;
+    let mut ar = tar::Archive::new(flate2::read::GzDecoder::new(f));
+    let mut n = 0;
+    for e in ar.entries().map_err(|_| "not a .tar.gz archive".to_string())? {
+        let mut e = e.map_err(|_| "the archive is damaged".to_string())?;
+        let p = e.path().map_err(|e| e.to_string())?.to_path_buf();
+        let in_lib = p.parent().and_then(|d| d.file_name()).is_some_and(|d| d == "lib");
+        let Some(name) = p.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
+        if in_lib && (name.starts_with("libmxl") || name.starts_with("LICENSE")) {
+            std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+            let to = dir.join(&name);
+            let _ = std::fs::remove_file(&to);
+            e.unpack(&to).map_err(|e| format!("cannot write {}: {e}", to.display()))?;
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

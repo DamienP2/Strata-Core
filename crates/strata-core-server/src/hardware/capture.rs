@@ -10,6 +10,8 @@
 //!   et une entrée qui ne s'ouvre pas est réessayée toutes les 5 s.
 //! - Cartes simulées (`STRATA_FAKE_DECKLINK`) : une mire animée 720p25, différente par entrée.
 //! - L'aperçu des réglages lit le partage comme une appli, sans s'inscrire.
+//! - Avec MXL (`libmxl.so` présente) : chaque entrée est un flux MXL v210 (`sdi/<carte>/<n>`) au
+//!   lieu du partage `strata-share` ; c'est ce que lisent les applis.
 use serde::Serialize;
 use std::{
     collections::HashMap,
@@ -101,8 +103,10 @@ pub struct Status {
     pub timecode: Option<String>,
     /// Les applis qui la lisent.
     pub readers: Vec<ReaderApp>,
-    /// Le fichier du partage.
+    /// Le fichier du partage (sans MXL).
     pub share: PathBuf,
+    /// Le flux MXL de l'entrée (avec MXL).
+    pub mxl_flow: Option<String>,
 }
 
 struct Running {
@@ -125,9 +129,15 @@ impl Running {
 #[derive(Default)]
 pub struct Captures {
     running: Mutex<HashMap<(String, u32), Running>>,
+    mxl: Mutex<Option<Arc<strata_mxl::Mxl>>>,
 }
 
 impl Captures {
+    /// MXL, s'il est là : les entrées ouvertes ensuite sont des flux MXL.
+    pub fn set_mxl(&self, mxl: Option<Arc<strata_mxl::Mxl>>) {
+        *self.mxl.lock().unwrap() = mxl;
+    }
+
     /// Ouvre les entrées voulues, ferme les autres (bloquant : attend la fin des fils fermés).
     pub fn reconcile(&self, wanted: Vec<Wanted>) {
         let mut stopped = Vec::new();
@@ -145,7 +155,8 @@ impl Captures {
                     continue;
                 }
                 tracing::info!("capturing SDI {} of card {}{}", w.connector, w.card, if w.device.is_none() { " (simulated)" } else { "" });
-                run.insert(key, start(w));
+                let mxl = self.mxl.lock().unwrap().clone();
+                run.insert(key, start(w, mxl));
             }
         }
         for r in stopped {
@@ -166,9 +177,16 @@ impl Captures {
         v
     }
 
-    /// Le fichier du partage d'une entrée captée.
+    /// Le fichier du partage d'une entrée captée (sans MXL).
     pub fn share_of(&self, card: &str, connector: u32) -> Option<PathBuf> {
-        self.running.lock().unwrap().get(&(card.to_string(), connector)).map(|r| r.status.lock().unwrap().share.clone())
+        let run = self.running.lock().unwrap();
+        let s = run.get(&(card.to_string(), connector))?.status.lock().unwrap().clone();
+        s.mxl_flow.is_none().then_some(s.share)
+    }
+
+    /// Le flux MXL d'une entrée captée.
+    pub fn mxl_flow_of(&self, card: &str, connector: u32) -> Option<String> {
+        self.running.lock().unwrap().get(&(card.to_string(), connector)).and_then(|r| r.status.lock().unwrap().mxl_flow.clone())
     }
 }
 
@@ -178,10 +196,68 @@ impl Drop for Captures {
     }
 }
 
-fn start(w: Wanted) -> Running {
+/// Où va chaque image : le flux MXL de l'entrée, ou son partage `strata-share`.
+pub(crate) enum Sink {
+    Share(Writer),
+    Mxl { mxl: Arc<strata_mxl::Mxl>, id: strata_mxl::Uuid, label: String, writer: Option<strata_mxl::VideoWriter>, published: u64 },
+}
+
+impl Sink {
+    pub(crate) fn publish(&mut self, info: &FrameInfo, data: &[u8]) -> Result<(), String> {
+        match self {
+            Sink::Share(w) => w.publish(info, data).map(|_| ()).map_err(|e| e.to_string()),
+            Sink::Mxl { mxl, id, label, writer, published } => {
+                let v = strata_mxl::Video { width: info.width, height: info.height, rate: info.rate, interlaced: info.interlaced };
+                // Un autre format (le signal a changé) : le flux est recréé.
+                if writer.as_ref().is_none_or(|w| w.video() != v) {
+                    *writer = None;
+                    *writer = Some(mxl.video_writer(*id, label, &v)?);
+                }
+                writer.as_mut().unwrap().write_uyvy(data, info.stride as usize)?;
+                *published += 1;
+                Ok(())
+            }
+        }
+    }
+
+    fn set_signal(&self, signal: Option<bool>) {
+        if let Sink::Share(w) = self {
+            w.set_signal(signal);
+        }
+    }
+
+    fn beat(&self) {
+        if let Sink::Share(w) = self {
+            w.beat();
+        }
+    }
+
+    fn published(&self) -> u64 {
+        match self {
+            Sink::Share(w) => w.published(),
+            Sink::Mxl { published, .. } => *published,
+        }
+    }
+
+    fn readers(&self) -> Vec<strata_share::ReaderInfo> {
+        match self {
+            Sink::Share(w) => w.readers(),
+            Sink::Mxl { .. } => Vec::new(),
+        }
+    }
+}
+
+fn start(w: Wanted, mxl: Option<Arc<strata_mxl::Mxl>>) -> Running {
     let share = strata_share::sdi_path(&w.card, w.connector);
-    let status =
-        Arc::new(Mutex::new(Status { card: w.card.clone(), connector: w.connector, simulated: w.device.is_none(), share: share.clone(), ..Status::default() }));
+    let flow = mxl.as_ref().map(|_| strata_mxl::flow_id(&format!("sdi/{}/{}", w.card, w.connector)));
+    let status = Arc::new(Mutex::new(Status {
+        card: w.card.clone(),
+        connector: w.connector,
+        simulated: w.device.is_none(),
+        share: share.clone(),
+        mxl_flow: flow.map(|f| f.to_string()),
+        ..Status::default()
+    }));
     let stop = Arc::new(AtomicBool::new(false));
     let thread = {
         let (w, status, stop) = (w.clone(), status.clone(), stop.clone());
@@ -193,15 +269,18 @@ fn start(w: Wanted) -> Running {
                     s.state = CaptureState::Error;
                     s.error = Some(e);
                 };
-                // Le partage d'abord : les applis voient l'entrée même sans signal.
-                let mut writer = loop {
-                    match Writer::create(&share, 3, UHD_UYVY) {
-                        Ok(wr) => break wr,
-                        Err(e) => fail(format!("cannot share the input ({}): {e}", share.display())),
-                    }
-                    if pause(&stop, Duration::from_secs(5)) {
-                        return;
-                    }
+                let mut writer = match (mxl, flow) {
+                    (Some(mxl), Some(id)) => Sink::Mxl { mxl, id, label: format!("SDI {} ({})", w.connector, w.card), writer: None, published: 0 },
+                    // Le partage d'abord : les applis voient l'entrée même sans signal.
+                    _ => loop {
+                        match Writer::create(&share, 3, UHD_UYVY) {
+                            Ok(wr) => break Sink::Share(wr),
+                            Err(e) => fail(format!("cannot share the input ({}): {e}", share.display())),
+                        }
+                        if pause(&stop, Duration::from_secs(5)) {
+                            return;
+                        }
+                    },
                 };
                 match (w.device, &w.pattern) {
                     (Some(device), _) => capture(&mut writer, device, &stop, &status),
@@ -239,7 +318,7 @@ impl Meter {
         Meter { since: Instant::now(), frames: 0 }
     }
 
-    fn tick(&mut self, got: bool, writer: &Writer, status: &Mutex<Status>, update: impl FnOnce(&mut Status)) {
+    fn tick(&mut self, got: bool, writer: &Sink, status: &Mutex<Status>, update: impl FnOnce(&mut Status)) {
         self.frames += got as u64;
         let mut s = status.lock().unwrap();
         update(&mut s);
@@ -266,7 +345,7 @@ fn gcd(a: u64, b: u64) -> u64 {
 }
 
 /// Une vraie entrée DeckLink.
-fn capture(writer: &mut Writer, device: u32, stop: &AtomicBool, status: &Mutex<Status>) {
+fn capture(writer: &mut Sink, device: u32, stop: &AtomicBool, status: &Mutex<Status>) {
     while !stop.load(Ordering::Relaxed) {
         // 1080i50 par défaut ; une carte qui détecte le format suit le signal d'elle-même.
         let input = match strata_decklink::InputHandle::open(device, 1920, 1080, (25, 1), true) {
@@ -372,7 +451,7 @@ fn background(connector: u32) -> Vec<u8> {
     b
 }
 
-fn simulate(writer: &mut Writer, connector: u32, p: &Pattern, stop: &AtomicBool, status: &Mutex<Status>) {
+fn simulate(writer: &mut Sink, connector: u32, p: &Pattern, stop: &AtomicBool, status: &Mutex<Status>) {
     use strata_core::timecode::{house_timecode, HouseRate};
     let bg = background(connector);
     let mut frame = bg.clone();

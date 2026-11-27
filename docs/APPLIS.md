@@ -173,7 +173,48 @@ let tc = house_timecode(now, &house, tz, tai); // 13:53:20:08
   2059-1), en drop frame si réglé ; leurs instants sont alignés sur l'époque PTP.
 - *Réglages › Matériel › Horloge* compare le timecode de chaque entrée SDI à celui de la maison.
 
-## Lire une entrée SDI
+## Les flux vidéo : MXL
+
+Les images circulent entre le Core et les applis par **MXL** (Media eXchange Layer, EBU DMF /
+Linux Foundation) : des flux en mémoire partagée, sur le serveur, sans passer par le réseau.
+
+- **Le domaine** : `mxl.domain` dans `/api/hardware/shared` (en général `/dev/shm/mxl`). `mxl`
+  vaut `null` quand MXL n'est pas installé : le Core retombe alors sur `strata-share` (plus bas).
+- **Les entrées** (SDI captées par le Core, et bientôt ST 2110 reçues) : un flux par entrée, son
+  identifiant dans `mxlFlow` du connecteur (`sdi`). L'appli le **lit**.
+- **Les sorties** (SDI, flux ST 2110 envoyés) : `mxlFlow` du connecteur réglé en sortie, ou du flux
+  ST 2110 sortant. L'appli **écrit** ce flux ; le Core l'envoie (SDI, ST 2110) et l'aperçu des
+  réglages le montre.
+- Une appli peut aussi lire le flux qu'une autre écrit (Multiview qui montre le programme de
+  LiveCut), sans rien demander au Core.
+- **Format** : vidéo v210 (YCbCr 4:2:2 10 bits, BT.709), un grain par image ; en entrelacé, un grain
+  par trame (index pair : trame du haut). Les grains sont rangés par leur instant (index TAI, la
+  même horloge que PTP) : on lit « l'image de maintenant ».
+- Les identifiants sont stables (UUID v5 d'après `sdi/<carte>/<n>`, `sdi-out/<carte>/<n>`,
+  `2110/<flux>`) : ils ne changent pas d'un démarrage à l'autre.
+
+En Rust, avec le crate officiel `mxl` (bibliothèque `libmxl.so` chargée au lancement ; le Core
+l'installe dans `/opt/strata/lib`) :
+
+```rust
+let api = mxl::load_api("/opt/strata/lib/libmxl.so.1")?;
+let mxl = mxl::MxlInstance::new(api, &shared["mxl"]["domain"].as_str().unwrap(), "")?;
+// Lire une entrée.
+let reader = mxl.create_flow_reader(flow_id)?.to_grain_reader()?;
+let rate = reader.get_config_info()?.common().grain_rate()?;
+let index = mxl.get_current_index(&rate);
+let grain = reader.get_complete_grain(index, Duration::from_millis(100))?; // grain.payload : v210
+// Écrire une sortie : la description du flux (NMOS) avec l'identifiant donné par le Core.
+let (writer, _, _) = mxl.create_flow_writer(&flow_def_json, None)?;
+```
+
+En C ou C++ : `mxlCreateInstance`, `mxlCreateFlowReader` / `mxlCreateFlowWriter`,
+`mxlFlowReaderGetGrain`, `mxlFlowWriterOpenGrain` / `mxlFlowWriterCommitGrain` (dépôt
+`dmf-mxl/mxl`). Les applis tournent sous le compte du Core : elles ont accès au domaine.
+
+## Lire une entrée SDI sans MXL
+
+Sans MXL (bibliothèque absente), le Core partage les entrées avec `strata-share`.
 
 Le pilote DeckLink ne laisse ouvrir une entrée qu'à **un seul programme**. Le Core capte donc
 chaque connecteur réglé sur « Entrée » et publie ses images dans une mémoire partagée ; toutes les
@@ -211,7 +252,7 @@ loop {
   en 1080i50.
 - Pas encore d'audio : le pont DeckLink du Core ne capte que la vidéo et le timecode.
 
-## Montrer ce qu'on envoie (sorties SDI, flux ST 2110)
+## Montrer ce qu'on envoie sans MXL (sorties SDI, flux ST 2110)
 
 Une appli qui envoie une sortie SDI ou un flux ST 2110 vidéo publie aussi ce qu'elle envoie, dans
 le fichier `share` de la sortie ou du flux (`/api/hardware/shared`) :

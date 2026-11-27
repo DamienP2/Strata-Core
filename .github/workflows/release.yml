@@ -70,6 +70,18 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: MXL (libmxl.so, embarquée dans l'archive du Core)
+        run: |
+          sudo apt-get install -y -q libclang-dev ninja-build
+          git clone -q https://github.com/microsoft/vcpkg.git /tmp/vcpkg
+          /tmp/vcpkg/bootstrap-vcpkg.sh -disableMetrics
+          git clone -q https://github.com/dmf-mxl/mxl.git /tmp/mxl
+          git -C /tmp/mxl checkout -q ce5ac2bffa5d
+          cd /tmp/mxl
+          VCPKG_ROOT=/tmp/vcpkg cmake --preset Linux-Clang-Release -DBUILD_TESTS=OFF -DBUILD_TOOLS=OFF -DBUILD_UTILS=OFF -DBUILD_DOCS=OFF -B build
+          cmake --build build -j"$(nproc)"
+          ls -l build/lib/libmxl.so*
+
       - name: Serveur
         # Le pont DeckLink (C++) est exigé dans une release : sans lui, pas de cartes SDI.
         env:
@@ -81,6 +93,9 @@ jobs:
           NAME="strata-core-$VERSION-linux-x86_64"
           mkdir -p "build/$NAME"
           cp target/release/strata-core "build/$NAME/"
+          mkdir -p "build/$NAME/lib"
+          cp -P /tmp/mxl/build/lib/libmxl.so* "build/$NAME/lib/"
+          cp /tmp/mxl/LICENSE.txt "build/$NAME/lib/LICENSE-MXL.txt"
           cp README.md "build/$NAME/"
           cp packages/ui/src/styles/fonts/OFL.txt "build/$NAME/OFL-Inter.txt"
           "build/$NAME/strata-core" --version

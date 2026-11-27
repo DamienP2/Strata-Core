@@ -398,6 +398,30 @@ async fn inputs(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiRes
     Ok(Json(json!({ "inputs": list })))
 }
 
+/// MXL, s'il a été ouvert au démarrage.
+pub fn mxl_of(s: &crate::state::AppState) -> Option<std::sync::Arc<strata_mxl::Mxl>> {
+    s.mxl.get().and_then(|r| r.as_ref().ok().cloned())
+}
+
+/// Le flux MXL d'une sortie SDI ou d'un flux ST 2110 : écrit par l'appli qui envoie.
+pub fn out_flow(name: &str) -> strata_mxl::Uuid {
+    strata_mxl::flow_id(name)
+}
+
+/// Ce qu'une appli écrit dans un flux MXL de sortie : actif ou non, son format.
+fn published_mxl(mxl: &strata_mxl::Mxl, id: strata_mxl::Uuid) -> Value {
+    if !mxl.is_active(id) {
+        return json!({"sending": false, "mxlFlow": id.to_string()});
+    }
+    let format = mxl.video_reader(id).ok().map(|r| {
+        let v = r.video;
+        let rate = v.rate.0 as f64 / v.rate.1.max(1) as f64 * if v.interlaced { 2.0 } else { 1.0 };
+        let rate = (rate * 100.0).round() / 100.0;
+        format!("{}{}{}", v.height, if v.interlaced { 'i' } else { 'p' }, if rate.fract() == 0.0 { format!("{rate:.0}") } else { format!("{rate}") })
+    });
+    json!({"sending": true, "mxlFlow": id.to_string(), "format": format})
+}
+
 fn jpeg_response(jpeg: std::sync::Arc<Vec<u8>>) -> impl IntoResponse {
     ([(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "no-store")], (*jpeg).clone())
 }
@@ -405,10 +429,14 @@ fn jpeg_response(jpeg: std::sync::Arc<Vec<u8>>) -> impl IntoResponse {
 /// L'image la plus récente d'une entrée, en petit (JPEG), une par seconde pour tous.
 async fn preview(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath((card, n)): UrlPath<(String, u32)>) -> ApiResult<impl IntoResponse> {
     require(me.admin)?;
-    let share = s.captures.share_of(&card, n).ok_or((StatusCode::NOT_FOUND, "this input is not captured".to_string()))?;
+    let feed = match (s.captures.mxl_flow_of(&card, n).and_then(|f| f.parse().ok()), mxl_of(&s)) {
+        (Some(id), Some(mxl)) => Some(preview::Feed::Mxl { mxl, id, reader: None }),
+        _ => s.captures.share_of(&card, n).map(preview::Feed::share),
+    };
+    let feed = feed.ok_or((StatusCode::NOT_FOUND, "this input is not captured".to_string()))?;
     let s2 = s.clone();
     let key = format!("in/{card}/{n}");
-    let jpeg = blocking(move || s2.previews.jpeg(&key, || preview::Feed::share(share))).await?.map_err(|e| (StatusCode::NOT_FOUND, e))?;
+    let jpeg = blocking(move || s2.previews.jpeg(&key, || feed)).await?.map_err(|e| (StatusCode::NOT_FOUND, e))?;
     Ok(jpeg_response(jpeg))
 }
 
@@ -483,7 +511,10 @@ async fn outputs(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiRe
                 if k.function != Function::Output || d.ports.get(i) == Some(&decklink::Port::In) {
                     continue;
                 }
-                let mut v = published(&strata_share::sdi_out_path(&c.id, i as u32 + 1), &s2);
+                let mut v = match mxl_of(&s2) {
+                    Some(m) => published_mxl(&m, out_flow(&format!("sdi-out/{}/{}", c.id, i + 1))),
+                    None => published(&strata_share::sdi_out_path(&c.id, i as u32 + 1), &s2),
+                };
                 v["card"] = json!(c.id);
                 v["connector"] = json!(i + 1);
                 out.push(v);
@@ -499,9 +530,14 @@ async fn output_preview(State(s): State<Shared>, CurrentUser(me): CurrentUser, U
     require(me.admin)?;
     let s2 = s.clone();
     let key = format!("out/{card}/{n}");
-    let jpeg = blocking(move || s2.previews.jpeg(&key, || preview::Feed::share(strata_share::sdi_out_path(&card, n))))
-        .await?
-        .map_err(|e| (StatusCode::NOT_FOUND, e))?;
+    let jpeg = blocking(move || {
+        s2.previews.jpeg(&key, || match mxl_of(&s2) {
+            Some(mxl) => preview::Feed::Mxl { mxl, id: out_flow(&format!("sdi-out/{card}/{n}")), reader: None },
+            None => preview::Feed::share(strata_share::sdi_out_path(&card, n)),
+        })
+    })
+    .await?
+    .map_err(|e| (StatusCode::NOT_FOUND, e))?;
     Ok(jpeg_response(jpeg))
 }
 
@@ -540,7 +576,10 @@ async fn flows(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResu
             .iter()
             .map(|f| {
                 let mut v = match f.direction {
-                    Direction::Output => published(&strata_share::flow_path(&f.id), &s2),
+                    Direction::Output => match mxl_of(&s2) {
+                        Some(m) => published_mxl(&m, out_flow(&format!("2110/{}", f.id))),
+                        None => published(&strata_share::flow_path(&f.id), &s2),
+                    },
                     Direction::Input => json!({ "reception": s2.previews.flow_status(&flow_key(&cfg, f)) }),
                 };
                 v["id"] = json!(f.id);
@@ -565,7 +604,10 @@ async fn flow_preview(State(s): State<Shared>, CurrentUser(me): CurrentUser, Url
         }
         let key = flow_key(&cfg, f);
         match f.direction {
-            Direction::Output => s2.previews.jpeg(&key, || preview::Feed::share(strata_share::flow_path(&f.id))),
+            Direction::Output => s2.previews.jpeg(&key, || match mxl_of(&s2) {
+                Some(mxl) => preview::Feed::Mxl { mxl, id: out_flow(&format!("2110/{}", f.id)), reader: None },
+                None => preview::Feed::share(strata_share::flow_path(&f.id)),
+            }),
             Direction::Input => {
                 let legs = legs(&cfg, f);
                 s2.previews.jpeg(&key, || preview::Feed::Flow(st2110::Receiver::start(legs)))
@@ -657,6 +699,7 @@ async fn shared(State(s): State<Shared>, ConnectInfo(peer): ConnectInfo<SocketAd
     let v = blocking(move || {
         let cfg = HardwareConfig::load(&s2.data_dir);
         let (detected, _, _) = decklink::detect();
+        let mxl = mxl_of(&s2);
         let sdi: Vec<Value> = cfg
             .cards
             .iter()
@@ -676,8 +719,14 @@ async fn shared(State(s): State<Shared>, ConnectInfo(peer): ConnectInfo<SocketAd
                         "device": d.and_then(|d| d.devices.get(i)),
                         "share": match k.function {
                             Function::Input => s2.captures.share_of(&c.id, i as u32 + 1),
-                            Function::Output => Some(strata_share::sdi_out_path(&c.id, i as u32 + 1)),
-                            Function::Unused => None,
+                            Function::Output if mxl.is_none() => Some(strata_share::sdi_out_path(&c.id, i as u32 + 1)),
+                            _ => None,
+                        },
+                        // Avec MXL : le flux à lire (entrée) ou à écrire (sortie).
+                        "mxlFlow": match k.function {
+                            Function::Input => s2.captures.mxl_flow_of(&c.id, i as u32 + 1),
+                            Function::Output if mxl.is_some() => Some(out_flow(&format!("sdi-out/{}/{}", c.id, i + 1)).to_string()),
+                            _ => None,
                         },
                     })).collect::<Vec<_>>(),
                 })
@@ -699,7 +748,9 @@ async fn shared(State(s): State<Shared>, ConnectInfo(peer): ConnectInfo<SocketAd
             // Un flux sortant : où l'appli qui l'envoie publie aussi ses images (pour l'aperçu).
             "flows": cfg.flows.iter().map(|f| {
                 let mut v = json!(f);
-                if f.direction == Direction::Output {
+                if mxl.is_some() {
+                    v["mxlFlow"] = json!(out_flow(&format!("2110/{}", f.id)).to_string());
+                } else if f.direction == Direction::Output {
                     v["share"] = json!(strata_share::flow_path(&f.id));
                 }
                 v
@@ -708,6 +759,8 @@ async fn shared(State(s): State<Shared>, ConnectInfo(peer): ConnectInfo<SocketAd
             // Les GPU : où encoder, décoder ou rendre.
             "gpus": gpu::detect().into_iter().map(|g| json!({"pci": g.pci, "vendor": g.vendor, "name": g.name, "driver": g.driver, "renderNode": g.render_node, "api": g.api, "encode": g.encode, "decode": g.decode, "ready": g.ready})).collect::<Vec<_>>(),
             "clock": {"source": cfg.clock.source, "house": cfg.clock.house, "timezone": s2.config.load().timezone},
+            // MXL : le domaine où sont les flux (null : pas de MXL, le partage strata-share).
+            "mxl": mxl.as_ref().map(|m| json!({"domain": m.domain(), "version": m.version})),
         })
     })
     .await?;

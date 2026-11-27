@@ -98,6 +98,22 @@ pub async fn serve(bind: Option<SocketAddr>, data_dir: PathBuf, web_dir: Option<
     serve_on(s, listener, web_dir).await
 }
 
+/// MXL : les entrées deviennent des flux MXL que les applis lisent (sinon, le partage
+/// `strata-share`).
+async fn open_mxl(s: &Shared) {
+    if s.mxl.get().is_some() {
+        return;
+    }
+    let r = tokio::task::spawn_blocking(strata_mxl::Mxl::open).await.unwrap_or_else(|e| Err(e.to_string()));
+    match &r {
+        Ok(m) => tracing::info!("MXL {} on {} ({})", m.version, m.domain().display(), m.library.display()),
+        Err(e) => tracing::info!("no MXL ({e}): the inputs are shared with strata-share"),
+    }
+    let r = r.map(std::sync::Arc::new);
+    s.captures.set_mxl(r.as_ref().ok().cloned());
+    let _ = s.mxl.set(r);
+}
+
 /// Sert sur une écoute HTTP déjà ouverte (et en HTTPS si les réglages le demandent).
 pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Option<PathBuf>) -> anyhow::Result<Ending> {
     let addr = listener.local_addr()?;
@@ -108,6 +124,7 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
     // Les applis actives : lancées maintenant, puis tenues en accord avec la Bibliothèque. Le
     // certificat fait par Strata : renouvelé quand il le faut.
     apps::reconcile(&s).await;
+    open_mxl(&s).await;
     reconcile_inputs(&s).await;
     resources::start(&s);
     alerts::start(&s);

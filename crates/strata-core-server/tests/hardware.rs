@@ -118,7 +118,10 @@ async fn hardware_settings_and_what_apps_read() {
     let card = &v["sdi"][0];
     assert_eq!((card["name"].as_str(), card["present"].as_bool()), (Some("Plateau"), Some(true)));
     let share = srv.dir.join("shm").join(format!("strata-sdi-{}-1", quad_id.to_ascii_lowercase()));
-    assert_eq!(card["connectors"][0], json!({"number": 1, "name": "Caméra 1", "function": "input", "device": quad["devices"][0], "share": share}));
+    assert_eq!(
+        card["connectors"][0],
+        json!({"number": 1, "name": "Caméra 1", "function": "input", "device": quad["devices"][0], "share": share, "mxlFlow": null})
+    );
     // Une sortie : où l'appli qui l'envoie publie ses images.
     let out_share = srv.dir.join("shm").join(format!("strata-sdi-out-{}-2", quad_id.to_ascii_lowercase()));
     assert_eq!(card["connectors"][1]["share"], json!(out_share));

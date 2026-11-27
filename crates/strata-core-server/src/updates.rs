@@ -297,8 +297,37 @@ pub fn replace_binary(exe: &Path, archive: &Path, expected: Option<&Version>) ->
     let previous = dir.join(format!("{name}.previous"));
     std::fs::copy(exe, &previous).map_err(|e| format!("cannot keep the current Core: {e}"))?;
     std::fs::rename(&new.0, exe).map_err(|e| format!("cannot replace {}: {e}", exe.display()))?;
+    // Les bibliothèques livrées avec lui (MXL), à côté : `<bin>/../lib`.
+    match put_libs(archive, &dir.join("../lib")) {
+        Ok(n) if n > 0 => tracing::info!("{n} library files put in {}", dir.join("../lib").display()),
+        Ok(_) => {}
+        Err(e) => tracing::warn!("libraries of the new Core not put in place: {e}"),
+    }
     tracing::info!("Core {version} put in place of {} (previous kept)", strata_core::VERSION);
     Ok(version)
+}
+
+/// Sort `lib/libmxl.so*` de l'archive du Core dans `dir`.
+fn put_libs(archive: &Path, dir: &Path) -> Result<usize, String> {
+    let f = std::fs::File::open(archive).map_err(|e| e.to_string())?;
+    let mut ar = tar::Archive::new(flate2::read::GzDecoder::new(std::io::BufReader::new(f)));
+    let mut n = 0;
+    for e in ar.entries().map_err(|e| e.to_string())? {
+        let mut e = e.map_err(|e| e.to_string())?;
+        let p = e.path().map_err(|e| e.to_string())?.to_path_buf();
+        let in_lib = p.parent().and_then(|d| d.file_name()).is_some_and(|d| d == "lib");
+        let Some(name) = p.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
+        if in_lib && (name.starts_with("libmxl") || name.starts_with("LICENSE")) {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+            let to = dir.join(&name);
+            let tmp = dir.join(format!(".{name}.new"));
+            let _ = std::fs::remove_file(&tmp);
+            e.unpack(&tmp).map_err(|e| e.to_string())?;
+            std::fs::rename(&tmp, &to).map_err(|e| e.to_string())?;
+            n += 1;
+        }
+    }
+    Ok(n)
 }
 
 /// Lance la mise à jour du Core depuis GitHub, en tâche de fond ; le Core redémarre à la fin.

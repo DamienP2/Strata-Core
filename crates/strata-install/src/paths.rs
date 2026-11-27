@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 /// Le programme du Core, et son dossier (au compte du service : le Core se met à jour lui-même).
 pub const BIN_DIR: &str = "/opt/strata/bin";
 pub const BIN: &str = "/opt/strata/bin/strata-core";
+/// Les bibliothèques livrées avec le Core (MXL).
+pub const LIB_DIR: &str = "/opt/strata/lib";
 /// La commande `strata-core` pour les administrateurs.
 pub const LINK: &str = "/usr/local/bin/strata-core";
 pub const DATA: &str = "/var/lib/strata-core";

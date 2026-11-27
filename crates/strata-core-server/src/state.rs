@@ -33,6 +33,8 @@ pub struct AppState {
     pub captures: crate::hardware::capture::Captures,
     /// Les aperçus des réglages (entrées, sorties, flux), seulement pendant qu'on regarde.
     pub previews: crate::hardware::preview::Previews,
+    /// MXL : ouvert au démarrage s'il est installé (sinon la raison).
+    pub mxl: std::sync::OnceLock<Result<Arc<strata_mxl::Mxl>, String>>,
     /// Les relevés des ressources (Santé).
     pub resources: crate::resources::Resources,
     /// Les alertes (Santé).
@@ -69,6 +71,7 @@ impl AppState {
             clock: Default::default(),
             captures: Default::default(),
             previews: Default::default(),
+            mxl: Default::default(),
             resources: Default::default(),
             alerts: crate::alerts::Alerts::new(&data_dir),
             snmp_settings: Mutex::new(crate::snmp::SnmpSettings::load(&data_dir)),

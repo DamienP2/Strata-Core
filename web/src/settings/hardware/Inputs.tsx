@@ -21,6 +21,8 @@ export interface InputStatus {
   timecode?: string | null;
   readers: { app: string; pid: number; name?: string }[];
   share: string;
+  /** Le flux MXL de l'entrée (ce que lisent les applis), quand MXL est là. */
+  mxlFlow?: string | null;
 }
 
 /** Ce qu'une appli envoie sur une sortie (SDI ou flux ST 2110 sortant). */
@@ -194,7 +196,18 @@ function InputTile({ i, cfg }: { i: InputStatus; cfg: HwConfig }) {
       }
       sub={wire ? card : undefined}
       error={i.error}
-      foot={<Apps label={t('Read by')} none={t('No app reads it')} names={[...new Set(i.readers.map((r) => r.name || r.app || t('a program')))]} />}
+      foot={
+        i.mxlFlow ? (
+          <div className="core-input-readers">
+            <span className="core-input-app">MXL</span>
+            <span className="st-muted st-mono core-input-flow" title={i.mxlFlow}>
+              {i.mxlFlow}
+            </span>
+          </div>
+        ) : (
+          <Apps label={t('Read by')} none={t('No app reads it')} names={[...new Set(i.readers.map((r) => r.name || r.app || t('a program')))]} />
+        )
+      }
     />
   );
 }

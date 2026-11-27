@@ -387,6 +387,12 @@ fn put_core(ctx: &Ctx, plan: &Plan, say: &dyn Fn(String)) -> Result<String, Stri
         let _ = std::fs::copy(&bin, bin.with_extension("previous"));
     }
     std::fs::rename(&new, &bin).map_err(|e| format!("cannot replace {}: {e}", bin.display()))?;
+    // MXL (les flux vidéo partagés avec les applis), livrée dans l'archive du Core.
+    // Le dossier existe toujours et est au compte du service : une mise à jour par le Core y pose
+    // les bibliothèques de la version suivante.
+    std::fs::create_dir_all(ctx.p(paths::LIB_DIR)).map_err(|e| e.to_string())?;
+    release::extract_libs(&archive, &ctx.p(paths::LIB_DIR))?;
+    ctx.chown(paths::LIB_DIR, true)?;
     let link = ctx.p(paths::LINK);
     if let Some(d) = link.parent() {
         let _ = std::fs::create_dir_all(d);
@@ -413,9 +419,9 @@ fn service_user(ctx: &Ctx) -> Result<String, String> {
 
 /// Les fichiers du système : service, ptp4l, polkit, réglages que le Core écrit, tampons réseau.
 fn system_files(ctx: &Ctx) -> Result<String, String> {
-    for d in [paths::DATA, paths::ETC] {
+    for d in [paths::DATA, paths::ETC, paths::LIB_DIR] {
         std::fs::create_dir_all(ctx.p(d)).map_err(|e| format!("cannot create {d}: {e}"))?;
-        ctx.chown(d, d == paths::DATA)?;
+        ctx.chown(d, d != paths::ETC)?;
     }
     ctx.write(paths::UNIT, &core_unit(), 0o644)?;
     let ptp = ctx.core_plain(&["ptp4l-unit"])?;

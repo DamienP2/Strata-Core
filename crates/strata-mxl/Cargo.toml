@@ -1,0 +1,12 @@
+[package]
+name = "strata-mxl"
+description = "Les flux vidéo du serveur en MXL (Media eXchange Layer, EBU DMF) : écrits par le Core, lus par les applis."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mxl.workspace = true
+uuid.workspace = true
+serde_json.workspace = true

@@ -1,0 +1,384 @@
+//! Les flux vidéo du serveur en MXL (Media eXchange Layer, EBU DMF / Linux Foundation).
+//!
+//! Le Core écrit chaque entrée (SDI, ST 2110 reçu) en flux MXL ; les applis les lisent, et
+//! écrivent leurs sorties en flux MXL que le Core envoie (SDI, ST 2110). Tout reste dans la
+//! mémoire du serveur (un dossier tmpfs, le « domaine ») : rien ne passe par le réseau.
+//!
+//! - La bibliothèque `libmxl.so` est chargée au lancement : sans elle, le Core démarre quand même
+//!   (et garde son partage `strata-share`).
+//! - Vidéo en v210 (YCbCr 4:2:2 10 bits, 6 pixels sur 16 octets) ; un grain par image, ou par
+//!   trame en entrelacé (MXL compte les trames : 1080i50, ce sont 50 grains de 540 lignes).
+//! - Les grains sont rangés par leur instant (index TAI) : un lecteur demande « l'image de
+//!   maintenant », pas « la suivante ».
+//! - Chaque flux a un identifiant stable (UUID v5) : `sdi/<carte>/<n>` pour une entrée SDI, que
+//!   les applis retrouvent d'un démarrage à l'autre.
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
+pub use uuid::Uuid;
+
+/// Les identifiants de Strata (UUID v5) : `Uuid::new_v5(&NAMESPACE, b"sdi/7b10a04e/1")`.
+pub const NAMESPACE: Uuid = Uuid::from_u128(0x5a7a_7a00_c07e_4d6e_9e1a_5f3c_0de0_0001);
+
+/// L'identifiant d'un flux de Strata, d'après son nom (`sdi/<carte>/<n>`, `sdi-out/<carte>/<n>`,
+/// `2110/<flux>`).
+pub fn flow_id(name: &str) -> Uuid {
+    Uuid::new_v5(&NAMESPACE, name.to_ascii_lowercase().as_bytes())
+}
+
+/// Le domaine MXL du serveur : `STRATA_MXL_DOMAIN`, sinon `/dev/shm/mxl`.
+pub fn domain() -> PathBuf {
+    match std::env::var_os("STRATA_MXL_DOMAIN") {
+        Some(d) if !d.is_empty() => PathBuf::from(d),
+        _ => PathBuf::from("/dev/shm/mxl"),
+    }
+}
+
+/// Où chercher la bibliothèque : `STRATA_MXL_LIB`, celle posée avec le Core, puis le système.
+fn libraries() -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = std::env::var_os("STRATA_MXL_LIB").filter(|s| !s.is_empty()).map(PathBuf::from).into_iter().collect();
+    // À côté du programme (`/opt/strata/bin/../lib`), pour une archive du Core qui l'embarque.
+    if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.join("../lib/libmxl.so.1"))) {
+        v.push(dir);
+    }
+    v.extend(["/opt/strata/lib/libmxl.so.1", "/usr/local/lib/libmxl.so.1", "libmxl.so.1", "libmxl.so"].map(PathBuf::from));
+    v
+}
+
+/// Une instance MXL sur le domaine du serveur.
+pub struct Mxl {
+    inst: mxl::MxlInstance,
+    domain: PathBuf,
+    /// « 1.2.0 ».
+    pub version: String,
+    /// La bibliothèque chargée.
+    pub library: PathBuf,
+}
+
+impl Mxl {
+    /// Charge la bibliothèque et ouvre le domaine (créé s'il manque).
+    pub fn open() -> Result<Mxl, String> {
+        Self::open_at(&domain())
+    }
+
+    pub fn open_at(domain: &Path) -> Result<Mxl, String> {
+        let mut last = "libmxl.so not found".to_string();
+        for lib in libraries() {
+            match mxl::load_api(&lib) {
+                Ok(api) => {
+                    let version = mxl::get_version(&api).map(|v| format!("{}.{}.{}", v.major, v.minor, v.bugfix)).unwrap_or_default();
+                    std::fs::create_dir_all(domain).map_err(|e| format!("cannot create the MXL domain {}: {e}", domain.display()))?;
+                    let d = domain.to_str().ok_or("the MXL domain is not UTF-8")?;
+                    let inst = mxl::MxlInstance::new(api, d, "").map_err(|e| format!("cannot open the MXL domain {d}: {e}"))?;
+                    return Ok(Mxl { inst, domain: domain.to_path_buf(), version, library: lib });
+                }
+                Err(e) => last = format!("{}: {e}", lib.display()),
+            }
+        }
+        Err(last)
+    }
+
+    pub fn domain(&self) -> &Path {
+        &self.domain
+    }
+
+    /// Crée (ou reprend) le flux vidéo `id` et rend son écrivain.
+    pub fn video_writer(&self, id: Uuid, label: &str, v: &Video) -> Result<VideoWriter, String> {
+        let def = video_flow_def(id, label, v);
+        let (w, info, _) = self.inst.create_flow_writer(&def, None).map_err(|e| format!("cannot create the MXL flow {id}: {e}"))?;
+        let rate = info.common().grain_rate().map_err(|e| e.to_string())?;
+        let grains = w.to_grain_writer().map_err(|e| e.to_string())?;
+        Ok(VideoWriter { inst: self.inst.clone(), grains, rate, video: *v, last: None, scratch: Vec::new() })
+    }
+
+    /// Ouvre le flux vidéo `id` en lecture.
+    pub fn video_reader(&self, id: Uuid) -> Result<VideoReader, String> {
+        let def = self.inst.get_flow_def(&id.to_string()).map_err(|e| format!("no MXL flow {id}: {e}"))?;
+        let video = Video::from_flow_def(&def).ok_or_else(|| format!("the MXL flow {id} is not v210 video"))?;
+        let r = self.inst.create_flow_reader(&id.to_string()).map_err(|e| format!("cannot read the MXL flow {id}: {e}"))?;
+        let grains = r.to_grain_reader().map_err(|e| e.to_string())?;
+        let rate = grains.get_config_info().map_err(|e| e.to_string())?.common().grain_rate().map_err(|e| e.to_string())?;
+        Ok(VideoReader { inst: self.inst.clone(), grains, rate, video })
+    }
+
+    /// Le flux existe et son écrivain est vivant.
+    pub fn is_active(&self, id: Uuid) -> bool {
+        self.inst.is_flow_active(&id.to_string()).unwrap_or(false)
+    }
+
+    /// Efface les flux dont l'écrivain a disparu.
+    pub fn collect(&self) {
+        let _ = self.inst.garbage_collect_flows();
+    }
+}
+
+/// Une vidéo : taille de l'image entière, cadence en images par seconde, entrelacée ou non.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Video {
+    pub width: u32,
+    pub height: u32,
+    pub rate: (u32, u32),
+    pub interlaced: bool,
+}
+
+impl Video {
+    /// Les lignes d'un grain : l'image, ou une trame en entrelacé.
+    pub fn grain_lines(&self) -> u32 {
+        if self.interlaced {
+            self.height / 2
+        } else {
+            self.height
+        }
+    }
+
+    fn from_flow_def(def: &str) -> Option<Video> {
+        let v: serde_json::Value = serde_json::from_str(def).ok()?;
+        if v["media_type"] != "video/v210" {
+            return None;
+        }
+        Some(Video {
+            width: v["frame_width"].as_u64()? as u32,
+            height: v["frame_height"].as_u64()? as u32,
+            rate: (v["grain_rate"]["numerator"].as_u64()? as u32, v["grain_rate"]["denominator"].as_u64().unwrap_or(1) as u32),
+            interlaced: v["interlace_mode"].as_str().is_some_and(|m| m.starts_with("interlaced")),
+        })
+    }
+}
+
+/// La description NMOS d'un flux vidéo v210 (ce que MXL attend pour le créer).
+pub fn video_flow_def(id: Uuid, label: &str, v: &Video) -> String {
+    serde_json::json!({
+        "description": label,
+        "id": id.to_string(),
+        "tags": { "urn:x-nmos:tag:grouphint/v1.0": [format!("Strata:{label}")] },
+        "format": "urn:x-nmos:format:video",
+        "label": label,
+        "parents": [],
+        "media_type": "video/v210",
+        "grain_rate": { "numerator": v.rate.0, "denominator": v.rate.1.max(1) },
+        "frame_width": v.width,
+        "frame_height": v.height,
+        "interlace_mode": if v.interlaced { "interlaced_tff" } else { "progressive" },
+        "colorspace": "BT709",
+        "components": [
+            { "name": "Y", "width": v.width, "height": v.height, "bit_depth": 10 },
+            { "name": "Cb", "width": v.width / 2, "height": v.height, "bit_depth": 10 },
+            { "name": "Cr", "width": v.width / 2, "height": v.height, "bit_depth": 10 }
+        ]
+    })
+    .to_string()
+}
+
+/// L'écrivain d'un flux vidéo (un seul par flux).
+pub struct VideoWriter {
+    inst: mxl::MxlInstance,
+    grains: mxl::GrainWriter,
+    rate: mxl::Rational,
+    video: Video,
+    last: Option<u64>,
+    scratch: Vec<u8>,
+}
+
+impl VideoWriter {
+    pub fn video(&self) -> Video {
+        self.video
+    }
+
+    /// L'index du prochain grain : celui de maintenant, jamais un déjà écrit. En entrelacé, une
+    /// image commence sur un index pair (trame du haut), sa seconde trame sur l'impair qui suit.
+    fn next_index(&mut self, first_field: bool) -> u64 {
+        let now = self.inst.get_current_index(&self.rate);
+        let mut i = match self.last {
+            Some(l) if now <= l => l + 1,
+            _ => now,
+        };
+        if self.video.interlaced && first_field && i % 2 == 1 {
+            i += 1;
+        }
+        self.last = Some(i);
+        i
+    }
+
+    fn grain(&mut self, first_field: bool, lines: &mut dyn Iterator<Item = &[u8]>) -> Result<(), String> {
+        let index = self.next_index(first_field);
+        let stride = v210_stride(self.video.width);
+        let mut g = self.grains.open_grain(index).map_err(|e| format!("cannot open MXL grain {index}: {e}"))?;
+        let slices = g.total_slices();
+        let payload = g.payload_mut();
+        for (dst, src) in payload.chunks_exact_mut(stride).zip(lines) {
+            dst[..src.len().min(stride)].copy_from_slice(&src[..src.len().min(stride)]);
+        }
+        g.commit(slices).map_err(|e| format!("cannot commit MXL grain {index}: {e}"))
+    }
+
+    /// Une image v210 (`stride` octets par ligne) : un grain, ou deux trames en entrelacé.
+    pub fn write_v210(&mut self, frame: &[u8], stride: usize) -> Result<(), String> {
+        let h = self.video.height as usize;
+        let row = |y: usize| &frame[y * stride..(y * stride + stride).min(frame.len())];
+        if self.video.interlaced {
+            self.grain(true, &mut (0..h).step_by(2).map(row))?;
+            self.grain(false, &mut (1..h).step_by(2).map(row))
+        } else {
+            self.grain(true, &mut (0..h).map(row))
+        }
+    }
+
+    /// Une image UYVY 8 bits, passée en v210.
+    pub fn write_uyvy(&mut self, frame: &[u8], stride: usize) -> Result<(), String> {
+        let (w, h) = (self.video.width as usize, self.video.height as usize);
+        let out = v210_stride(self.video.width);
+        let mut scratch = std::mem::take(&mut self.scratch);
+        scratch.resize(out * h, 0);
+        for y in 0..h {
+            uyvy_to_v210(&frame[y * stride..y * stride + w * 2], &mut scratch[y * out..(y + 1) * out], w);
+        }
+        let r = self.write_v210(&scratch, out);
+        self.scratch = scratch;
+        r
+    }
+}
+
+/// Le lecteur d'un flux vidéo.
+pub struct VideoReader {
+    inst: mxl::MxlInstance,
+    grains: mxl::GrainReader,
+    rate: mxl::Rational,
+    pub video: Video,
+}
+
+impl VideoReader {
+    /// L'image la plus récente, en v210 (`v210_stride(width)` octets par ligne), trames
+    /// entrelacées remises ensemble. None si rien n'a été écrit depuis `fresh`.
+    pub fn latest(&self, fresh: Duration) -> Option<Vec<u8>> {
+        let head = self.grains.get_runtime_info().ok()?.headIndex;
+        let now = self.inst.get_current_index(&self.rate);
+        let age = now.saturating_sub(head) as f64 * self.rate.denominator as f64 / self.rate.numerator.max(1) as f64;
+        if age > fresh.as_secs_f64() {
+            return None;
+        }
+        let stride = v210_stride(self.video.width);
+        let lines = self.video.grain_lines() as usize;
+        let read = |i: u64| -> Option<Vec<u8>> {
+            let g = self.grains.get_complete_grain(i, Duration::from_millis(50)).ok()?;
+            (g.index == i && g.payload.len() >= stride * lines).then(|| g.payload[..stride * lines].to_vec())
+        };
+        if !self.video.interlaced {
+            return read(head);
+        }
+        // Les deux trames d'une même image : la paire (paire, impaire) la plus récente.
+        let first = if head % 2 == 1 { head - 1 } else { head.saturating_sub(2) };
+        let (a, b) = (read(first)?, read(first + 1)?);
+        let mut out = vec![0u8; stride * lines * 2];
+        for y in 0..lines {
+            out[(2 * y) * stride..(2 * y + 1) * stride].copy_from_slice(&a[y * stride..(y + 1) * stride]);
+            out[(2 * y + 1) * stride..(2 * y + 2) * stride].copy_from_slice(&b[y * stride..(y + 1) * stride]);
+        }
+        Some(out)
+    }
+
+    /// La dernière lecture d'une appli (ns TAI), d'après MXL : quelqu'un lit-il ce flux ?
+    pub fn last_read_ns(&self) -> Option<u64> {
+        self.grains.get_runtime_info().ok().map(|r| r.lastReadTime).filter(|t| *t > 0)
+    }
+}
+
+// ---------- v210 ----------
+
+/// Octets par ligne en v210 : 6 pixels par bloc de 16 octets, lignes alignées sur 128 octets.
+pub fn v210_stride(width: u32) -> usize {
+    (width as usize).div_ceil(48) * 128
+}
+
+/// Une ligne UYVY 8 bits (Cb Y Cr Y…) en v210 (10 bits, valeurs × 4).
+pub fn uyvy_to_v210(src: &[u8], dst: &mut [u8], width: usize) {
+    let px = |i: usize| -> u32 { u32::from(*src.get(i).unwrap_or(&0)) << 2 };
+    // Les 12 valeurs (Cb Y Cr Y Cb Y Cr Y Cb Y Cr Y) de 6 pixels, dans l'ordre d'UYVY.
+    let blocks = width.div_ceil(6);
+    for b in 0..blocks {
+        let base = b * 12;
+        let v: [u32; 12] = std::array::from_fn(|k| if (b * 6 + k / 2) < width { px(base + k) } else { 0 });
+        let words =
+            [v[0] | (v[1] << 10) | (v[2] << 20), v[3] | (v[4] << 10) | (v[5] << 20), v[6] | (v[7] << 10) | (v[8] << 20), v[9] | (v[10] << 10) | (v[11] << 20)];
+        for (k, w) in words.iter().enumerate() {
+            let o = b * 16 + k * 4;
+            if o + 4 <= dst.len() {
+                dst[o..o + 4].copy_from_slice(&w.to_le_bytes());
+            }
+        }
+    }
+}
+
+/// Une ligne v210 en UYVY 8 bits (pour l'aperçu).
+pub fn v210_to_uyvy(src: &[u8], dst: &mut [u8], width: usize) {
+    let blocks = width.div_ceil(6);
+    for b in 0..blocks {
+        for k in 0..4 {
+            let o = b * 16 + k * 4;
+            let Some(w) = src.get(o..o + 4).map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]])) else { return };
+            for j in 0..3 {
+                let i = b * 12 + k * 3 + j;
+                if i / 2 < width && i < dst.len() {
+                    dst[i] = (((w >> (10 * j)) & 0x3ff) >> 2) as u8;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v210_round_trip() {
+        for w in [1920usize, 1280, 720, 3840, 10] {
+            let src: Vec<u8> = (0..w * 2).map(|i| (i * 7 % 251) as u8).collect();
+            let mut v = vec![0u8; v210_stride(w as u32)];
+            uyvy_to_v210(&src, &mut v, w);
+            let mut back = vec![0u8; w * 2];
+            v210_to_uyvy(&v, &mut back, w);
+            assert_eq!(src, back, "width {w}");
+        }
+        assert_eq!(v210_stride(1920), 5120);
+        assert_eq!(v210_stride(1280), 3456);
+    }
+
+    #[test]
+    fn stable_ids_and_flow_definitions() {
+        assert_eq!(flow_id("sdi/7B10A04E/1"), flow_id("sdi/7b10a04e/1"));
+        assert_ne!(flow_id("sdi/7b10a04e/1"), flow_id("sdi/7b10a04e/2"));
+        let v = Video { width: 1920, height: 1080, rate: (25, 1), interlaced: true };
+        let def = video_flow_def(flow_id("sdi/x/1"), "SDI 1", &v);
+        assert_eq!(Video::from_flow_def(&def), Some(v));
+        assert!(def.contains("interlaced_tff") && def.contains("video/v210"));
+    }
+
+    /// Avec la vraie bibliothèque : `STRATA_MXL_LIB=…/libmxl.so cargo test -p strata-mxl -- --ignored`.
+    #[test]
+    #[ignore]
+    fn writes_and_reads_a_real_flow() {
+        let dir = std::env::temp_dir().join(format!("strata-mxl-{}", std::process::id()));
+        let mxl = Mxl::open_at(&dir).unwrap();
+        for interlaced in [false, true] {
+            let v = Video { width: 1280, height: 720, rate: (25, 1), interlaced };
+            let id = flow_id(&format!("test/{interlaced}"));
+            let mut w = mxl.video_writer(id, "test", &v).unwrap();
+            let frame: Vec<u8> = (0..1280 * 2 * 720).map(|i| ((i / 2560) % 200) as u8 + 16).collect();
+            w.write_uyvy(&frame, 2560).unwrap();
+            assert!(mxl.is_active(id));
+            let r = mxl.video_reader(id).unwrap();
+            assert_eq!(r.video, v);
+            let got = r.latest(Duration::from_secs(2)).expect("a picture");
+            let stride = v210_stride(1280);
+            // Chaque ligne a gardé sa valeur, trames remises en place.
+            for y in [0usize, 1, 2, 361, 719] {
+                let mut line = vec![0u8; 2560];
+                v210_to_uyvy(&got[y * stride..(y + 1) * stride], &mut line, 1280);
+                assert_eq!(line[1], ((y % 200) + 16) as u8, "line {y} interlaced {interlaced}");
+            }
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

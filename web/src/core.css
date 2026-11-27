@@ -162,5 +162,6 @@
 .core-input-wire { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .core-input-card { font-size: 11px; margin-top: -4px; }
 .core-input-readers { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 11px; }
+.core-input-flow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .core-input-app { padding: 1px 8px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); font-weight: 600; }
 @media (max-width: 1100px) { .core-hw-body { flex-direction: column; } .core-hw-figure { flex-basis: auto; width: 100%; } }

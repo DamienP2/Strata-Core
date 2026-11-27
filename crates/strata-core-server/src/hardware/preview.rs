@@ -33,6 +33,8 @@ pub enum Feed {
     Share { path: PathBuf, reader: Option<Reader> },
     /// Un flux ST 2110 reçu pour l'occasion.
     Flow(st2110::Receiver),
+    /// Un flux MXL (entrée du Core, ou sortie écrite par une appli).
+    Mxl { mxl: Arc<strata_mxl::Mxl>, id: strata_mxl::Uuid, reader: Option<strata_mxl::VideoReader> },
 }
 
 impl Feed {
@@ -72,6 +74,7 @@ impl Previews {
                 Some(p) => capture::jpeg(&p.data, p.width, p.height, p.width as usize * 2, WIDTH).map(Some),
                 None => Ok(None),
             },
+            Feed::Mxl { mxl, id, reader } => from_mxl(mxl, *id, reader),
         };
         match fresh {
             Ok(Some(jpeg)) => {
@@ -97,7 +100,7 @@ impl Previews {
         let e = e.lock().unwrap();
         match &e.feed {
             Feed::Flow(rx) => Some(rx.status()),
-            Feed::Share { .. } => None,
+            Feed::Share { .. } | Feed::Mxl { .. } => None,
         }
     }
 
@@ -116,6 +119,26 @@ impl Previews {
     pub fn keys(&self) -> Vec<String> {
         self.entries.lock().unwrap().keys().cloned().collect()
     }
+}
+
+/// L'image la plus récente d'un flux MXL (écrite dans les 2 dernières secondes).
+fn from_mxl(mxl: &strata_mxl::Mxl, id: strata_mxl::Uuid, reader: &mut Option<strata_mxl::VideoReader>) -> Result<Option<Vec<u8>>, String> {
+    if reader.is_none() || !mxl.is_active(id) {
+        *reader = None;
+        if !mxl.is_active(id) {
+            return Err("nothing is published here".into());
+        }
+        *reader = Some(mxl.video_reader(id)?);
+    }
+    let r = reader.as_ref().unwrap();
+    let Some(v210) = r.latest(Duration::from_secs(2)) else { return Ok(None) };
+    let (w, h) = (r.video.width as usize, r.video.height as usize);
+    let stride = strata_mxl::v210_stride(r.video.width);
+    let mut uyvy = vec![0u8; w * 2 * h];
+    for y in 0..h {
+        strata_mxl::v210_to_uyvy(&v210[y * stride..(y + 1) * stride], &mut uyvy[y * w * 2..(y + 1) * w * 2], w);
+    }
+    capture::jpeg(&uyvy, w as u32, h as u32, w * 2, WIDTH).map(Some)
 }
 
 /// Une image du partage, si une nouvelle est là (ou arrive dans les 400 ms).
