@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Strata Core · cockpit</title>
+<title>Cockpit Strata Core</title>
 <style>
 /*CSS*/
 </style>
@@ -109,6 +109,8 @@
 .mock-note button.on { background: #fff; color: #000; }
 .mock-note i { width: 1px; height: 18px; background: #444; margin: 0 4px; }
 .mock-note span { color: #aaa; padding: 0 4px; }
+.mock-note { bottom: calc(14px + env(safe-area-inset-bottom, 0px)); }
+@media (max-width: 760px) { .mock-note { flex-wrap: wrap; justify-content: center; white-space: normal; width: calc(100% - 32px); } .topbar { overflow-x: auto; } }
 </style>
 </head>
 <body>
@@ -428,7 +430,7 @@ function render() {
   document.getElementById('root').innerHTML = S.prop === 'B' ? `<div class="mk-shell">${rail()}${app}</div>` : app;
   document.querySelectorAll('#mock [data-prop]').forEach((b) => b.classList.toggle('on', b.dataset.prop === S.prop));
   document.querySelectorAll('#mock [data-role]').forEach((b) => b.classList.toggle('on', b.dataset.role === S.role));
-  try { localStorage.setItem('mk.state', JSON.stringify({ prop: S.prop, role: S.role, theme: theme() })); } catch { /* */ }
+  try { localStorage.setItem('mk.state', JSON.stringify({ prop: S.prop, role: S.role })); } catch { /* */ }
 }
 const theme = () => (document.documentElement.dataset.theme === 'light' ? 'light' : 'dark');
 function setTheme(t) { if (t === 'light') document.documentElement.dataset.theme = 'light'; else delete document.documentElement.dataset.theme; }
@@ -450,7 +452,10 @@ document.addEventListener('click', (e) => {
   const ch = t.closest('.asr-chip'); if (ch) { ch.parentElement.querySelectorAll('.asr-chip').forEach((b) => b.classList.toggle('on', b === ch)); return; }
   if (S.menu && !inMenu) { S.menu = null; render(); }
 });
-try { const s = JSON.parse(localStorage.getItem('mk.state') || '{}'); if (s.prop) S.prop = s.prop; if (s.role) S.role = s.role; if (s.theme) setTheme(s.theme); } catch { /* */ }
+try { const s = JSON.parse(localStorage.getItem('mk.state') || '{}'); if (s.prop) S.prop = s.prop; if (s.role) S.role = s.role; } catch { /* */ }
+// Thème : celui que la page reçoit (data-theme), sinon celui du système.
+if (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: light)').matches) setTheme('light');
+if (document.documentElement.dataset.theme === 'dark') delete document.documentElement.dataset.theme;
 const h = location.hash.slice(1); if (/^[ABC]$/.test(h)) S.prop = h;
 render();
 </script>
