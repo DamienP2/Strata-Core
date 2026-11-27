@@ -397,6 +397,10 @@ fn desktop_video(ctx: &Ctx, src: &Path) -> Result<String, String> {
         names.truncate(12);
         return Err(format!("no Desktop Video package (.deb) nor installer (.sh) found; it holds: {}", names.join(", ")));
     }
+    // L'archive déballée (2 Go pour Desktop Video 16) n'a plus d'usage.
+    if dir.starts_with(ctx.p("/var/cache/strata")) {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     let _ = ctx.run("modprobe", &["blackmagic"]);
     let _ = ctx.run("modprobe", &["blackmagic-io"]);
     let loaded = ctx.dry() || Path::new("/dev/blackmagic").exists();
