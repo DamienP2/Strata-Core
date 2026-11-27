@@ -49,6 +49,8 @@ pub struct InputStatus {
     pub frames: u64,
     pub fps: f64,
     pub audio: bool,
+    /// Qui décode : `nvdec`, `vaapi` (le GPU) ou `cpu`.
+    pub decoder: Option<String>,
     pub restarts: u32,
     pub error: Option<String>,
     /// Depuis quand (ms) dans cet état.
@@ -277,7 +279,19 @@ fn backoff(n: u32) -> Duration {
 
 /// Les options de ffmpeg pour une entrée : la source, l'image (v210 sur stdout), le son
 /// (float32 sur le fd 3), le relais local.
-pub fn input_args(c: &InputCfg, v: &Video, audio: bool) -> Vec<String> {
+/// Le décodage par le GPU : `cuda` (NVIDIA) ou `vaapi` et son nœud de rendu.
+pub type HwDecode = (String, Option<String>);
+
+/// Le décodage par le GPU d'après l'encodeur qu'il offre (le même GPU décode).
+fn hw_decode(env: &Env) -> Option<HwDecode> {
+    match &env.gpu {
+        Some((e, _)) if e == "nvenc" => Some(("cuda".into(), None)),
+        Some((e, node)) if e == "vaapi" => Some(("vaapi".into(), node.clone())),
+        _ => None,
+    }
+}
+
+pub fn input_args(c: &InputCfg, v: &Video, audio: bool, hw: Option<&HwDecode>) -> Vec<String> {
     let mut a: Vec<String> = Vec::new();
     let sch = scheme(&c.url).unwrap_or("");
     match sch {
@@ -292,6 +306,14 @@ pub fn input_args(c: &InputCfg, v: &Video, audio: bool) -> Vec<String> {
         _ => {}
     }
     let url = if sch == "rtmp" { c.url.replacen("rtmp://@", "rtmp://0.0.0.0", 1) } else { c.url.clone() };
+    // Décodé par le GPU quand il y en a un (les images reviennent en mémoire pour la suite).
+    match hw {
+        Some((kind, node)) if kind == "vaapi" => {
+            a.extend(["-hwaccel".into(), "vaapi".into(), "-hwaccel_device".into(), node.clone().unwrap_or_else(|| "/dev/dri/renderD128".into())]);
+        }
+        Some((kind, _)) => a.extend(["-hwaccel".into(), kind.clone()]),
+        None => {}
+    }
     a.extend(["-fflags", "+genpts+discardcorrupt", "-i"].map(String::from));
     a.push(url);
     // L'image : à la cadence et à la taille voulues, en v210.
@@ -337,6 +359,7 @@ fn run_input(c: &InputCfg, env: &Env, stop: &AtomicBool, status: &Mutex<HashMap<
     let stride = strata_mxl::v210_stride(v.width);
     let frame_bytes = stride * v.height as usize;
     let mut audio = true;
+    let mut hw = hw_decode(env);
     let mut failures = 0u32;
     while !stop.load(Ordering::Relaxed) {
         set(&|s| {
@@ -344,7 +367,14 @@ fn run_input(c: &InputCfg, env: &Env, stop: &AtomicBool, status: &Mutex<HashMap<
                 set_state(s, State::Starting, |s| (&mut s.state, &mut s.since));
             }
         });
-        let mut p = match ffmpeg::spawn(&input_args(c, &v, audio), false, true, if audio { ffmpeg::Fd3::Read } else { ffmpeg::Fd3::None }) {
+        let decoder = match hw.as_ref().map(|h| h.0.as_str()) {
+            Some("cuda") => "nvdec",
+            Some(k) => k,
+            None => "cpu",
+        }
+        .to_string();
+        set(&|s| s.decoder = Some(decoder.clone()));
+        let mut p = match ffmpeg::spawn(&input_args(c, &v, audio, hw.as_ref()), false, true, if audio { ffmpeg::Fd3::Read } else { ffmpeg::Fd3::None }) {
             Ok(p) => p,
             Err(e) => {
                 set(&|s| {
@@ -480,6 +510,12 @@ fn run_input(c: &InputCfg, env: &Env, stop: &AtomicBool, status: &Mutex<HashMap<
         let log = p.log.lock().unwrap().clone();
         let errors = log.errors.join(" ");
         // Une source sans son : relancée sans sortie audio (du silence à la place).
+        // Le GPU ne décode pas ce flux (pilote, codec) : décodé par le processeur.
+        if hw.is_some() && (errors.contains("Hardware device setup failed") || errors.contains("Device creation failed") || errors.contains("hwaccel")) {
+            tracing::info!("network input {}: GPU decoding unavailable, decoding on the CPU", c.name);
+            hw = None;
+            continue;
+        }
         if audio && (errors.contains("does not contain any stream") || errors.contains("matches no streams")) {
             audio = false;
             continue;
@@ -509,21 +545,24 @@ fn encoder_of(c: &OutputCfg, env: &Env) -> (String, Option<String>) {
     }
 }
 
-/// Les options de l'encodeur : UYVY sur stdin et float32 sur le fd 3 (à la cadence `feed`), un
+/// Les options de l'encodeur : v210 sur stdin et float32 sur le fd 3 (à la cadence `feed`), un
 /// MPEG-TS sur stdout (`target` : ce qui part).
 pub fn encoder_args(c: &OutputCfg, feed: &Video, target: &Video, encoder: &str, node: Option<&str>) -> Vec<String> {
     let mut a: Vec<String> = Vec::new();
     if encoder == "vaapi" {
         a.extend(["-vaapi_device".into(), node.unwrap_or("/dev/dri/renderD128").to_string()]);
     }
-    a.extend(["-f", "rawvideo", "-pix_fmt", "uyvy422", "-s"].map(String::from));
+    // L'image telle que MXL la garde (v210, 10 bits) : ffmpeg la lit sans que le Core la convertisse.
+    a.extend(["-f", "v210", "-video_size"].map(String::from));
     a.push(format!("{}x{}", feed.width, feed.height));
     a.push("-framerate".into());
     a.push(format!("{}/{}", feed.rate.0, feed.rate.1.max(1)));
     a.extend(["-thread_queue_size", "64", "-i", "pipe:0"].map(String::from));
     a.extend(["-f", "f32le", "-ar", "48000", "-ac", "2", "-thread_queue_size", "512", "-i", "pipe:3", "-map", "0:v", "-map", "1:a"].map(String::from));
     let rate = format!("{}/{}", target.rate.0, target.rate.1.max(1));
-    let mut vf = Vec::new();
+    // Le v210 lu (10 bits) passe tout de suite en 8 bits 4:2:2 : le désentrelacement et la mise à
+    // l'échelle travaillent en 8 bits, comme l'encodeur (H.264 8 bits).
+    let mut vf = vec!["format=yuv422p".to_string()];
     if feed.interlaced {
         vf.push("setfield=tff".to_string());
         vf.push("bwdif=mode=send_field".to_string());
@@ -636,8 +675,13 @@ fn target_of(c: &OutputCfg, feed: &Video) -> Video {
     }
 }
 
-fn black_uyvy(v: &Video) -> Vec<u8> {
-    (0..v.width as usize * 2 * v.height as usize).map(|i| if i % 2 == 0 { 128 } else { 16 }).collect()
+/// Une image noire v210.
+fn black_v210(v: &Video) -> Vec<u8> {
+    let stride = strata_mxl::v210_stride(v.width);
+    let uyvy: Vec<u8> = (0..v.width as usize * 2).map(|i| if i % 2 == 0 { 128 } else { 16 }).collect();
+    let mut line = vec![0u8; stride];
+    strata_mxl::uyvy_to_v210(&uyvy, &mut line, v.width as usize);
+    line.repeat(v.height as usize)
 }
 
 fn run_output(c: &OutputCfg, env: &Env, stop: &AtomicBool, status: &Mutex<HashMap<String, OutputStatus>>) {
@@ -768,9 +812,7 @@ fn feed_encoder(
         }
     });
     let period = Duration::from_secs_f64(feed.rate.1.max(1) as f64 / feed.rate.0.max(1) as f64);
-    let stride = strata_mxl::v210_stride(feed.width);
-    let (w, h) = (feed.width as usize, feed.height as usize);
-    let black = Arc::new(black_uyvy(feed));
+    let black = Arc::new(black_v210(feed));
     let mut last: Arc<Vec<u8>> = black.clone();
     let mut last_live = Instant::now() - Duration::from_secs(10);
     let mut areader: Option<strata_mxl::AudioReader> = None;
@@ -801,11 +843,7 @@ fn feed_encoder(
             areader = None;
         }
         if let Some(v210) = reader.as_ref().and_then(|r| r.latest(period * 3)) {
-            let mut uyvy = vec![0u8; w * 2 * h];
-            for y in 0..h {
-                strata_mxl::v210_to_uyvy(&v210[y * stride..(y + 1) * stride], &mut uyvy[y * w * 2..(y + 1) * w * 2], w);
-            }
-            last = Arc::new(uyvy);
+            last = Arc::new(v210);
             last_live = Instant::now();
         } else if last_live.elapsed() > Duration::from_secs(1) {
             last = black.clone();
@@ -961,17 +999,19 @@ mod tests {
     fn input_commands() {
         let v = Video { width: 1920, height: 1080, rate: (25, 1), interlaced: true };
         let c = InputCfg { id: "a".into(), url: "rtmp://0.0.0.0:1935/live/a".into(), relay: true, relay_port: 20000, ..Default::default() };
-        let a = input_args(&c, &v, true).join(" ");
+        let a = input_args(&c, &v, true, None).join(" ");
         assert!(a.starts_with("-listen 1 "));
         assert!(a.contains("fps=25/1,scale=1920:1080:interl=-1,setfield=tff"));
         assert!(a.contains("-c:v v210 -f rawvideo pipe:1"));
         assert!(a.contains("-c:a pcm_f32le -flush_packets 1 -f f32le pipe:3"));
         assert!(a.ends_with("udp://127.0.0.1:20000?pkt_size=1316"));
         let c = InputCfg { url: "srt://10.0.0.1:9000".into(), ..Default::default() };
-        let a = input_args(&c, &Video { interlaced: false, rate: (50, 1), ..v }, false).join(" ");
+        let a = input_args(&c, &Video { interlaced: false, rate: (50, 1), ..v }, false, None).join(" ");
         assert!(a.starts_with("-fflags"));
         assert!(a.contains("yadif=mode=send_frame:deint=interlaced,fps=50/1"));
         assert!(!a.contains("pipe:3") && !a.contains("udp://"));
+        let cuda = ("cuda".to_string(), None);
+        assert!(input_args(&c, &v, false, Some(&cuda)).join(" ").starts_with("-hwaccel cuda -fflags"));
     }
 
     #[test]
@@ -981,8 +1021,8 @@ mod tests {
         let target = target_of(&c, &feed);
         assert_eq!(format_name(&target), "1080p50");
         let a = encoder_args(&c, &feed, &target, "x264", None).join(" ");
-        assert!(a.contains("-s 1920x1080 -framerate 25/1"));
-        assert!(a.contains("setfield=tff,bwdif=mode=send_field,fps=50/1,format=yuv420p"));
+        assert!(a.contains("-f v210 -video_size 1920x1080 -framerate 25/1"));
+        assert!(a.contains("format=yuv422p,setfield=tff,bwdif=mode=send_field,fps=50/1,format=yuv420p"));
         assert!(a.contains("-b:v 6000k -maxrate 6000k -bufsize 12000k -g 100"));
         assert!(a.ends_with("-f mpegts -muxdelay 0 -flush_packets 1 pipe:1"));
         let c720 = OutputCfg { format: "720p50".into(), ..c.clone() };

@@ -227,7 +227,8 @@ pub fn reconcile(s: &crate::state::AppState) {
         Some(Ok(m)) => Some(m.clone()),
         _ => None,
     };
-    let needs_gpu = cfg.outputs.iter().any(|o| o.enabled && matches!(o.encoder.as_str(), "auto" | "vaapi"));
+    // Le GPU (cherché une fois) : il décode les entrées et encode les sorties.
+    let needs_gpu = cfg.inputs.iter().any(|i| i.enabled) || cfg.outputs.iter().any(|o| o.enabled && matches!(o.encoder.as_str(), "auto" | "vaapi"));
     let env = mxl.map(|mxl| engine::Env {
         mxl,
         house: house_video(&crate::hardware::HardwareConfig::load(&s.data_dir)),
