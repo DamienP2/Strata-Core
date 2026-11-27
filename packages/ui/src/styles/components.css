@@ -226,7 +226,6 @@ button.st-status:hover { background: var(--panel-2); }
 .st-user-btn .st-avatar { width: 28px; height: 28px; font-size: 12px; }
 .st-user-btn.named { padding: 0 9px 0 2px; }
 .st-user-btn.named:hover, .st-user-btn.named.on { background: var(--panel-2); }
-.st-user-btn.on .st-avatar { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--accent); }
 .st-user-menu { left: auto; right: 0; top: calc(100% + 8px); z-index: 300; min-width: 250px; }
 .st-user-who { display: flex; align-items: center; gap: 10px; padding: 6px 8px 8px; }
 .st-user-who b { display: block; font-size: 13px; color: var(--text); }

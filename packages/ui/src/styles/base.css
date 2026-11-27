@@ -13,9 +13,9 @@ code { font-family: var(--mono); font-size: 11px; color: var(--text-3); }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 10px; border: 2px solid transparent; background-clip: padding-box; }
 ::-webkit-scrollbar-corner { background: transparent; }
-/* Pas de cadre de focus (les champs gardent leur bordure) ; au clavier seulement, sur ce qui n'est pas un champ. */
+/* Aucun cadre de focus, nulle part (ni à la souris ni au clavier) : les champs gardent leur bordure,
+   les éléments de menu leur fond au survol. */
 :focus, :focus-visible { outline: none; }
-:is(button, a, [role='button'], [role='tab'], [tabindex]:not([tabindex='-1'])):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* Hauteur des champs dans les pages et les modales */
 :is(.st-page, .st-modal-back) :is(input:not([type='checkbox']):not([type='radio']):not([type='color']):not([type='range']), select) { min-height: var(--h-control); }
 
