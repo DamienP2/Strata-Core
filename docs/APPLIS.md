@@ -142,9 +142,31 @@ GET $STRATA_CORE_URL/api/hardware/shared
 | `flows` | les flux ST 2110 : nom, sens, essence, `red` (et `blue` en 2022-7), `port` (1 ou 2, ports indépendants) |
 | `ndi` | le dossier des réglages NDI (`configDir`), le serveur de découverte, le nom de machine |
 | `ptp` | le domaine PTP, le décalage TAI − UTC |
+| `clock` | d'où le serveur prend l'heure (`ptp` ou `ntp`), le timecode maison (`house` : cadence, heure locale / UTC / décalage, drop frame, recalage quotidien) et le fuseau du serveur |
 
 NDI : le Core donne `NDI_CONFIG_DIR` à l'appli qu'il lance ; la bibliothèque NDI y lit l'interface,
 le serveur de découverte et le nom de machine, les mêmes pour toutes les applis.
+
+## Le timecode maison
+
+Le Core tient l'heure du serveur sur le PTP (ou le NTP), et toutes les machines tenues par le même
+leader ont la même heure. Le timecode maison s'en **calcule** : une appli n'a besoin ni de câble LTC
+ni de lire le timecode d'une entrée. Avec `clock` de `/api/hardware/shared` :
+
+```rust
+use strata_core::timecode::{house_timecode, HouseClock};
+
+let house: HouseClock = serde_json::from_value(shared["clock"]["house"].clone())?;
+let tz = shared["clock"]["timezone"].as_str().unwrap_or("UTC");
+let tai = shared["ptp"]["taiOffset"].as_u64().unwrap_or(37) as u32;
+let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos() as i128;
+let tc = house_timecode(now, &house, tz, tai); // 13:53:20:08
+```
+
+- Aux cadences entières (25, 30, 24), c'est l'heure du jour comptée en images.
+- En 29,97 et 23,98, le timecode compte les images depuis le **recalage quotidien** (SMPTE ST
+  2059-1), en drop frame si réglé ; leurs instants sont alignés sur l'époque PTP.
+- *Réglages › Matériel › Horloge* compare le timecode de chaque entrée SDI à celui de la maison.
 
 ## Lire une entrée SDI
 

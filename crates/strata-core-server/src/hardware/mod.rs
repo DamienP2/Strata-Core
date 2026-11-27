@@ -16,6 +16,7 @@
 //!
 //! Gardé dans `hardware.json`. Les applis le lisent par `GET /api/hardware/shared` (docs/APPLIS.md).
 pub mod capture;
+pub mod clock;
 pub mod decklink;
 pub mod ndi;
 pub mod net;
@@ -52,6 +53,8 @@ pub struct HardwareConfig {
     pub ndi: NdiSettings,
     pub flows: Vec<Flow>,
     pub ptp: PtpSettings,
+    /// L'heure du serveur, la cadence et le timecode maison.
+    pub clock: clock::ClockSettings,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -298,6 +301,7 @@ impl HardwareConfig {
         if self.ptp.tai_offset > 100 {
             return Err("the TAI offset is in seconds (37 since 2017)".into());
         }
+        self.clock.check()?;
         Ok(())
     }
 }
@@ -339,6 +343,7 @@ pub fn routes() -> Router<Shared> {
     Router::new()
         .route("/api/hardware", get(read).put(write))
         .route("/api/hardware/clock", get(clock))
+        .route("/api/hardware/clock/apply", axum::routing::post(clock_apply))
         .route("/api/hardware/ndi/sources", get(ndi_sources))
         .route("/api/hardware/shared", get(shared))
         .route("/api/hardware/inputs", get(inputs))
@@ -349,7 +354,8 @@ pub fn routes() -> Router<Shared> {
 pub fn reconcile_inputs(s: &crate::state::AppState) {
     let cfg = HardwareConfig::load(&s.data_dir);
     let (detected, _, simulated) = decklink::detect();
-    s.captures.reconcile(capture::wanted(&cfg, &detected, simulated));
+    let tz = s.config.load().timezone.clone();
+    s.captures.reconcile(capture::wanted(&cfg, &detected, simulated, &tz));
 }
 
 /// Les entrées captées : signal, format, images par seconde, applis qui les lisent.
@@ -382,26 +388,54 @@ async fn write(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(mut c
     let saved = blocking(move || {
         let (cards, _, _) = decklink::detect();
         cfg.check(&cards)?;
+        let before = HardwareConfig::load(&s2.data_dir);
         strata_core::files::write_json(&HardwareConfig::path(&s2.data_dir), &cfg, false).map_err(|e| format!("cannot save the hardware settings: {e}"))?;
         reconcile_inputs(&s2);
         let ndi_changed = ndi::write_settings(&s2.data_dir, &cfg.ndi, &cfg.network.ndi);
-        Ok::<_, String>((snapshot(&s2), ndi_changed))
+        // L'heure : remise en place quand ce qui la règle change.
+        let files = clock::files(&cfg);
+        let applied = (files != clock::files(&before)).then(|| clock::apply(&s2.data_dir, &files, false));
+        Ok::<_, String>((snapshot(&s2), ndi_changed, applied))
     })
     .await?
     .map_err(bad)?;
     tracing::info!("hardware settings changed by {}", me.username);
-    let (mut v, ndi_changed) = saved;
+    let (mut v, ndi_changed, applied) = saved;
     v["ndiChanged"] = json!(ndi_changed);
+    v["clockApplied"] = json!(applied);
     Ok(Json(v))
 }
 
-/// L'état de NTP et de PTP (lu avec leurs outils, quelques secondes au plus).
-async fn clock(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<sync::SyncStatus>> {
+/// L'horloge : l'état de NTP et de PTP (lu avec leurs outils, quelques secondes au plus), le
+/// timecode maison, le bilan, les fichiers que le Core écrit pour le système.
+async fn clock(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
     require(me.admin)?;
-    let domain = HardwareConfig::load(&s.data_dir).ptp.domain;
-    s.clock.set_domain(domain);
     let s2 = s.clone();
-    Ok(Json(blocking(move || s2.clock.read()).await?))
+    let v = blocking(move || {
+        let cfg = HardwareConfig::load(&s2.data_dir);
+        s2.clock.set_domain(cfg.ptp.domain);
+        let st = s2.clock.read();
+        let tz = s2.config.load().timezone.clone();
+        let (cards, _, _) = decklink::detect();
+        let checks = clock::checks(&cfg, &st, &cards, &s2.captures.list(), &tz);
+        let mut v = serde_json::to_value(&st).unwrap_or_default();
+        v["house"] = clock::house_now(&cfg, &tz);
+        v["timezone"] = json!(tz);
+        v["checks"] = json!(checks);
+        v["files"] = json!(clock::files(&cfg));
+        v
+    })
+    .await?;
+    Ok(Json(v))
+}
+
+/// Remet en place les fichiers de l'heure et relance chrony (et ptp4l).
+async fn clock_apply(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
+    require(me.admin)?;
+    let s2 = s.clone();
+    let steps = blocking(move || clock::apply(&s2.data_dir, &clock::files(&HardwareConfig::load(&s2.data_dir)), true)).await?;
+    tracing::info!("clock settings applied by {}", me.username);
+    Ok(Json(json!({ "steps": steps })))
 }
 
 /// Les sources NDI vues sur le réseau.
@@ -459,6 +493,7 @@ async fn shared(State(s): State<Shared>, ConnectInfo(peer): ConnectInfo<SocketAd
             "ndi": {"configDir": ndi::config_dir(&s2.data_dir), "discovery": cfg.ndi.discovery, "machine": cfg.ndi.machine},
             "flows": cfg.flows,
             "ptp": cfg.ptp,
+            "clock": {"source": cfg.clock.source, "house": cfg.clock.house, "timezone": s2.config.load().timezone},
         })
     })
     .await?;

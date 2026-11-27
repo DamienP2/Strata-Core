@@ -33,10 +33,21 @@ pub struct Wanted {
     pub connector: u32,
     /// L'appareil Desktop Video ; None : simulé.
     pub device: Option<u32>,
+    /// Simulée : la cadence et le timecode maison que suit la mire.
+    pub pattern: Option<Pattern>,
+}
+
+/// Ce que suit la mire d'une entrée simulée : comme une caméra calée sur la maison.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pattern {
+    pub house: strata_core::timecode::HouseClock,
+    pub timezone: String,
+    pub tai_offset: u32,
 }
 
 /// Les entrées à capter d'après les réglages et les cartes présentes.
-pub fn wanted(cfg: &HardwareConfig, detected: &[decklink::DetectedCard], simulated: bool) -> Vec<Wanted> {
+pub fn wanted(cfg: &HardwareConfig, detected: &[decklink::DetectedCard], simulated: bool, timezone: &str) -> Vec<Wanted> {
+    let pattern = simulated.then(|| Pattern { house: cfg.clock.house.clone(), timezone: timezone.to_string(), tai_offset: cfg.ptp.tai_offset });
     let mut out = Vec::new();
     for c in &cfg.cards {
         let Some(d) = detected.iter().find(|d| d.id == c.id) else { continue };
@@ -46,7 +57,7 @@ pub fn wanted(cfg: &HardwareConfig, detected: &[decklink::DetectedCard], simulat
                 continue;
             }
             let Some(&device) = d.devices.get(i) else { continue };
-            out.push(Wanted { card: c.id.clone(), connector: i as u32 + 1, device: (!simulated).then_some(device) });
+            out.push(Wanted { card: c.id.clone(), connector: i as u32 + 1, device: (!simulated).then_some(device), pattern: pattern.clone() });
         }
     }
     out
@@ -192,9 +203,12 @@ fn start(w: Wanted) -> Running {
                         return;
                     }
                 };
-                match w.device {
-                    None => simulate(&mut writer, w.connector, &stop, &status),
-                    Some(device) => capture(&mut writer, device, &stop, &status),
+                match (w.device, &w.pattern) {
+                    (Some(device), _) => capture(&mut writer, device, &stop, &status),
+                    (None, Some(p)) => simulate(&mut writer, w.connector, p, &stop, &status),
+                    (None, None) => {
+                        simulate(&mut writer, w.connector, &Pattern { house: Default::default(), timezone: "UTC".into(), tai_offset: 37 }, &stop, &status)
+                    }
                 }
             })
             .ok()
@@ -358,19 +372,29 @@ fn background(connector: u32) -> Vec<u8> {
     b
 }
 
-fn simulate(writer: &mut Writer, connector: u32, stop: &AtomicBool, status: &Mutex<Status>) {
+fn simulate(writer: &mut Writer, connector: u32, p: &Pattern, stop: &AtomicBool, status: &Mutex<Status>) {
+    use strata_core::timecode::{house_timecode, HouseRate};
     let bg = background(connector);
     let mut frame = bg.clone();
-    let period = Duration::from_millis(40);
+    let (num, den) = p.house.rate.ratio();
+    let period = Duration::from_nanos(1_000_000_000 * den / num);
+    let format = format!(
+        "720p{}",
+        match p.house.rate {
+            HouseRate::R25 => "25",
+            HouseRate::R2997 => "29.97",
+            HouseRate::R30 => "30",
+            HouseRate::R24 => "24",
+            HouseRate::R2398 => "23.98",
+        }
+    );
     let start = Instant::now();
-    // Le timecode part de l'heure du jour (UTC).
-    let day = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() % 86_400) * 25;
     let mut meter = Meter::new();
     {
         let mut s = status.lock().unwrap();
         s.state = CaptureState::Capturing;
         s.signal = Some(true);
-        s.format = Some("720p25".into());
+        s.format = Some(format);
     }
     writer.set_signal(Some(true));
     let mut n = 0u64;
@@ -380,16 +404,12 @@ fn simulate(writer: &mut Writer, connector: u32, stop: &AtomicBool, status: &Mut
         let speed = 6 + connector * 2;
         let x = ((n * speed as u64) % (W as u64 + 120)) as u32;
         fill(&mut frame, x.saturating_sub(120), H * 2 / 3 + 90, 120.min(x), H / 3 - 120, (235, 128, 128));
-        let f = day + n;
-        let tc = Timecode {
-            hours: (f / 90_000 % 24) as u8,
-            minutes: (f / 1500 % 60) as u8,
-            seconds: (f / 25 % 60) as u8,
-            frames: (f % 25) as u8,
-            drop_frame: false,
-            field_mark: false,
-        };
-        let info = FrameInfo { width: W, height: H, stride: W * 2, format: Format::Uyvy, rate: (25, 1), interlaced: false, timecode: Some(tc) };
+        // Le timecode maison, comme une caméra calée sur le leader.
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as i128);
+        let t = house_timecode(now, &p.house, &p.timezone, p.tai_offset);
+        let tc = Timecode { hours: t.hours, minutes: t.minutes, seconds: t.seconds, frames: t.frames, drop_frame: t.drop_frame, field_mark: false };
+        let info =
+            FrameInfo { width: W, height: H, stride: W * 2, format: Format::Uyvy, rate: (num as u32, den as u32), interlaced: false, timecode: Some(tc) };
         let ok = writer.publish(&info, &frame).is_ok();
         meter.tick(ok, writer, status, |s| s.timecode = Some(tc_text(&tc)));
         n += 1;
@@ -399,7 +419,7 @@ fn simulate(writer: &mut Writer, connector: u32, stop: &AtomicBool, status: &Mut
             std::thread::sleep(next - now);
         } else if now - next > Duration::from_secs(1) {
             // En retard d'une seconde (machine chargée) : on repart de maintenant.
-            n = ((now - start).as_millis() / 40) as u64;
+            n = ((now - start).as_nanos() / period.as_nanos()) as u64;
         }
     }
 }
@@ -446,7 +466,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::env::set_var("STRATA_SHARE_DIR", &dir);
         let caps = Captures::default();
-        let w = |n| Wanted { card: "abc".into(), connector: n, device: None };
+        let w = |n| Wanted { card: "abc".into(), connector: n, device: None, pattern: None };
         caps.reconcile(vec![w(1), w(2)]);
         let share = caps.share_of("abc", 2).unwrap();
         assert_eq!(share, dir.join("strata-sdi-abc-2"));

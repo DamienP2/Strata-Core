@@ -61,6 +61,8 @@ export interface Nic {
   port?: number | null;
   onboard: boolean;
   connector?: 'sfp' | 'rj45' | null;
+  /** Son horloge matérielle PTP (`ptp0`). */
+  phc?: string | null;
 }
 
 export interface Flow {
@@ -82,6 +84,15 @@ export interface HwConfig {
   ndi: { discovery: string; machine: string };
   flows: Flow[];
   ptp: { domain: number; taiOffset: number };
+  clock: ClockSettings;
+}
+
+export type HouseRate = '25' | '29.97' | '30' | '24' | '23.98';
+
+export interface ClockSettings {
+  source: 'ptp' | 'ntp';
+  ntpServers: string[];
+  house: { rate: HouseRate; offset: 'local' | 'utc' | 'fixed'; fixedMinutes: number; dropFrame: boolean; dailyJam: string };
 }
 
 export interface Snapshot {
@@ -90,6 +101,13 @@ export interface Snapshot {
   models: Model[];
   nics: Nic[];
   ndi: { path?: string; version?: string | null; error?: string };
+}
+
+/** Une étape de la mise en place de l'heure (chrony, ptp4l). */
+export interface ApplyStep {
+  what: 'chrony' | 'ptp4l' | 'unit' | 'restartChrony' | 'startPtp4l' | 'stopPtp4l';
+  ok: boolean;
+  message?: string | null;
 }
 
 export const useHw = create<{ snap: Snapshot | null; draft: HwConfig | null; saving: boolean }>(() => ({ snap: null, draft: null, saving: false }));
@@ -126,9 +144,11 @@ export async function saveHw() {
   if (!draft) return;
   useHw.setState({ saving: true });
   try {
-    const snap = await api<Snapshot & { ndiChanged?: boolean }>('PUT', '/api/hardware', draft);
+    const snap = await api<Snapshot & { ndiChanged?: boolean; clockApplied?: ApplyStep[] | null }>('PUT', '/api/hardware', draft);
     useHw.setState({ snap, draft: structuredClone(snap.config) });
     toast(t('Settings saved'));
+    const failed = snap.clockApplied?.find((s) => !s.ok);
+    if (failed) toast(t('The server time could not be set up: {why}', { why: friendly(failed.message ?? '') }), 'error');
     if (snap.ndiChanged) toast(t('Restart the apps that use NDI: they read these settings when they start.'), 'info');
   } catch (e) {
     toast(friendly(e), 'error');

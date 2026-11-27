@@ -69,6 +69,10 @@ comme une appli :
 STRATA_APP_ID=livecut cargo run -p strata-share --example read -- /dev/shm/strata-sdi-<carte>-1
 ```
 
+L'horloge : `STRATA_FAKE_CLOCK=ptp` (ou `ntp`, `none`) simule l'état de PTP et de chrony ;
+`STRATA_SYSTEM_ROOT=./data/root` fait écrire les fichiers de chrony et ptp4l dans ce dossier au lieu
+de `/etc`, sans rien relancer.
+
 Le pont DeckLink (`crates/strata-decklink`) se compile avec g++ ; sans compilateur C++, le Core se
 construit sans lui (avertissement). Le pilote Desktop Video n'est nécessaire qu'à l'exécution.
 

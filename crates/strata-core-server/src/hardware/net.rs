@@ -28,6 +28,8 @@ pub struct Nic {
     pub onboard: bool,
     /// `sfp` (cage pour module ou câble) ou `rj45`, d'après la famille de la carte.
     pub connector: Option<&'static str>,
+    /// Son horloge matérielle PTP (`ptp0`) : horodatage matériel possible.
+    pub phc: Option<String>,
 }
 
 /// Les familles de cartes à cages SFP (10, 25, 100 Gb/s).
@@ -93,6 +95,7 @@ fn fake_nics() -> Option<Vec<Nic>> {
         port: Some(0),
         onboard: true,
         connector: Some("rj45"),
+        phc: Some("ptp0".into()),
     }];
     for (slot, m) in v.split(',').map(str::trim).enumerate() {
         let (model, ports, speed, sfp, mtu): (&str, u32, u32, bool, u32) = match m {
@@ -116,10 +119,22 @@ fn fake_nics() -> Option<Vec<Nic>> {
                 port: Some(f),
                 onboard: false,
                 connector: Some(if sfp { "sfp" } else { "rj45" }),
+                phc: Some(format!("ptp{}", out.len())),
             });
         }
     }
     Some(out)
+}
+
+/// L'horloge PTP matérielle d'une interface (`ptp0`), d'après /sys.
+pub fn phc_of(name: &str) -> Option<String> {
+    if let Some(n) = fake_nics() {
+        return n.into_iter().find(|n| n.name == name)?.phc;
+    }
+    let dir = std::fs::read_dir(std::path::Path::new("/sys/class/net").join(name).join("device/ptp")).ok()?;
+    let mut v: Vec<String> = dir.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.starts_with("ptp")).collect();
+    v.sort();
+    v.into_iter().next()
 }
 
 /// Les cartes réseau, sans la boucle locale ; celles qui ont une adresse d'abord.
@@ -172,6 +187,7 @@ pub fn nics() -> Vec<Nic> {
                 n.port = Some(func);
             }
             n.onboard = n.name.starts_with("eno");
+            n.phc = phc_of(&n.name);
             if n.kind == Some("ethernet") {
                 n.connector = Some(if driver.as_deref().is_some_and(sfp_driver) { "sfp" } else { "rj45" });
             }

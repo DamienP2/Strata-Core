@@ -1,11 +1,13 @@
 //! Ce que le Core et les applis Strata partagent côté serveur.
 //!
 //! - [`files`] : les fichiers de données (JSON écrit de façon atomique, fichiers privés en 0600) ;
+//! - [`timecode`] : le timecode maison, calculé depuis l'heure du serveur (PTP, ST 2059) ;
 //! - [`manifest`] : la fiche d'une appli (`strata-app.toml`) et la plage de versions du Core qu'elle accepte ;
 //! - [`VERSION`] : la version de ce Core.
 
 pub mod files;
 pub mod manifest;
+pub mod timecode;
 
 /// La version du Core (celle du workspace, reprise de l'étiquette de release).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

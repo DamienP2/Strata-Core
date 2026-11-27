@@ -1,29 +1,14 @@
 // Réglages › Matériel : Cartes SDI, NDI, ST 2110, Réseau, Horloge. Les réglages sont partagés par
 // les cinq pages (store.ts) et enregistrés d'un coup.
-import { useEffect, useState } from 'react';
-import { Clock, MonitorPlay, Network as NetIcon, Pencil, Plus, Radio, RefreshCw, Search, Trash2, Waves } from 'lucide-react';
-import { Badge, Card, Dropdown, Empty, Field, FieldGrid, Modal, NumberField, PageHead, SaveBar, Segmented, Switch, confirmDialog, formatDateTime, t, tn, toast, type DropOption } from '@strata/ui';
+import { useState } from 'react';
+import { MonitorPlay, Network as NetIcon, Pencil, Plus, Radio, RefreshCw, Search, Trash2, Waves } from 'lucide-react';
+import { Badge, Card, Dropdown, Empty, Field, FieldGrid, Modal, NumberField, PageHead, Segmented, Switch, confirmDialog, t, tn, toast, type DropOption } from '@strata/ui';
 import { api } from '../../api';
 import { friendly } from '../../errors';
+import { HwSaveBar, useHardware } from './common';
 import { InputsCard } from './Inputs';
 import { DeckLink3D, Pcie3D, SDI_COLOR, nicLook, printedOf, type Jack } from './Card3D';
-import { cardOf, discardHw, editCard, editHw, loadHw, saveHw, useHw, useHwDirty, type DetectedCard, type Flow, type Fn, type HwConfig, type Nic, type Port, type Snapshot } from './store';
-
-/** Charge le matériel à la première page qui en a besoin ; rend l'instantané et les réglages. */
-function useHardware(): [Snapshot, HwConfig] | null {
-  const snap = useHw((s) => s.snap);
-  const draft = useHw((s) => s.draft);
-  useEffect(() => {
-    if (!useHw.getState().snap) void loadHw();
-  }, []);
-  return snap && draft ? [snap, draft] : null;
-}
-
-function HwSaveBar() {
-  const dirty = useHwDirty();
-  const saving = useHw((s) => s.saving);
-  return <SaveBar dirty={dirty} saving={saving} onSave={() => void saveHw()} onDiscard={discardHw} />;
-}
+import { cardOf, editCard, editHw, loadHw, type DetectedCard, type Flow, type Fn, type HwConfig, type Nic, type Port, type Snapshot } from './store';
 
 function Rescan() {
   const [busy, setBusy] = useState(false);
@@ -542,84 +527,4 @@ export function NdiPage() {
   );
 }
 
-// ---------- Horloge ----------
-
-interface ClockStatus {
-  ntp: { tool?: string | null; synced?: boolean | null; enabled?: boolean | null; source?: string | null; offsetMs?: number | null };
-  ptp: { running: boolean; message?: string | null; domain: number; portState?: string | null; grandmaster?: string | null; offsetNs?: number | null; jitterNs?: number | null; locked: boolean; setsClock: boolean };
-  checkedAt: number;
-}
-
-export function ClockPage() {
-  const hw = useHardware();
-  const [st, setSt] = useState<ClockStatus | null>(null);
-  const [busy, setBusy] = useState(false);
-  const read = async () => {
-    setBusy(true);
-    try {
-      setSt(await api<ClockStatus>('GET', '/api/hardware/clock'));
-    } catch (e) {
-      toast(friendly(e), 'error');
-    }
-    setBusy(false);
-  };
-  useEffect(() => {
-    void read();
-    const id = setInterval(() => void read(), 10000);
-    return () => clearInterval(id);
-  }, []);
-  if (!hw) return null;
-  const [, draft] = hw;
-  const ptp = st?.ptp;
-  const ntp = st?.ntp;
-  const ptpBadge = !ptp ? null : ptp.locked ? <Badge tone="ok">{t('Locked')}</Badge> : ptp.running ? <Badge tone="warn">{t('Not locked')}</Badge> : <Badge>{t('Not running')}</Badge>;
-  const line = (label: string, value: React.ReactNode) => (
-    <div className="core-line">
-      <span>{label}</span>
-      <span className="st-muted st-mono">{value ?? '—'}</span>
-    </div>
-  );
-  return (
-    <>
-      <PageHead title={t('Clock')} sub={ptp?.locked ? t('PTP locked') : ntp?.synced ? t('NTP synchronised') : t('Not synchronised')}>
-        <button type="button" className="st-btn" disabled={busy} onClick={() => void read()}>
-          <RefreshCw size={14} /> {t('Read again')}
-        </button>
-      </PageHead>
-      <div className="core-cols">
-        <Card icon={<Clock size={16} />} title="PTP" actions={ptpBadge}>
-          {ptp && !ptp.running && <p className="st-muted core-note">{t('ptp4l does not answer (is linuxptp installed and running?)')}</p>}
-          <div className="core-lines">
-            {line(t('Domain'), ptp?.domain)}
-            {line(t('Port state'), ptp?.portState)}
-            {line(t('Grandmaster'), ptp?.grandmaster)}
-            {line(t('Offset'), ptp?.offsetNs != null ? `${Math.round(ptp.offsetNs)} ns` : null)}
-            {line(t('Jitter'), ptp?.jitterNs != null ? `± ${Math.round(ptp.jitterNs)} ns` : null)}
-            {line(t('Sets the system clock (phc2sys)'), ptp ? (ptp.setsClock ? t('Yes') : t('No')) : null)}
-            {line(t('Interface'), draft.network.ptp || null)}
-          </div>
-        </Card>
-        <Card icon={<Clock size={16} />} title="NTP" actions={ntp?.synced == null ? null : ntp.synced ? <Badge tone="ok">{t('Synchronised')}</Badge> : <Badge tone="warn">{t('Not synchronised')}</Badge>}>
-          <div className="core-lines">
-            {line(t('Server'), ntp?.source)}
-            {line(t('Offset'), ntp?.offsetMs != null ? `${ntp.offsetMs.toFixed(3)} ms` : null)}
-            {line(t('Read with'), ntp?.tool)}
-            {line(t('Read at'), st ? formatDateTime(st.checkedAt) : null)}
-          </div>
-        </Card>
-      </div>
-      <Card icon={<Clock size={16} />} title={t('Settings')}>
-        <FieldGrid two>
-          <Field label={t('PTP domain')} group>
-            <NumberField value={draft.ptp.domain} min={0} max={127} onChange={(v) => editHw((x) => void (x.ptp.domain = Math.round(v)))} />
-          </Field>
-          <Field label={t('TAI − UTC (seconds)')} group>
-            <NumberField value={draft.ptp.taiOffset} min={0} max={100} onChange={(v) => editHw((x) => void (x.ptp.taiOffset = Math.round(v)))} />
-          </Field>
-        </FieldGrid>
-        <p className="st-muted core-note">{t('SMPTE ST 2059-2: domain 127. TAI − UTC is 37 s since 2017.')}</p>
-      </Card>
-      <HwSaveBar />
-    </>
-  );
-}
+export { ClockPage } from './Clock';

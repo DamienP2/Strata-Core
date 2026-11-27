@@ -32,6 +32,10 @@ fn server() -> Srv {
     std::fs::create_dir_all(dir.join("shm")).unwrap();
     // Les entrées partagées : dans le dossier du test, pas dans /dev/shm.
     std::env::set_var("STRATA_SHARE_DIR", dir.join("shm"));
+    // L'horloge : un PTP simulé, les fichiers du système écrits dans le dossier du test.
+    std::env::set_var("STRATA_FAKE_CLOCK", "ptp");
+    std::env::set_var("STRATA_FAKE_NICS", "connectx");
+    std::env::set_var("STRATA_SYSTEM_ROOT", dir.join("root"));
     let s = AppState::new(dir.clone());
     let admin = s.auth.add(NewUser { username: "admin".into(), display_name: String::new(), admin: true, password: Some("password1".into()) }).unwrap();
     let cookie = format!("strata_session={}", s.auth.open_session(&admin.id));
@@ -155,8 +159,56 @@ async fn hardware_settings_and_what_apps_read() {
     assert_eq!(st, StatusCode::OK);
     assert!(!share.exists());
 
-    // L'horloge répond toujours, même sans linuxptp (avec la raison).
+    // L'horloge : PTP par ens2f0, NTP en secours ; enregistrer écrit les fichiers du système.
+    let (_, h) = call(&srv.remote, "GET", "/api/hardware", host, c, None).await;
+    let mut cfg = h["config"].clone();
+    assert_eq!(cfg["clock"]["house"], json!({"rate": "25", "offset": "local", "fixedMinutes": 0, "dropFrame": true, "dailyJam": "00:00"}));
+    cfg["network"]["ptp"] = json!("ens2f0");
+    cfg["clock"]["ntpServers"] = json!([" 10.0.0.1 ", "NTP.regie.lan"]);
+    let (st, v) = call(&srv.remote, "PUT", "/api/hardware", host, c, Some(cfg.clone())).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["config"]["clock"]["ntpServers"], json!(["10.0.0.1", "ntp.regie.lan"]));
+    assert!(v["clockApplied"].as_array().unwrap().iter().all(|s| s["ok"] == true), "{v}");
+    let chrony = std::fs::read_to_string(srv.dir.join("root/etc/chrony/conf.d/strata.conf")).unwrap();
+    assert!(chrony.contains("refclock PHC /dev/ptp1 poll 0 dpoll -2 offset -37 prefer refid PTP"), "{chrony}");
+    assert!(chrony.contains("server 10.0.0.1 iburst\nserver ntp.regie.lan iburst"));
+    let ptp4l = std::fs::read_to_string(srv.dir.join("root/etc/linuxptp/strata-ptp4l.conf")).unwrap();
+    assert!(ptp4l.contains("domainNumber            127") && ptp4l.ends_with("[ens2f0]\n"));
+    assert!(srv.dir.join("root/etc/systemd/system/strata-ptp4l.service").exists());
+    // Rien de changé pour l'heure : rien n'est réécrit.
+    let (_, v) = call(&srv.remote, "PUT", "/api/hardware", host, c, Some(cfg.clone())).await;
+    assert_eq!(v["clockApplied"], Value::Null);
+    // NTP seulement : plus de PTP, ses fichiers sont retirés.
+    let mut ntp_only = cfg.clone();
+    ntp_only["clock"]["source"] = json!("ntp");
+    let (st, _) = call(&srv.remote, "PUT", "/api/hardware", host, c, Some(ntp_only)).await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(!srv.dir.join("root/etc/linuxptp/strata-ptp4l.conf").exists());
+    assert!(!std::fs::read_to_string(srv.dir.join("root/etc/chrony/conf.d/strata.conf")).unwrap().contains("refclock"));
+    let mut bad = cfg.clone();
+    bad["clock"]["ntpServers"] = json!(["pas un serveur"]);
+    let (st, msg) = call(&srv.remote, "PUT", "/api/hardware", host, c, Some(bad)).await;
+    assert_eq!((st, msg.as_str().unwrap()), (StatusCode::BAD_REQUEST, "not an NTP server: pas un serveur"));
+    let (st, _) = call(&srv.remote, "PUT", "/api/hardware", host, c, Some(cfg)).await;
+    assert_eq!(st, StatusCode::OK);
+
+    // L'état, le timecode maison, le bilan.
     let (st, v) = call(&srv.remote, "GET", "/api/hardware/clock", host, c, None).await;
     assert_eq!(st, StatusCode::OK);
     assert_eq!(v["ptp"]["domain"], 127);
+    assert_eq!(v["ntp"]["source"], "PTP");
+    let tc = v["house"]["timecode"].as_str().unwrap();
+    assert_eq!((tc.len(), v["house"]["fps"].as_f64()), (11, Some(25.0)), "{tc}");
+    assert_eq!(v["timezone"], "Europe/Paris");
+    assert_eq!(v["checks"][0]["code"], "timeFromPtp");
+    assert_eq!(v["checks"][0]["level"], "ok");
+    assert!(v["files"]["chrony"].as_str().unwrap().contains("refclock PHC"));
+    let (st, v) = call(&srv.remote, "POST", "/api/hardware/clock/apply", host, c, Some(json!({}))).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["steps"].as_array().unwrap().len(), 3);
+
+    // Les applis lisent le timecode maison.
+    let (_, v) = call(&srv.local, "GET", "/api/hardware/shared", "127.0.0.1:8080", None, None).await;
+    assert_eq!(v["clock"]["house"]["rate"], "25");
+    assert_eq!(v["clock"]["timezone"], "Europe/Paris");
 }

@@ -108,7 +108,10 @@ impl Watch {
 
     fn check(&self) {
         let domain = self.domain.load(Ordering::Relaxed);
-        let mut ptp = ptp(domain);
+        let mut ptp = match fake() {
+            Some(f) => fake_ptp(&f, domain),
+            None => ptp(domain),
+        };
         {
             let mut offsets = self.offsets.lock().unwrap_or_else(|e| e.into_inner());
             match ptp.offset_ns {
@@ -122,8 +125,51 @@ impl Watch {
             }
             ptp.jitter_ns = spread(&offsets);
         }
-        let status = SyncStatus { ntp: ntp(), ptp, checked_at: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64) };
+        let ntp = match fake() {
+            Some(f) => fake_ntp(&f),
+            None => ntp(),
+        };
+        let status = SyncStatus { ntp, ptp, checked_at: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64) };
         *self.status.lock().unwrap_or_else(|e| e.into_inner()) = status;
+    }
+}
+
+/// A made-up clock (`STRATA_FAKE_CLOCK=ptp`, `ntp` or `none`), to work without one.
+fn fake() -> Option<String> {
+    std::env::var("STRATA_FAKE_CLOCK").ok().map(|v| v.trim().to_ascii_lowercase()).filter(|v| !v.is_empty())
+}
+
+fn wobble(scale: f64) -> f64 {
+    let n = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
+    ((n % 1000) as f64 / 500.0 - 1.0) * scale
+}
+
+fn fake_ptp(mode: &str, domain: u8) -> PtpStatus {
+    if mode != "ptp" {
+        return PtpStatus { domain, message: Some("ptp4l does not answer (is linuxptp installed and running?)".into()), ..PtpStatus::default() };
+    }
+    PtpStatus {
+        running: true,
+        message: None,
+        domain,
+        port_state: Some("SLAVE".into()),
+        grandmaster: Some("ac1f6b.fffe.0a0b0c".into()),
+        offset_ns: Some(wobble(40.0).round()),
+        jitter_ns: None,
+        locked: true,
+        sets_clock: false,
+    }
+}
+
+fn fake_ntp(mode: &str) -> NtpStatus {
+    match mode {
+        "ptp" => {
+            NtpStatus { tool: Some("chronyc".into()), synced: Some(true), enabled: Some(true), source: Some("PTP".into()), offset_ms: Some(wobble(0.00005)) }
+        }
+        "ntp" => {
+            NtpStatus { tool: Some("chronyc".into()), synced: Some(true), enabled: Some(true), source: Some("10.0.0.1".into()), offset_ms: Some(wobble(0.3)) }
+        }
+        _ => NtpStatus { tool: Some("chronyc".into()), synced: Some(false), enabled: Some(true), source: None, offset_ms: None },
     }
 }
 

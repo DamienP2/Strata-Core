@@ -77,12 +77,31 @@
 .core-hw-wire { min-width: 0; }
 .core-hw-genlock { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 8px 8px 0; border-top: 1px solid var(--line); margin-top: 4px; }
 .core-hw-role { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 600; color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); }
+/* L'horloge */
+.core-clock { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.core-clock-tc { font: 600 44px/1.1 var(--mono); letter-spacing: .02em; font-variant-numeric: tabular-nums; color: var(--text); }
+.core-clock-sub { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: var(--fs-12); color: var(--text-2); }
+.core-clock-sub .ok { color: var(--pvw); }
+.core-clock-sub .bad { color: var(--t-red); }
+.core-clock-form { display: flex; flex-direction: column; gap: 14px; }
+.core-clock-form textarea { width: 100%; max-width: 360px; resize: vertical; }
+.core-checks { display: flex; flex-direction: column; gap: 2px; }
+.core-check { display: flex; align-items: flex-start; gap: 10px; padding: 6px 0; font-size: var(--fs-13, 13px); border-top: 1px solid var(--line); }
+.core-check:first-child { border-top: 0; }
+.core-check svg { flex: none; margin-top: 2px; }
+.core-check.ok svg { color: var(--pvw); }
+.core-check.info svg { color: var(--text-3); }
+.core-check.warn svg { color: var(--warn); }
+.core-check.bad svg { color: var(--t-red); }
+.core-files { margin-top: 10px; }
+.core-files summary { cursor: pointer; font: 500 12px var(--mono); color: var(--text-2); }
+.core-files pre { margin: 8px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--line); font: 12px/1.5 var(--mono); overflow-x: auto; white-space: pre; }
 /* Les entrées partagées */
 .core-inputs { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 16px; }
 .core-input { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .core-input-pic { position: relative; aspect-ratio: 16 / 9; border-radius: 8px; overflow: hidden; background: #050607; border: 1px solid var(--line); display: grid; place-items: center; color: var(--text-3); font-size: var(--fs-12); }
 .core-input-pic img { width: 100%; height: 100%; object-fit: contain; display: block; }
-.core-input-tc { position: absolute; left: 8px; bottom: 6px; font: 600 11px var(--mono, ui-monospace, monospace); color: #fff; background: rgba(0, 0, 0, .6); padding: 1px 6px; border-radius: 4px; }
+.core-input-tc { position: absolute; left: 8px; bottom: 6px; font: 600 11px var(--mono); color: #fff; background: rgba(0, 0, 0, .6); padding: 1px 6px; border-radius: 4px; }
 .core-input-sim { position: absolute; right: 8px; top: 6px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: #fff; background: rgba(0, 0, 0, .55); padding: 1px 6px; border-radius: 4px; }
 .core-input-head { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: var(--fs-12); }
 .core-input-wire { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

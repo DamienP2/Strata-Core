@@ -184,6 +184,15 @@ Fait : le crate `strata-share` (un fichier `/dev/shm/strata-sdi-<carte>-<n>` par
 - **Entrées NDI et 2110** : plusieurs applis peuvent les recevoir directement (réseau, multicast) ; le Core ne fait que les décrire.
 - **Sorties SDI** : une seule appli à la fois les pilote ; le Core montre laquelle.
 
+**L'horloge du site** (*Matériel › Horloge*). Un leader unique fournit BB, PTP, TC et WC.
+
+- **BB** (ou tri-level) vers la REF de chaque DeckLink, genlock activé : les DeckLink SDI ne se calent pas sur le PTP.
+- **PTP** vers **tous** les serveurs. ptp4l (profil ST 2059-2, esclave) tient l'horloge de la carte réseau PTP ; **chrony** règle l'heure du serveur sur cette horloge, les serveurs NTP en secours (ou le NTP seul). Un seul service règle l'heure : un phc2sys qui la règle aussi est signalé. Le Core écrit `/etc/chrony/conf.d/strata.conf`, `/etc/linuxptp/strata-ptp4l.conf` et le service `strata-ptp4l`, et relance ce qui change ; sans droits, il le dit (l'installateur les donnera).
+- **TC** : pas de câble LTC. Le **timecode maison** se calcule depuis l'heure du serveur (`strata_core::timecode`) : heure locale, UTC ou décalage fixe, comme l'LTC du leader ; en 29,97 / 23,98, recalage quotidien (ST 2059-1) et drop frame.
+- **WC** : pour les appareils audio, pas pour les serveurs (l'audio SDI suit la carte, l'audio 2110 le PTP).
+- **Cadence maison** (25, 29,97, 30, 24, 23,98) : celle de toutes les images du site.
+- **Bilan** : l'heure suit-elle le PTP, les REF sont-elles verrouillées et à la cadence maison, le timecode de chaque entrée SDI est-il celui de la maison.
+
 Sources : `hardware.rs`, `sync.rs`, `decklink.rs`, `ndi.rs` (CG), `settings/Hardware.tsx` et le shim DeckLink (CG et Cut, même SDK).
 
 ### 5.4 BIBLIOTHÈQUE — les applis du serveur
@@ -281,7 +290,7 @@ Une appli s'appuie sur le Core, jamais l'inverse.
 
 
 - **Entrées DeckLink redistribuées par le Core** (§ 5.3) : en place (mémoire partagée) ; à mesurer sur une machine avec une carte (latence, charge processeur, plusieurs applis sur la même entrée).
-- **Référence de synchronisation** : un leader unique (BB, PTP, TC, WC). Proposé : BB vers la REF des DeckLink ; PTP vers tous les serveurs (carte réseau, puis horloge système) ; timecode maison calculé depuis le PTP (ST 2059) avec le décalage de l'LTC du leader ; WC pour les appareils audio seulement. À ajouter à *Horloge* : cadence maison, heure prise sur le PTP (NTP en secours), timecode maison, bilan.
+- **Référence de synchronisation** : un leader unique (BB, PTP, TC, WC). BB vers la REF des DeckLink ; PTP vers tous les serveurs ; timecode maison calculé depuis le PTP ; WC pour les appareils audio seulement (§ 5.3, *Horloge*). Reste à vérifier sur un vrai réseau PTP : l'option `offset -37` de chrony sur l'horloge de la carte, et ptp4l avec chaque famille de carte (ConnectX, E810, I350).
 - **Configuration minimale** : à **calculer** en mesurant, sur un serveur de référence, le Core seul puis chaque appli à vide et en charge typique. Le README donnera le minimum du Core et ce qu'ajoute chaque appli.
 
 ## 9. Prochaines étapes
