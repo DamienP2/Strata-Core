@@ -77,7 +77,7 @@ function materials() {
     ptfe: std({ color: '#f1ede2', metalness: 0, roughness: 0.45 }),
     ceramic: std({ color: '#c9b48c', metalness: 0, roughness: 0.6 }),
     white: std({ color: '#f4f4f2', metalness: 0, roughness: 0.7 }),
-    pcbSide: std({ color: '#078a33', metalness: 0, roughness: 0.6, envMapIntensity: 0.2 }),
+    pcbSide: std({ color: '#12502a', metalness: 0, roughness: 0.6, envMapIntensity: 0.2, toneMapped: false }),
     copper: std({ color: '#c77d45', metalness: 1, roughness: 0.3 }),
   };
 }
@@ -91,8 +91,8 @@ function pcbTexture(lengthMm: number, heightMm: number, silk: string): THREE.Can
   c.height = Math.round(heightMm * ppm);
   const g = c.getContext('2d')!;
   const grad = g.createLinearGradient(0, 0, c.width, c.height);
-  grad.addColorStop(0, '#0fb948');
-  grad.addColorStop(1, '#0a9e3c');
+  grad.addColorStop(0, '#1f8443');
+  grad.addColorStop(1, '#17703a');
   g.fillStyle = grad;
   g.fillRect(0, 0, c.width, c.height);
   // Les pistes : des faisceaux à 45°.
@@ -425,8 +425,9 @@ export function buildScene(look: Look, kind: JackKind, jacks: Jack3D[], widthCss
   const tex = pcbTexture(L, H, look.silk ?? '');
   tex.rotation = Math.PI / 2;
   tex.center.set(0.5, 0.5);
-  // Le vernis épargne : un peu brillant, sans délaver le vert.
-  const top = new THREE.MeshPhysicalMaterial({ map: tex, color: new THREE.Color().setRGB(0.2, 0.86, 0.3, THREE.LinearSRGBColorSpace), roughness: 0.62, clearcoat: 0.25, clearcoatRoughness: 0.4, envMapIntensity: 0.12 });
+  // Le vernis épargne, d'un vert franc : hors de l'étalonnage filmique, qui tire les verts vers le
+  // pastel ; un reflet discret.
+  const top = new THREE.MeshPhysicalMaterial({ map: tex, roughness: 0.78, specularIntensity: 0.25, clearcoat: 0.08, clearcoatRoughness: 0.5, envMapIntensity: 0.1, toneMapped: false });
   const pcb = box([M.pcbSide, M.pcbSide, top, M.pcbSide, M.pcbSide, M.pcbSide], bx0, bx1, -1.6, 0, -L, 0);
   card.add(pcb);
 
