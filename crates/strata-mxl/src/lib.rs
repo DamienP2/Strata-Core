@@ -399,11 +399,11 @@ impl AudioWriter {
                 let (a, b) = w.channel_data_mut(c).map_err(|e| e.to_string())?;
                 let mut k = done;
                 for chunk in [a, b] {
-                    for dst in chunk.chunks_exact_mut(4) {
+                    for dst in chunk.as_chunks_mut::<4>().0 {
                         if k >= done + n {
                             break;
                         }
-                        dst.copy_from_slice(&pcm[k * self.channels + c].to_le_bytes());
+                        *dst = pcm[k * self.channels + c].to_le_bytes();
                         k += 1;
                     }
                 }
@@ -458,11 +458,11 @@ impl AudioReader {
             let (a, b) = data.channel_data(c).ok()?;
             let mut k = 0;
             for chunk in [a, b] {
-                for src in chunk.chunks_exact(4) {
+                for src in chunk.as_chunks::<4>().0 {
                     if k >= n {
                         break;
                     }
-                    out[k * self.channels + c] = f32::from_le_bytes([src[0], src[1], src[2], src[3]]);
+                    out[k * self.channels + c] = f32::from_le_bytes(*src);
                     k += 1;
                 }
             }

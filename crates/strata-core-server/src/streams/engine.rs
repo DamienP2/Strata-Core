@@ -374,7 +374,7 @@ fn run_input(c: &InputCfg, env: &Env, stop: &AtomicBool, status: &Mutex<HashMap<
                             carry.extend_from_slice(&buf[..n]);
                             let whole = carry.len() - carry.len() % 4;
                             let mut q = queue.lock().unwrap();
-                            q.extend(carry[..whole].chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])));
+                            q.extend(carry[..whole].as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)));
                             // Plus de 2 s d'avance : le plus ancien est jeté.
                             let max = 2 * 48_000 * 2;
                             if q.len() > max {
