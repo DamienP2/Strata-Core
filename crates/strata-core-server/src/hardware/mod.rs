@@ -24,6 +24,7 @@ pub mod decklink;
 pub mod gpu;
 pub mod ndi;
 pub mod net;
+pub mod playout;
 pub mod preview;
 pub mod st2110;
 pub mod sync;
@@ -386,6 +387,7 @@ pub fn reconcile_inputs(s: &crate::state::AppState) {
     let (detected, _, simulated) = decklink::detect();
     let tz = s.config.load().timezone.clone();
     s.captures.reconcile(capture::wanted(&cfg, &detected, simulated, &tz));
+    s.playouts.reconcile(playout::wanted(&cfg, &detected, simulated));
 }
 
 /// Les entrées captées : signal, format, images par seconde, applis qui les lisent.
@@ -419,7 +421,7 @@ fn published_mxl(mxl: &strata_mxl::Mxl, id: strata_mxl::Uuid) -> Value {
         let rate = (rate * 100.0).round() / 100.0;
         format!("{}{}{}", v.height, if v.interlaced { 'i' } else { 'p' }, if rate.fract() == 0.0 { format!("{rate:.0}") } else { format!("{rate}") })
     });
-    json!({"sending": true, "mxlFlow": id.to_string(), "format": format})
+    json!({"sending": true, "mxlFlow": id.to_string(), "format": format, "appName": mxl.flow_label(id)})
 }
 
 fn jpeg_response(jpeg: std::sync::Arc<Vec<u8>>) -> impl IntoResponse {
@@ -517,6 +519,8 @@ async fn outputs(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiRe
                 };
                 v["card"] = json!(c.id);
                 v["connector"] = json!(i + 1);
+                // Avec MXL, le Core tient la sortie : ce qui part sur le câble.
+                v["playout"] = json!(s2.playouts.status_of(&c.id, i as u32 + 1));
                 out.push(v);
             }
         }

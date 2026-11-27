@@ -183,8 +183,10 @@ Linux Foundation) : des flux en mémoire partagée, sur le serveur, sans passer 
 - **Les entrées** (SDI captées par le Core, et bientôt ST 2110 reçues) : un flux par entrée, son
   identifiant dans `mxlFlow` du connecteur (`sdi`). L'appli le **lit**.
 - **Les sorties** (SDI, flux ST 2110 envoyés) : `mxlFlow` du connecteur réglé en sortie, ou du flux
-  ST 2110 sortant. L'appli **écrit** ce flux ; le Core l'envoie (SDI, ST 2110) et l'aperçu des
-  réglages le montre.
+  ST 2110 sortant. L'appli **écrit** ce flux (son `label` est le nom montré dans les réglages) ; le
+  Core l'envoie (SDI en 10 bits, calé sur la référence de la carte ; du noir quand rien n'arrive)
+  et l'aperçu des réglages le montre. **Avec MXL, une appli n'ouvre jamais une sortie DeckLink
+  elle-même.** Exemple : `crates/strata-mxl/examples/send.rs`.
 - Une appli peut aussi lire le flux qu'une autre écrit (Multiview qui montre le programme de
   LiveCut), sans rien demander au Core.
 - **Format** : vidéo v210 (YCbCr 4:2:2 10 bits, BT.709), un grain par image ; en entrelacé, un grain

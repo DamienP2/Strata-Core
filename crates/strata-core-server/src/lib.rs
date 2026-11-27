@@ -111,6 +111,7 @@ async fn open_mxl(s: &Shared) {
     }
     let r = r.map(std::sync::Arc::new);
     s.captures.set_mxl(r.as_ref().ok().cloned());
+    s.playouts.set_mxl(r.as_ref().ok().cloned());
     let _ = s.mxl.set(r);
 }
 
@@ -153,7 +154,11 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
     s.supervisor.stop_all().await;
     // Les entrées après les applis qui les lisent.
     let s2 = s.clone();
-    let _ = tokio::task::spawn_blocking(move || s2.captures.stop_all()).await;
+    let _ = tokio::task::spawn_blocking(move || {
+        s2.playouts.stop_all();
+        s2.captures.stop_all();
+    })
+    .await;
     // Un arrêt voulu : pas un plantage au prochain démarrage.
     health::stopped();
     s.auth.flush_sessions();

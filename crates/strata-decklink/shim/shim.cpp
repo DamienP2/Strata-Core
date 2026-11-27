@@ -340,6 +340,10 @@ class Output final : public IDeckLinkVideoOutputCallback {
     IDeckLinkKeyer *keyer = NULL;
     IDeckLinkStatus *status = NULL;
     int width = 0, height = 0;
+    // The pixel format of the frames, and the bytes of a row: BGRA (8-bit,
+    // fill + key) or v210 (10-bit YUV 4:2:2, from MXL flows).
+    BMDPixelFormat format = bmdFormat8BitBGRA;
+    int line = 0;
     BMDTimeValue duration = 0;
     BMDTimeScale scale = 0;
 
@@ -903,12 +907,12 @@ int dl_device_modes(int index, int input, dl_mode *out, int cap, char *err, int 
     return n;
 }
 
-// Opens a device's output in `mode` (BGRA frames of width × height).
-// keyer: 0 none (fill only), 1 internal, 2 external (fill + key).
-// `set_ref_offset`: also set the reference input timing offset (genlock
-// offset, `ref_offset` lines).
+// Opens a device's output in `mode` (BGRA frames of width × height, or v210
+// when `ten_bit`). keyer: 0 none (fill only), 1 internal, 2 external (fill +
+// key; BGRA only). `set_ref_offset`: also set the reference input timing
+// offset (genlock offset, `ref_offset` lines).
 void *dl_output_open(int index, uint32_t mode, int width, int height, int keyer, int set_ref_offset,
-                     int ref_offset, char *err, int errlen) {
+                     int ref_offset, int ten_bit, char *err, int errlen) {
     set_err(err, errlen, "");
     IDeckLink *dev = device_at(index, err, errlen);
     if (!dev) {
@@ -918,6 +922,11 @@ void *dl_output_open(int index, uint32_t mode, int width, int height, int keyer,
     o->dev = dev;
     o->width = width;
     o->height = height;
+    o->format = ten_bit ? bmdFormat10BitYUV : bmdFormat8BitBGRA;
+    o->line = ten_bit ? ((width + 47) / 48) * 128 : width * 4;
+    if (ten_bit) {
+        keyer = 0;
+    }
     BMDDisplayMode m = (BMDDisplayMode)mode;
     if (dev->QueryInterface(IID_IDeckLinkOutput, (void **)&o->out) != S_OK) {
         set_err(err, errlen, "this DeckLink device has no output");
@@ -928,7 +937,7 @@ void *dl_output_open(int index, uint32_t mode, int width, int height, int keyer,
         dl_bool supported = false;
         BMDSupportedVideoModeFlags flags =
             (BMDSupportedVideoModeFlags)(keyer ? bmdSupportedVideoModeKeying : bmdSupportedVideoModeDefault);
-        if (o->out->DoesSupportVideoMode(bmdVideoConnectionUnspecified, m, bmdFormat8BitBGRA,
+        if (o->out->DoesSupportVideoMode(bmdVideoConnectionUnspecified, m, o->format,
                                          bmdNoVideoOutputConversion, flags, &actual, &supported) != S_OK ||
             !supported) {
             set_err(err, errlen,
@@ -968,7 +977,7 @@ void *dl_output_open(int index, uint32_t mode, int width, int height, int keyer,
     }
     for (int i = 0; i < POOL; i++) {
         IDeckLinkMutableVideoFrame *f = NULL;
-        if (o->out->CreateVideoFrame(width, height, width * 4, bmdFormat8BitBGRA, bmdFrameFlagDefault, &f) !=
+        if (o->out->CreateVideoFrame(width, height, o->line, o->format, bmdFrameFlagDefault, &f) !=
                 S_OK ||
             !f) {
             set_err(err, errlen, "cannot allocate output frames");
@@ -976,7 +985,18 @@ void *dl_output_open(int index, uint32_t mode, int width, int height, int keyer,
         }
         void *bytes = NULL;
         if (f->GetBytes(&bytes) == S_OK && bytes) {
-            std::memset(bytes, 0, (size_t)f->GetRowBytes() * (size_t)height);
+            if (ten_bit) {
+                // Black in v210: Y = 64, Cb = Cr = 512 (10-bit, limited range).
+                uint32_t *w = (uint32_t *)bytes;
+                size_t words = (size_t)f->GetRowBytes() * (size_t)height / 4;
+                const uint32_t pat[4] = {512u | (64u << 10) | (512u << 20), 64u | (512u << 10) | (64u << 20),
+                                         512u | (64u << 10) | (512u << 20), 64u | (512u << 10) | (64u << 20)};
+                for (size_t i = 0; i < words; i++) {
+                    w[i] = pat[i % 4];
+                }
+            } else {
+                std::memset(bytes, 0, (size_t)f->GetRowBytes() * (size_t)height);
+            }
         }
         o->pool.push_back(f);
         o->free_frames.push_back(f);
@@ -1004,8 +1024,9 @@ fail:
     return NULL;
 }
 
-// Queues a BGRA picture (`stride` bytes per row). 0 queued, 1 dropped
-// (queue full: the producer runs ahead of the card), -1 error.
+// Queues a picture in the output's format (`stride` bytes per row). 0
+// queued, 1 dropped (queue full: the producer runs ahead of the card), -1
+// error.
 int dl_output_push(void *h, const uint8_t *bgra, int stride) {
     com_init();
     Output *o = (Output *)h;
@@ -1019,7 +1040,7 @@ int dl_output_push(void *h, const uint8_t *bgra, int stride) {
         return -1;
     }
     size_t row = (size_t)f->GetRowBytes();
-    size_t line = (size_t)o->width * 4;
+    size_t line = (size_t)o->line;
     if (line > row || (size_t)stride < line) {
         o->give_back(f);
         return -1;

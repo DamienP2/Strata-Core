@@ -103,6 +103,12 @@ impl Mxl {
         Ok(VideoReader { inst: self.inst.clone(), grains, rate, video })
     }
 
+    /// Le nom qu'un flux se donne (`label` de sa description).
+    pub fn flow_label(&self, id: Uuid) -> Option<String> {
+        let def = self.inst.get_flow_def(&id.to_string()).ok()?;
+        serde_json::from_str::<serde_json::Value>(&def).ok()?["label"].as_str().map(str::to_string)
+    }
+
     /// Le flux existe et son écrivain est vivant.
     pub fn is_active(&self, id: Uuid) -> bool {
         self.inst.is_flow_active(&id.to_string()).unwrap_or(false)

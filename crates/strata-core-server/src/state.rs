@@ -31,6 +31,8 @@ pub struct AppState {
     pub clock: crate::hardware::sync::Watch,
     /// Les entrées SDI captées et partagées.
     pub captures: crate::hardware::capture::Captures,
+    /// Les sorties SDI tenues par le Core (avec MXL).
+    pub playouts: crate::hardware::playout::Playouts,
     /// Les aperçus des réglages (entrées, sorties, flux), seulement pendant qu'on regarde.
     pub previews: crate::hardware::preview::Previews,
     /// MXL : ouvert au démarrage s'il est installé (sinon la raison).
@@ -70,6 +72,7 @@ impl AppState {
             updates: Updates::default(),
             clock: Default::default(),
             captures: Default::default(),
+            playouts: Default::default(),
             previews: Default::default(),
             mxl: Default::default(),
             resources: Default::default(),

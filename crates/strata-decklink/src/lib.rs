@@ -206,6 +206,7 @@ mod ffi {
             keyer: c_int,
             set_ref_offset: c_int,
             ref_offset: c_int,
+            ten_bit: c_int,
             err: *mut c_char,
             errlen: c_int,
         ) -> *mut c_void;
@@ -434,6 +435,8 @@ pub struct OutputHandle {
     raw: *mut std::ffi::c_void,
     pub width: u32,
     pub height: u32,
+    /// Bytes of a row: `width × 4` (BGRA), or v210.
+    pub line: usize,
     /// The display mode in use.
     pub mode: DisplayMode,
 }
@@ -447,6 +450,27 @@ impl OutputHandle {
     /// Opens a device's output in the mode matching width × height at `rate`.
     /// `ref_offset`: the genlock offset (lines) to set on the card.
     pub fn open(device: u32, width: u32, height: u32, rate: (u32, u32), keyer: Keyer, ref_offset: Option<i32>, interlaced: bool) -> Result<Self, String> {
+        Self::open_as(device, width, height, rate, keyer, ref_offset, interlaced, false)
+    }
+
+    /// The same, for v210 pictures (10-bit YUV 4:2:2, rows of `((width + 47) / 48) × 128` bytes):
+    /// what MXL flows carry. No keying.
+    pub fn open_v210(device: u32, width: u32, height: u32, rate: (u32, u32), ref_offset: Option<i32>, interlaced: bool) -> Result<Self, String> {
+        Self::open_as(device, width, height, rate, Keyer::None, ref_offset, interlaced, true)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn open_as(
+        device: u32,
+        width: u32,
+        height: u32,
+        rate: (u32, u32),
+        keyer: Keyer,
+        ref_offset: Option<i32>,
+        interlaced: bool,
+        ten_bit: bool,
+    ) -> Result<Self, String> {
+        let line = if ten_bit { (width as usize).div_ceil(48) * 128 } else { width as usize * 4 };
         #[cfg(decklink_shim)]
         {
             let idx = index(device)?;
@@ -463,12 +487,13 @@ impl OutputHandle {
                         keyer as _,
                         ref_offset.is_some() as _,
                         ref_offset.unwrap_or(0) as _,
+                        ten_bit as _,
                         err.as_mut_ptr(),
                         err.len() as _,
                     )
                 };
                 if !raw.is_null() {
-                    return Ok(Self { raw, width, height, mode });
+                    return Ok(Self { raw, width, height, line, mode });
                 }
                 last = format!("{} ({})", ffi::text(&err), mode.name);
             }
@@ -476,14 +501,15 @@ impl OutputHandle {
         }
         #[cfg(not(decklink_shim))]
         {
-            let _ = (device, width, height, rate, keyer, ref_offset, interlaced, pick);
+            let _ = (device, width, height, rate, keyer, ref_offset, interlaced, ten_bit, line, pick);
             Err(NOT_BUILT.into())
         }
     }
 
-    /// Queues a BGRA picture of the output's size (`stride` bytes a row).
+    /// Queues a picture of the output's size and format (BGRA, or v210 when opened so),
+    /// `stride` bytes a row.
     pub fn push(&self, bgra: &[u8], stride: usize) -> Pushed {
-        if stride < self.width as usize * 4 || bgra.len() < stride * self.height as usize {
+        if stride < self.line || bgra.len() < stride * self.height as usize {
             return Pushed::Failed;
         }
         #[cfg(decklink_shim)]

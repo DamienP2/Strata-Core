@@ -38,6 +38,8 @@ interface Sent {
 interface OutputStatus extends Sent {
   card: string;
   connector: number;
+  /** Avec MXL, le Core tient la sortie : ce qui part sur le câble. */
+  playout?: { state: 'opening' | 'playing' | 'black' | 'error'; format?: string | null; error?: string | null; simulated: boolean } | null;
 }
 
 interface FlowStatus extends Partial<Sent> {
@@ -259,7 +261,8 @@ export function OutputsCard({ cfg }: { cfg: HwConfig }) {
                   {sentBadge(o)}
                 </>
               }
-              sub={wire ? card : undefined}
+              sub={[wire ? card : '', o.playout?.state === 'black' ? t('black on the output') : ''].filter(Boolean).join(' · ') || undefined}
+              error={o.playout?.error}
               foot={sentApps(o)}
             />
           );

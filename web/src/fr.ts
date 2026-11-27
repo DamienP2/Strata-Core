@@ -477,6 +477,7 @@ export const fr: Record<string, string> = {
   'What the apps send': 'Ce que les applis envoient',
   'Nothing sent': 'Rien n’est envoyé',
   'Sent by': 'Envoyée par',
+  'black on the output': 'noir sur la sortie',
   'No app sends to it': 'Aucune appli n’y envoie',
   'Video flows': 'Flux vidéo',
   'Received flows are joined only while this page is open': 'Les flux reçus ne sont rejoints que pendant que cette page est ouverte',

@@ -184,8 +184,9 @@ mod tests {
             std::thread::spawn(move || {
                 while !stop.load(std::sync::atomic::Ordering::Relaxed) {
                     if w.watched() {
-                        w.publish(&info, &vec![128u8; 64 * 32 * 2]).unwrap();
+                        // Compté avant d'être publié : l'aperçu peut lire l'image aussitôt.
                         sent.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        w.publish(&info, &vec![128u8; 64 * 32 * 2]).unwrap();
                     }
                     std::thread::sleep(Duration::from_millis(20));
                 }
