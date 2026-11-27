@@ -9,6 +9,7 @@
 - **CG est la référence.** Multiview est une copie de CG, presque à l'identique (1 326 règles CSS identiques, composants identiques à 93–100 %). Cut et Network ont été refaits à partir d'une spec tirée de CG, puis améliorés de leur côté.
 - **Cette spec existe déjà** : `Strata-Network/docs/design.md` (1 362 lignes, « Reproduire le design et les fonctions de base de l'application de référence »). C'est elle que Cut cite dans son code (« spec § 5.1 »…). C'est en fait le cahier des charges du Core, rédigé avant le Core.
 - **Ce qui reste à faire** : choisir, composant par composant, entre la version de CG et les améliorations de Cut et Network, puis tout réunir dans un seul paquet.
+- **Décision** : le Core part **du code de CG et de Cut**. La spec de Network reste où elle est (§ 6).
 
 ## 2. Ce qui est déjà identique partout
 
@@ -32,7 +33,7 @@
 Seuls écarts :
 - Multiview redéfinit `--mask` et Network ajoute `--op-2`.
 - La famille `--op-1` à `--op-4` (fonds de l'Opérateur de CG) sert à une règle commune (`.opx-void-ic`). Cut s'en sort avec une valeur de secours (`var(--op-2, #1c1f2c)`).
-- Il faut décider si `--op-*` entre dans le Core ou si cette règle change.
+- **Décision** : `--op-1` à `--op-4` entrent dans les jetons du Core.
 
 ### 2.2 La police
 
@@ -109,12 +110,12 @@ Onze règles ont le même sélecteur dans CG et Cut, mais un contenu différent 
 
 | Règle | CG | Cut | Proposition |
 | --- | --- | --- | --- |
-| `.user-card.role-operator`, `.badge.role-operator` | vert (`--pvw`) | pervenche (`--accent-2`) | **à trancher** : couleur des opérateurs |
+| `.user-card.role-operator`, `.badge.role-operator` | vert (`--pvw`) | pervenche (`--accent-2`) | **pervenche** (décidé) |
 | `.icon-btn.ghost` | taille `--hit-min` | sans taille | CG (cible de 28 px garantie) |
 | `.sys-tabs` | largeur ajustée, retour à la ligne | marge de 18 px | fusionner |
 | `a.btn` | `text-decoration: none` | `color: inherit` | fusionner (les deux) |
 | `button.ux1-pill`, `.project-card` | — | + `font-family`, `position` | reprendre Cut |
-| `.opx-void-ic` | `var(--op-2)` | `var(--op-2, #1c1f2c)` | selon § 2.1 |
+| `.opx-void-ic` | `var(--op-2)` | `var(--op-2, #1c1f2c)` | CG (`--op-*` dans le Core) |
 | `.hl-bar`, `.hl-inc`, `.gm-row` | une chose | une autre chose | **même nom, sens différent** : renommer dans le Core |
 
 ### 3.2 Le thème clair
@@ -167,6 +168,8 @@ Ce qui doit devenir un **paramètre fourni par l'appli** :
 | Nom affiché (`MODULE` de `Brand`) | Graphics | LiveCut |
 | Clé du thème dans le navigateur | `strata.theme` | `stratacut.theme` |
 | Clé de la langue | `strata.lang` | `stratacut.lang` |
+
+Avec un sous-domaine par appli, chaque appli est une origine différente pour le navigateur : ces clés ne servent plus qu'à éviter un éclair au premier affichage. **Le choix de référence est celui gardé sur le serveur pour l'utilisateur**, relu à l'ouverture de chaque appli.
 | Titre de la page | Strata Graphics | Strata LiveCut |
 | Pages toujours sombres | `/output`, `/embed` | — |
 
@@ -182,7 +185,11 @@ Toutes les applis ont la même barre du haut, haute de 46 px :
 
 Sous la barre se trouve le contenu. Une seule fois dans l'app sont montés les **hôtes** : dialogues, menu contextuel, toasts, bandeau de plantage.
 
-Avec l'option A (un service par appli), la coquille doit gagner **un élément qui n'existe nulle part aujourd'hui : passer d'une appli installée à l'autre** et revenir au Core (Utilisateurs, Hardware, Bibliothèque, Santé, Serveur). D'après la règle 7, il faut une maquette avant de le coder.
+Avec l'option A (un service par appli), la coquille doit gagner **deux éléments qui n'existent nulle part aujourd'hui** :
+- **le cockpit**, la page d'accueil du Core : les applis actives en tuiles, et pour les administrateurs, les réglages du serveur (brief, § 3) ;
+- **le passage d'une appli active à l'autre** depuis la barre du haut, et le retour au cockpit.
+
+D'après la règle 7, il faut une maquette avant de les coder.
 
 ## 5. Ce que le paquet web contiendra (proposition)
 
@@ -190,16 +197,16 @@ Avec l'option A (un service par appli), la coquille doit gagner **un élément q
 @strata/ui
   styles/
     fonts/inter-{400..800}.woff2
-    tokens.css          jetons sombres + clairs (§ 2.1)
+    tokens.css          jetons sombres + clairs, --op-* compris (§ 2.1)
     base.css            § 2.3
-    components.css      les 291 règles du socle, divergences réglées
+    components.css      les 291 règles du socle, divergences réglées, classes renommées
     light.css           surcharges claires des composants du Core
   theme.ts              sombre / clair / système, script d'avant le premier affichage
   i18n/                 t, tc, tn ; textes communs en français ; i18n-check
   components/           Brand, StatusPill, UserMenu, Dropdown, ContextMenu, dialogs,
                         fields, Empty, InfoTip, tooltips, escape, Toasts, CrashBanner,
                         Shortcuts, NavMenu, Splitter, Boundary, SidePage, settings/ui, Login
-  shell/                barre du haut, navigation, hôtes, passage d'une appli à l'autre
+  shell/                barre du haut, navigation, hôtes, passage d'une appli à l'autre, cockpit
   format.ts, serverError.ts, displayPrefs.ts
 ```
 
@@ -209,23 +216,25 @@ Chaque appli fournit :
 - ses dictionnaires de traduction ;
 - son CSS métier.
 
-## 6. Décisions à prendre
+## 6. Décisions
 
-1. **La spec `design.md` de Network** : la déplacer dans Strata-Core pour en faire la référence officielle du design, tenue à jour avec le paquet ?
-2. **Les noms de classes historiques** (`ux1-*`, `ux3-*`, `opx-*`, `asr-*`, `project-card` réutilisé pour d'autres cartes…) :
-   - les **garder** : la migration des applis est une simple copie ;
-   - ou les **renommer proprement** : plus clair, mais chaque appli doit adapter son code.
-3. **La couleur des opérateurs** : vert (CG) ou pervenche (Cut) ?
-4. **Les jetons `--op-*`** : dans le Core ou pas ?
-5. **Thème et langue d'une appli à l'autre** : le navigateur garde ces choix **par adresse**. Si chaque appli a son propre port, le choix fait dans l'une ne se voit pas dans l'autre. Deux solutions :
-   - tout servir derrière **une seule adresse** (le Core relaie vers les applis) ;
-   - garder le choix **sur le serveur, par utilisateur** (c'est déjà le cas), et le relire à l'ouverture.
-   C'est la question « une seule adresse ou une par appli » du brief.
-6. **Diffusion du paquet web** : dépendance git vers Strata-Core, ou paquet publié (GitHub Packages) ?
+| Sujet | Décision |
+| --- | --- |
+| Point de départ | **le code de CG et de Cut**, composant par composant (§ 3.3). La spec `Strata-Network/docs/design.md` reste dans Network |
+| Noms de classes | **renommés proprement** dans le Core (fin de `ux1-*`, `ux3-*`, `opx-*`, `asr-*`, `project-card` réutilisé…) ; chaque appli adapte son code en passant au paquet. La règle de nommage se fixe avec le paquet : un préfixe lisible par composant (`dropdown-*`, `user-menu-*`…) |
+| Couleur des opérateurs | **pervenche** (`--accent-2`, comme Cut) |
+| Jetons `--op-*` | **dans le Core** |
+| Thème et langue | **gardés sur le serveur, par utilisateur**, relus à l'ouverture de chaque appli (indispensable avec un sous-domaine par appli) |
+| Diffusion | crate Rust : dépendance git sur une étiquette de version de Strata-Core. Paquet web : **à valider**, voir ci-dessous |
+
+**Diffusion du paquet web, à valider.** Deux possibilités :
+
+- **Fichier joint aux releases de Strata-Core** (recommandé) : chaque release du Core contient `strata-ui-<version>.tgz`, et l'appli l'indique dans son `package.json` par son adresse (`https://github.com/DamienP2/Strata-Core/releases/download/v1.4.0/strata-ui-1.4.0.tgz`). Pas de service en plus, pas de jeton pour un dépôt public, et ça utilise la chaîne de releases qu'il faut de toute façon.
+- **GitHub Packages** : le registre de paquets de GitHub, l'équivalent de npmjs.com rattaché au dépôt. Les applis installent `@damienp2/strata-ui@1.4.0` comme n'importe quel paquet. Mais il demande un jeton GitHub **même pour un paquet public**, sur chaque poste de développement et dans chaque CI.
 
 ## 7. Étapes suivantes
 
-1. Trancher les décisions ci-dessus.
-2. Maquette HTML de la coquille commune avec le passage d'une appli à l'autre, à valider.
+1. Valider la diffusion du paquet web (§ 6).
+2. Maquette HTML du cockpit et de la barre commune (passage d’une appli à l’autre), à valider.
 3. Comparaison fine, composant par composant, pour confirmer les versions de départ marquées « à vérifier ».
 4. Écriture du paquet `@strata/ui`.
