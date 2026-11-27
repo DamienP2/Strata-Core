@@ -181,7 +181,9 @@ Linux Foundation) : des flux en mémoire partagée, sur le serveur, sans passer 
 - **Le domaine** : `mxl.domain` dans `/api/hardware/shared` (en général `/dev/shm/mxl`). `mxl`
   vaut `null` quand MXL n'est pas installé : le Core retombe alors sur `strata-share` (plus bas).
 - **Les entrées** (SDI captées par le Core, ST 2110 reçues par le Core) : un flux par entrée, son
-  identifiant dans `mxlFlow` du connecteur (`sdi`) ou du flux (`flows`). L'appli le **lit**.
+  identifiant dans `mxlFlow` du connecteur (`sdi`) ou du flux (`flows`). L'appli le **lit**. Le son
+  embarqué d'une entrée SDI : `audioFlow` du connecteur (float32 48 kHz, autant de canaux que la
+  carte en donne : 16, 8 ou 2), posé à l'instant de son image.
 - **Les sorties** (SDI, flux ST 2110 envoyés) : `mxlFlow` du connecteur réglé en sortie, ou du flux
   ST 2110 sortant. L'appli **écrit** ce flux (son `label` est le nom montré dans les réglages) ; le
   Core l'envoie (SDI en 10 bits, calé sur la référence de la carte ; du noir quand rien n'arrive)
@@ -357,5 +359,6 @@ POST $STRATA_CORE_URL/api/health/alerts/app
 
 - L'appli dira au Core si un utilisateur y a accès, pour que le cockpit ne montre que les applis
   permises.
-- L'audio des entrées SDI dans le partage ; le format de chaque entrée réglable à la main.
+- Le son des sorties SDI (l'appli l'écrit en MXL, le Core l'embarque) ; le format de chaque entrée
+  réglable à la main.
 - Une liste des applis Strata dans la Bibliothèque, quand chacune publiera des releases à ce format.

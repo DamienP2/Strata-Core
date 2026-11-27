@@ -199,14 +199,23 @@ impl Drop for Captures {
 /// Où va chaque image : le flux MXL de l'entrée, ou son partage `strata-share`.
 pub(crate) enum Sink {
     Share(Writer),
-    Mxl { mxl: Arc<strata_mxl::Mxl>, id: strata_mxl::Uuid, label: String, writer: Option<strata_mxl::VideoWriter>, published: u64 },
+    Mxl {
+        mxl: Arc<strata_mxl::Mxl>,
+        id: strata_mxl::Uuid,
+        label: String,
+        writer: Option<strata_mxl::VideoWriter>,
+        published: u64,
+        /// Le son de l'entrée (`sdi/<carte>/<n>/audio`), créé au premier son reçu.
+        audio_id: strata_mxl::Uuid,
+        audio: Option<strata_mxl::AudioWriter>,
+    },
 }
 
 impl Sink {
     pub(crate) fn publish(&mut self, info: &FrameInfo, data: &[u8]) -> Result<(), String> {
         match self {
             Sink::Share(w) => w.publish(info, data).map(|_| ()).map_err(|e| e.to_string()),
-            Sink::Mxl { mxl, id, label, writer, published } => {
+            Sink::Mxl { mxl, id, label, writer, published, .. } => {
                 let v = strata_mxl::Video { width: info.width, height: info.height, rate: info.rate, interlaced: info.interlaced };
                 // Un autre format (le signal a changé) : le flux est recréé.
                 if writer.as_ref().is_none_or(|w| w.video() != v) {
@@ -217,6 +226,25 @@ impl Sink {
                 *published += 1;
                 Ok(())
             }
+        }
+    }
+
+    /// Le son arrivé avec la dernière image (entrelacé, `channels` canaux) : posé en MXL pour
+    /// finir avec le son de cette image (`last` : ses échantillons), calé sur elle.
+    pub(crate) fn publish_audio(&mut self, pcm: &[f32], channels: usize, last: usize) -> Result<(), String> {
+        let Sink::Mxl { mxl, audio_id, label, writer, audio, .. } = self else { return Ok(()) };
+        if channels == 0 || pcm.is_empty() {
+            return Ok(());
+        }
+        if audio.as_ref().is_none_or(|a| a.channels() != channels) {
+            *audio = None;
+            *audio = Some(mxl.audio_writer(*audio_id, label, channels as u32)?);
+        }
+        let a = audio.as_mut().unwrap();
+        let total = pcm.len() / channels;
+        match writer.as_ref().and_then(|w| w.last_frame_audio_index()) {
+            Some(at) => a.write_at((at + last as u64).saturating_sub(total as u64), pcm),
+            None => a.write_interleaved(pcm),
         }
     }
 
@@ -270,7 +298,15 @@ fn start(w: Wanted, mxl: Option<Arc<strata_mxl::Mxl>>) -> Running {
                     s.error = Some(e);
                 };
                 let mut writer = match (mxl, flow) {
-                    (Some(mxl), Some(id)) => Sink::Mxl { mxl, id, label: format!("SDI {} ({})", w.connector, w.card), writer: None, published: 0 },
+                    (Some(mxl), Some(id)) => Sink::Mxl {
+                        mxl,
+                        id,
+                        label: format!("SDI {} ({})", w.connector, w.card),
+                        writer: None,
+                        published: 0,
+                        audio_id: strata_mxl::flow_id(&format!("sdi/{}/{}/audio", w.card, w.connector)),
+                        audio: None,
+                    },
                     // Le partage d'abord : les applis voient l'entrée même sans signal.
                     _ => loop {
                         match Writer::create(&share, 3, UHD_UYVY) {
@@ -393,7 +429,12 @@ fn capture(writer: &mut Sink, device: u32, stop: &AtomicBool, status: &Mutex<Sta
                         interlaced: m.interlaced(),
                         timecode: tc,
                     };
-                    if writer.publish(&info, &buf).is_ok() {
+                    let published = writer.publish(&info, &buf).is_ok();
+                    // Le son embarqué de cette image, calé sur elle.
+                    if let Some((pcm, ch, last)) = input.audio() {
+                        let _ = writer.publish_audio(&pcm, ch, last);
+                    }
+                    if published {
                         meter.tick(true, writer, status, |s| {
                             s.format = Some(m.name.clone());
                             s.timecode = tc.as_ref().map(tc_text);
@@ -451,6 +492,9 @@ fn background(connector: u32) -> Vec<u8> {
     b
 }
 
+/// Le bip de la mire : -18 dBFS.
+const TONE: f32 = 0.125_892_54;
+
 fn simulate(writer: &mut Sink, connector: u32, p: &Pattern, stop: &AtomicBool, status: &Mutex<Status>) {
     use strata_core::timecode::{house_timecode, HouseRate};
     let bg = background(connector);
@@ -477,6 +521,7 @@ fn simulate(writer: &mut Sink, connector: u32, p: &Pattern, stop: &AtomicBool, s
     }
     writer.set_signal(Some(true));
     let mut n = 0u64;
+    let (mut acc, mut tone_n) = (0u64, 0u64);
     while !stop.load(Ordering::Relaxed) {
         // Une barre blanche qui traverse la bande noire, à une vitesse propre à l'entrée.
         frame.copy_from_slice(&bg);
@@ -490,6 +535,18 @@ fn simulate(writer: &mut Sink, connector: u32, p: &Pattern, stop: &AtomicBool, s
         let info =
             FrameInfo { width: W, height: H, stride: W * 2, format: Format::Uyvy, rate: (num as u32, den as u32), interlaced: false, timecode: Some(tc) };
         let ok = writer.publish(&info, &frame).is_ok();
+        // Le son de la mire : un bip à 1 kHz, -18 dBFS, sur deux canaux (barres et bip).
+        acc += 48_000 * den;
+        let k = (acc / num) as usize;
+        acc %= num;
+        let pcm: Vec<f32> = (0..k)
+            .flat_map(|i| {
+                let v = TONE * (2.0 * std::f32::consts::PI * 1000.0 * ((tone_n + i as u64) % 48_000) as f32 / 48_000.0).sin();
+                [v, v]
+            })
+            .collect();
+        tone_n += k as u64;
+        let _ = writer.publish_audio(&pcm, 2, k);
         meter.tick(ok, writer, status, |s| s.timecode = Some(tc_text(&tc)));
         n += 1;
         let next = start + period * n as u32;

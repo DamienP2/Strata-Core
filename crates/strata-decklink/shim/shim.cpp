@@ -558,6 +558,11 @@ class Input final : public IDeckLinkInputCallback {
     int tc_drop = 0;
     int tc_mark = 0; // field mark: the second frame of a pair (rates above 30)
     uint64_t tc_seq = 0; // the frame it came with
+    // The embedded audio (48 kHz, 32-bit, interleaved), queued since the last
+    // dl_input_audio; `audio_last`: the sample frames of the newest packet.
+    std::vector<int32_t> audio;
+    int audio_channels = 0;
+    int64_t audio_last = 0;
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, LPVOID *ppv) override {
         if (!ppv) {
@@ -603,7 +608,21 @@ class Input final : public IDeckLinkInputCallback {
 
     HRESULT STDMETHODCALLTYPE VideoInputFrameArrived(IDeckLinkVideoInputFrame *f,
                                                      IDeckLinkAudioInputPacket *audio) override {
-        (void)audio;
+        // The audio of this frame, kept in order (at most 2 s of it).
+        if (audio && audio_channels > 0) {
+            void *pcm = NULL;
+            long frames = audio->GetSampleFrameCount();
+            if (frames > 0 && audio->GetBytes(&pcm) == S_OK && pcm) {
+                std::lock_guard<std::mutex> lk(m);
+                const int32_t *p = (const int32_t *)pcm;
+                this->audio.insert(this->audio.end(), p, p + (size_t)frames * (size_t)audio_channels);
+                size_t cap = (size_t)96000 * (size_t)audio_channels;
+                if (this->audio.size() > cap) {
+                    this->audio.erase(this->audio.begin(), this->audio.begin() + (long)(this->audio.size() - cap));
+                }
+                audio_last = frames;
+            }
+        }
         if (!f) {
             return S_OK;
         }
@@ -677,6 +696,9 @@ class Input final : public IDeckLinkInputCallback {
             in->StopStreams();
             in->SetCallback(NULL);
             in->DisableVideoInput();
+            if (audio_channels > 0) {
+                in->DisableAudioInput();
+            }
         }
     }
 
@@ -1128,6 +1150,14 @@ void *dl_input_open(int index, uint32_t mode, char *err, int errlen) {
         set_err(err, errlen, "cannot enable the video input (device in use by another application?)");
         goto fail;
     }
+    // The embedded audio: as many channels as the card takes (16, 8, then 2);
+    // none is not an error (the picture is captured all the same).
+    for (int ch : {16, 8, 2}) {
+        if (in->in->EnableAudioInput(bmdAudioSampleRate48kHz, bmdAudioSampleType32bitInteger, (uint32_t)ch) == S_OK) {
+            in->audio_channels = ch;
+            break;
+        }
+    }
     if (in->in->StartStreams() != S_OK) {
         set_err(err, errlen, "cannot start the capture");
         goto fail;
@@ -1203,6 +1233,28 @@ int dl_input_timecode(void *h, int *out, uint64_t *count) {
     out[5] = in->tc_mark;
     *count = in->tc_seq;
     return 1;
+}
+
+// The embedded audio queued since the last call (48 kHz, 32-bit,
+// interleaved; the queue is emptied): the sample frames copied, -n when `cap`
+// (in samples) is too small for the n needed. `channels`: per sample frame (0:
+// no audio); `last`: the sample frames of the newest packet (the newest
+// frame's audio ends the copy).
+int64_t dl_input_audio(void *h, int32_t *out, int64_t cap, int *channels, int64_t *last) {
+    Input *in = (Input *)h;
+    std::lock_guard<std::mutex> lk(in->m);
+    *channels = in->audio_channels;
+    *last = in->audio_last;
+    if (in->audio_channels <= 0 || in->audio.empty()) {
+        return 0;
+    }
+    int64_t need = (int64_t)in->audio.size();
+    if (cap < need) {
+        return -need;
+    }
+    std::memcpy(out, in->audio.data(), in->audio.size() * sizeof(int32_t));
+    in->audio.clear();
+    return need / in->audio_channels;
 }
 
 void dl_input_close(void *h) {

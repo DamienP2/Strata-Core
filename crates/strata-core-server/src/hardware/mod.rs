@@ -835,6 +835,11 @@ async fn shared(State(s): State<Shared>, ConnectInfo(peer): ConnectInfo<SocketAd
                             Function::Output if mxl.is_some() => Some(out_flow(&format!("sdi-out/{}/{}", c.id, i + 1)).to_string()),
                             _ => None,
                         },
+                        // Le son embarqué d'une entrée (float32 48 kHz, les canaux de la carte).
+                        "audioFlow": match k.function {
+                            Function::Input if mxl.is_some() => Some(out_flow(&format!("sdi/{}/{}/audio", c.id, i + 1)).to_string()),
+                            _ => None,
+                        },
                     })).collect::<Vec<_>>(),
                 })
             })

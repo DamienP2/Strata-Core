@@ -220,6 +220,7 @@ mod ffi {
         pub fn dl_input_mode(h: *mut c_void) -> u32;
         pub fn dl_input_wait(h: *mut c_void, seq: u64, timeout_ms: c_int) -> c_int;
         pub fn dl_input_timecode(h: *mut c_void, out: *mut c_int, count: *mut u64) -> c_int;
+        pub fn dl_input_audio(h: *mut c_void, out: *mut i32, cap: i64, channels: *mut c_int, last: *mut i64) -> i64;
         pub fn dl_input_close(h: *mut c_void);
     }
 
@@ -674,6 +675,34 @@ impl InputHandle {
             let _ = (buf, seq);
             None
         }
+    }
+
+    /// The embedded audio since the last call (48 kHz, interleaved, as
+    /// floats): the samples, the channels, and the sample frames of the newest
+    /// frame's packet (which ends the samples). None: no audio (or none yet).
+    pub fn audio(&self) -> Option<(Vec<f32>, usize, usize)> {
+        #[cfg(decklink_shim)]
+        {
+            let mut buf: Vec<i32> = vec![0; 48_000 * 16 / 25];
+            for _ in 0..3 {
+                let (mut ch, mut last) = (0 as std::ffi::c_int, 0i64);
+                // SAFETY: open handle; `buf` holds `len` writable samples, the shim writes at most that.
+                let r = unsafe { ffi::dl_input_audio(self.raw, buf.as_mut_ptr(), buf.len() as i64, &mut ch, &mut last) };
+                if r > 0 && ch > 0 {
+                    let n = r as usize * ch as usize;
+                    let pcm = buf[..n].iter().map(|&x| x as f32 / 2_147_483_648.0).collect();
+                    return Some((pcm, ch as usize, last.max(0) as usize));
+                }
+                if r < 0 {
+                    buf.resize((-r) as usize, 0);
+                    continue;
+                }
+                return None;
+            }
+            None
+        }
+        #[cfg(not(decklink_shim))]
+        None
     }
 
     /// The timecode of the newest frame (None: the signal carries none).
