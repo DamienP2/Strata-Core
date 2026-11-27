@@ -215,6 +215,13 @@ pub struct Flow {
     /// Son : la durée d'un paquet en µs (1000 par défaut, AES67 ; 125 pour le niveau B/C).
     #[serde(default = "one_ms")]
     pub ptime_us: u32,
+    /// Reçu ou envoyé par le Core ; coupé : réglé seulement (aussi par NMOS, `master_enable`).
+    #[serde(default = "yes")]
+    pub enabled: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 fn two() -> u16 {
@@ -899,6 +906,7 @@ mod tests {
             channels: 2,
             bits: 24,
             ptime_us: 1000,
+            enabled: true,
         }
     }
 

@@ -9,7 +9,8 @@
 //!   sont seulement réglés (et regardés dans l'aperçu), comme avant.
 //! - **Son** : reçu en blocs de 10 ms (L24 ou L16), écrit en flux audio MXL `2110/<flux>` (float32
 //!   48 kHz) ; envoyé depuis le flux audio MXL que l'appli écrit, du silence sans lui.
-//! - Tout est rouvert quand les réglages des ports ou des flux changent.
+//! - MTL est rouvert quand les ports changent ; un flux changé, ajouté ou retiré est relancé
+//!   seul, sans couper les autres (un branchement NMOS ne touche que le récepteur branché).
 use serde::Serialize;
 use std::{
     collections::HashMap,
@@ -76,11 +77,17 @@ enum Kind {
 }
 
 struct Running {
-    plan: Plan,
-    stop: Arc<AtomicBool>,
-    threads: Vec<JoinHandle<()>>,
+    /// Les ports et le décalage TAI avec lesquels MTL est ouvert.
+    ports: (Vec<(String, Pmd, Ipv4Addr, Ipv4Addr)>, u32),
+    flows: HashMap<String, FlowRun>,
     // Lâché après les fils : ses sessions sont fermées par eux.
-    _mtl: Arc<Mtl>,
+    mtl: Arc<Mtl>,
+}
+
+struct FlowRun {
+    plan: FlowPlan,
+    stop: Arc<AtomicBool>,
+    thread: JoinHandle<()>,
 }
 
 #[derive(Default)]
@@ -125,7 +132,7 @@ fn plan(cfg: &HardwareConfig) -> Result<Option<Plan>, String> {
     if r.media_io == MediaIo::Off {
         return Ok(None);
     }
-    let video: Vec<_> = cfg.flows.iter().filter(|f| matches!(f.essence, Essence::Video | Essence::Audio)).collect();
+    let video: Vec<_> = cfg.flows.iter().filter(|f| f.enabled && matches!(f.essence, Essence::Video | Essence::Audio)).collect();
     if video.is_empty() {
         return Ok(None);
     }
@@ -184,54 +191,60 @@ impl Engine {
             return;
         }
         let mut run = self.running.lock().unwrap();
-        if run.as_ref().map(|r| &r.plan) == want.as_ref() {
+        let Some(plan) = want else {
+            if let Some(r) = run.take() {
+                halt(r);
+                self.status.lock().unwrap().clear();
+            }
+            *self.problem.lock().unwrap() = None;
             return;
-        }
-        if let Some(r) = run.take() {
-            halt(r);
-        }
-        self.status.lock().unwrap().clear();
-        *self.problem.lock().unwrap() = None;
-        let (Some(plan), Some(mxl)) = (want, mxl) else { return };
-        let ports: Vec<Port> = plan
-            .ports
-            .iter()
-            .map(|(name, pmd, ip, mask)| Port { name: name.clone(), pmd: *pmd, ip: *ip, mask: *mask, gateway: Ipv4Addr::UNSPECIFIED })
-            .collect();
-        let mtl = match Mtl::open(&ports, plan.tai_offset, None) {
-            Ok(m) => Arc::new(m),
-            Err(e) => {
-                tracing::warn!("MTL: {e}");
-                *self.problem.lock().unwrap() = Some(e);
-                return;
-            }
         };
-        tracing::info!("MTL on {} ({} flows)", plan.ports.iter().map(|p| p.0.as_str()).collect::<Vec<_>>().join(", "), plan.flows.len());
-        let stop = Arc::new(AtomicBool::new(false));
-        let mut threads = Vec::new();
-        for f in &plan.flows {
-            let (f, mtl, mxl, stop, status) = (f.clone(), mtl.clone(), mxl.clone(), stop.clone(), self.status.clone());
-            let name = format!("2110-{}", f.id);
-            if let Ok(t) = std::thread::Builder::new().name(name).spawn(move || {
-                let set = |s: &dyn Fn(&mut IoStatus)| s(status.lock().unwrap().entry(f.id.clone()).or_default());
-                let r = match (&f.kind, f.input) {
-                    (Kind::Video(v), true) => receive(&f, v, &mtl, &mxl, &stop, &set),
-                    (Kind::Video(v), false) => send(&f, v, &mtl, &mxl, &stop, &set),
-                    (Kind::Audio(a), true) => receive_audio(&f, a, &mtl, &mxl, &stop, &set),
-                    (Kind::Audio(a), false) => send_audio(&f, a, &mtl, &mxl, &stop, &set),
-                };
-                if let Err(e) = r {
-                    tracing::warn!("ST 2110 flow {}: {e}", f.name);
-                    set(&|s| {
-                        s.state = IoState::Error;
-                        s.error = Some(e.clone());
-                    });
+        let Some(mxl) = mxl else { return };
+        let ports = (plan.ports.clone(), plan.tai_offset);
+        // Les ports changent : tout est rouvert.
+        if run.as_ref().is_some_and(|r| r.ports != ports) {
+            if let Some(r) = run.take() {
+                halt(r);
+            }
+            self.status.lock().unwrap().clear();
+        }
+        if run.is_none() {
+            *self.problem.lock().unwrap() = None;
+            let list: Vec<Port> = plan
+                .ports
+                .iter()
+                .map(|(name, pmd, ip, mask)| Port { name: name.clone(), pmd: *pmd, ip: *ip, mask: *mask, gateway: Ipv4Addr::UNSPECIFIED })
+                .collect();
+            let mtl = match Mtl::open(&list, plan.tai_offset, None) {
+                Ok(m) => Arc::new(m),
+                Err(e) => {
+                    tracing::warn!("MTL: {e}");
+                    *self.problem.lock().unwrap() = Some(e);
+                    return;
                 }
-            }) {
-                threads.push(t);
+            };
+            tracing::info!("MTL on {}", plan.ports.iter().map(|p| p.0.as_str()).collect::<Vec<_>>().join(", "));
+            *run = Some(Running { ports, flows: HashMap::new(), mtl });
+        }
+        let Some(r) = run.as_mut() else { return };
+        // Les flux retirés ou changés s'arrêtent (ensemble, puis on attend leurs fils)…
+        let gone: Vec<String> = r.flows.iter().filter(|(id, f)| !plan.flows.iter().any(|p| &p.id == *id && *p == f.plan)).map(|(id, _)| id.clone()).collect();
+        let stopping: Vec<FlowRun> = gone.iter().filter_map(|id| r.flows.remove(id)).collect();
+        for f in &stopping {
+            f.stop.store(true, Ordering::Relaxed);
+        }
+        for f in stopping {
+            let _ = f.thread.join();
+            self.status.lock().unwrap().remove(&f.plan.id);
+        }
+        // … puis les nouveaux démarrent.
+        let new: Vec<&FlowPlan> = plan.flows.iter().filter(|p| !r.flows.contains_key(&p.id)).collect();
+        for f in new {
+            let stop = Arc::new(AtomicBool::new(false));
+            if let Some(thread) = spawn_flow(f, &r.mtl, &mxl, &stop, &self.status) {
+                r.flows.insert(f.id.clone(), FlowRun { plan: f.clone(), stop, thread });
             }
         }
-        *run = Some(Running { plan, stop, threads, _mtl: mtl });
     }
 
     fn stop(&self, problem: Option<String>) {
@@ -345,10 +358,37 @@ fn send_audio(f: &FlowPlan, a: &strata_mtl::Audio, mtl: &Mtl, mxl: &Mxl, stop: &
 }
 
 fn halt(r: Running) {
-    r.stop.store(true, Ordering::Relaxed);
-    for t in r.threads {
-        let _ = t.join();
+    for f in r.flows.values() {
+        f.stop.store(true, Ordering::Relaxed);
     }
+    for (_, f) in r.flows {
+        let _ = f.thread.join();
+    }
+}
+
+/// Lance le fil d'un flux.
+fn spawn_flow(f: &FlowPlan, mtl: &Arc<Mtl>, mxl: &Arc<Mxl>, stop: &Arc<AtomicBool>, status: &Arc<Mutex<HashMap<String, IoStatus>>>) -> Option<JoinHandle<()>> {
+    let (f, mtl, mxl, stop, status) = (f.clone(), mtl.clone(), mxl.clone(), stop.clone(), status.clone());
+    let name = format!("2110-{}", f.id);
+    std::thread::Builder::new()
+        .name(name)
+        .spawn(move || {
+            let set = |s: &dyn Fn(&mut IoStatus)| s(status.lock().unwrap().entry(f.id.clone()).or_default());
+            let r = match (&f.kind, f.input) {
+                (Kind::Video(v), true) => receive(&f, v, &mtl, &mxl, &stop, &set),
+                (Kind::Video(v), false) => send(&f, v, &mtl, &mxl, &stop, &set),
+                (Kind::Audio(a), true) => receive_audio(&f, a, &mtl, &mxl, &stop, &set),
+                (Kind::Audio(a), false) => send_audio(&f, a, &mtl, &mxl, &stop, &set),
+            };
+            if let Err(e) = r {
+                tracing::warn!("ST 2110 flow {}: {e}", f.name);
+                set(&|s| {
+                    s.state = IoState::Error;
+                    s.error = Some(e.clone());
+                });
+            }
+        })
+        .ok()
 }
 
 fn format_name(v: &strata_mtl::Video) -> String {
