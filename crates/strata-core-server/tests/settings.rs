@@ -123,6 +123,21 @@ async fn users() {
     let (st, _, _) = srv.call("POST", "/api/auth/login", None, Some(json!({"username": "c.martin", "password": "password2"}))).await;
     assert_eq!(st, StatusCode::UNAUTHORIZED);
 
+    // Groupes : appartenance, groupe inconnu refusé, un groupe supprimé en sort ses membres
+    let (_, _, g) = srv.call("POST", "/api/groups", Some(&admin), Some(json!({"name": "Montage"}))).await;
+    let gid = g["id"].as_str().unwrap().to_string();
+    let (st, _, v) = srv.call("PATCH", &format!("/api/users/{claire_id}"), Some(&admin), Some(json!({"groups": [gid]}))).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["groupNames"], json!(["Montage"]));
+    let (st, _, _) = srv.call("PATCH", &format!("/api/users/{claire_id}"), Some(&admin), Some(json!({"groups": ["ghost"]}))).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+    let (_, _, v) = srv.call("GET", "/api/groups", Some(&admin), None).await;
+    assert_eq!(v["groups"][0]["members"], 1);
+    let (st, _, _) = srv.call("DELETE", &format!("/api/groups/{gid}"), Some(&admin), None).await;
+    assert_eq!(st, StatusCode::NO_CONTENT);
+    let (_, _, v) = srv.call("GET", "/api/users", Some(&admin), None).await;
+    assert!(v["users"].as_array().unwrap().iter().all(|u| u["groups"] == json!([])));
+
     // Supprimer
     let (st, _, _) = srv.call("DELETE", &format!("/api/users/{claire_id}"), Some(&admin), None).await;
     assert_eq!(st, StatusCode::NO_CONTENT);

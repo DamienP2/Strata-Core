@@ -38,6 +38,7 @@ pub fn router() -> Router<Shared> {
         .merge(crate::apps::routes())
         .merge(crate::users::routes())
         .merge(crate::groups::routes())
+        .merge(crate::sso::routes())
 }
 
 /// Supervision, sans connexion : le serveur répond-il, en quelle version, attend-il son premier compte ?
