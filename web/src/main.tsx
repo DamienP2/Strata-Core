@@ -1,8 +1,9 @@
 // L'interface du Core : la connexion (et le premier administrateur), puis le cockpit.
-import { StrictMode, useEffect, useState, type ComponentType } from 'react';
+import { StrictMode, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AppWindow, CircleHelp, Film, Layers, LayoutGrid, Network, Phone, Scissors } from 'lucide-react';
+import { CircleHelp, Settings as SettingsIcon } from 'lucide-react';
 import '@strata/ui/styles.css';
+import './core.css';
 import {
   Cockpit, ContextMenuHost, DialogHost, Launcher, Login, StatusPill, Toasts, TopBar, UserMenu,
   addTranslations, installEscape, installTooltips, instanceKey, nameTab, openAppTab, setLang, setTheme, setTimezone, t, toast, useLang,
@@ -10,14 +11,14 @@ import {
 } from '@strata/ui';
 import { api, ApiError, useApp, type AuthState, type PublicUser } from './api';
 import { fr } from './fr';
+import { appIcon } from './icons';
+import { navigate, useRoute } from './router';
+import { Settings } from './settings/Settings';
 
 addTranslations('fr', fr);
 installTooltips();
 installEscape();
 nameTab('cockpit');
-
-/** Les icônes des applis Strata, d'après le nom donné par leur fiche ; une appli inconnue : une fenêtre. */
-const ICONS: Record<string, ComponentType<{ size?: number }>> = { scissors: Scissors, layers: Layers, 'layout-grid': LayoutGrid, network: Network, film: Film, phone: Phone };
 
 interface CockpitWire extends Omit<CockpitData, 'apps'> {
   apps: { id: string; name: string; icon: string }[];
@@ -66,7 +67,7 @@ function useCockpit(signedIn: boolean) {
     let live = true;
     const load = () =>
       api<CockpitWire>('GET', '/api/cockpit')
-        .then((w) => live && setData({ ...w, apps: w.apps.map((a) => ({ id: a.id, name: a.name, icon: ICONS[a.icon] ?? AppWindow })) }))
+        .then((w) => live && setData({ ...w, apps: w.apps.map((a) => ({ id: a.id, name: a.name, icon: appIcon(a.icon) })) }))
         .catch((e) => live && toast(message(e), 'error'));
     void load();
     const id = setInterval(load, 15000);
@@ -84,9 +85,16 @@ function App() {
   useLang((s) => s.lang);
   const auth = useApp((s) => s.auth);
   const connected = useApp((s) => s.connected);
+  const path = useRoute((s) => s.path);
   const user = auth?.user ?? null;
   const data = useCockpit(!!user);
   useHeartbeat();
+  // Les réglages : administrateurs seulement ; toute autre adresse revient au cockpit.
+  useEffect(() => {
+    if (!user) return;
+    if (user.admin && path === '/reglages') navigate('/reglages/bibliotheque', true);
+    else if (path !== '/' && !(user.admin && path.startsWith('/reglages/'))) navigate('/', true);
+  }, [user, path]);
 
   if (!auth) return null;
   if (!user)
@@ -109,17 +117,23 @@ function App() {
     );
 
   const empty: CockpitData = { apps: [], servers: [], instances: [], admin: user.admin };
+  const inSettings = user.admin && path.startsWith('/reglages/');
   return (
     <div className="st-app">
       <TopBar
-        module="Core"
-        start={<Launcher data={data ?? empty} onOpen={open} onCockpit={() => window.scrollTo(0, 0)} />}
+        module={inSettings ? t('Settings') : 'Core'}
+        start={<Launcher data={data ?? empty} onOpen={open} onCockpit={() => navigate('/')} />}
         end={
           <>
             <StatusPill connected={connected} serverName={auth.serverName} onLost={() => void loadAuth().catch(() => {})} />
             <button type="button" className="st-help" title={t('Help')}>
               <CircleHelp size={17} />
             </button>
+            {user.admin && (
+              <button type="button" className={`st-help ${inSettings ? 'on' : ''}`} title={t('Server settings')} onClick={() => navigate(inSettings ? '/' : '/reglages/bibliotheque')}>
+                <SettingsIcon size={17} />
+              </button>
+            )}
             <UserMenu
               name={user.displayName}
               role={user.admin ? t('Server administrator') : user.groups.join(' · ') || t('User')}
@@ -131,7 +145,7 @@ function App() {
           </>
         }
       />
-      <div className="st-content">{data && <Cockpit data={data} onOpen={open} />}</div>
+      <div className="st-content">{inSettings ? <Settings path={path.slice('/reglages/'.length)} /> : data && <Cockpit data={data} onOpen={open} onServer={user.admin ? () => navigate('/reglages/bibliotheque') : undefined} />}</div>
       <ContextMenuHost />
       <DialogHost />
       <Toasts />

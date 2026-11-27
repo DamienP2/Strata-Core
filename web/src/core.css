@@ -1,0 +1,19 @@
+/* Les pages du Core qui n'ont pas leur place dans @strata/ui. Jetons uniquement. */
+.core-empty { height: 220px; display: flex; }
+.core-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+.core-libcard { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; display: flex; flex-direction: column; }
+.core-libcard-h { display: flex; align-items: center; gap: 12px; padding: 14px; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: 14px 14px 0 0; }
+.core-libcard-h:hover { background: var(--panel-2); }
+.core-libcard-name { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.core-libcard-name strong { font-size: 14.5px; }
+.core-libcard-f { display: flex; align-items: center; gap: 8px; padding: 10px 14px 12px; border-top: 1px solid var(--line); }
+.core-libcard-f .st-switch { font-size: 12.5px; }
+.core-app-icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: var(--accent-soft); color: var(--accent-2); flex: none; }
+.core-app-icon.big { width: 56px; height: 56px; border-radius: 14px; }
+.core-libcard.off .core-app-icon, .core-app-icon.off { background: var(--panel-3); color: var(--text-3); }
+.core-apphead { display: flex; align-items: center; gap: 14px; }
+.core-apphead h1 { margin: 0; font-size: 22px; font-weight: 800; }
+.core-apphead p { margin: 4px 0 0; }
+.core-user { display: flex; align-items: center; gap: 10px; }
+.core-user strong { font-size: 13px; }
+.core-user .st-avatar { width: 28px; height: 28px; font-size: 12px; }

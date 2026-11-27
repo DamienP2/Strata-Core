@@ -31,7 +31,12 @@ pub async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static)
 }
 
 pub fn router() -> Router<Shared> {
-    Router::new().route("/api/health", get(health)).merge(crate::auth::routes()).merge(crate::prefs::routes()).merge(crate::apps::routes())
+    Router::new()
+        .route("/api/health", get(health))
+        .merge(crate::auth::routes())
+        .merge(crate::prefs::routes())
+        .merge(crate::apps::routes())
+        .merge(crate::users::routes())
 }
 
 /// Supervision, sans connexion : le serveur répond-il, en quelle version, attend-il son premier compte ?

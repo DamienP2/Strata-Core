@@ -16,6 +16,7 @@ export { SidePage, Page, NavSection, NavItem, PageHead, SubTabs, type NavItemPro
 export { StatusPill, type MachineLoad } from './components/StatusPill';
 export { UserMenu, initial } from './components/UserMenu';
 export { Login } from './components/Login';
+export { Modal } from './components/Modal';
 export { Cockpit, Launcher, TopBar, openAppTab, nameTab, groupByApp, instanceKey, type CockpitApp, type CockpitServer, type CockpitInstance, type CockpitData } from './components/Cockpit';
 export { installTooltips } from './tooltips';
 export { installEscape } from './escape';

@@ -3,14 +3,23 @@
 //! Une appli installée a son dossier `<données>/apps/<id>/` avec sa fiche `strata-app.toml` ;
 //! `<données>/apps.json` dit lesquelles sont actives. Le cockpit montre les applis actives,
 //! compatibles avec ce Core, une tuile par appli.
-use axum::{extract::State, routing::get, Json, Router};
+use axum::{
+    extract::{Path as UrlPath, State},
+    routing::{get, patch},
+    Json, Router,
+};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use strata_core::manifest::AppManifest;
 
-use crate::{auth::CurrentUser, config::hostname, state::Shared};
+use crate::{
+    api::{bad, blocking, require, ApiResult},
+    auth::CurrentUser,
+    config::{hostname, ServerConfig},
+    state::Shared,
+};
 
 /// Une appli installée sur ce serveur.
 #[derive(Clone, Debug)]
@@ -91,7 +100,54 @@ impl Apps {
 }
 
 pub fn routes() -> Router<Shared> {
-    Router::new().route("/api/cockpit", get(cockpit))
+    Router::new().route("/api/cockpit", get(cockpit)).route("/api/apps", get(list)).route("/api/apps/{id}", patch(update))
+}
+
+/// Une appli telle que les réglages la montrent.
+fn app_json(a: &Installed, cfg: &ServerConfig) -> Value {
+    let m = &a.manifest;
+    json!({
+        "id": m.id,
+        "name": m.name,
+        "version": m.version.to_string(),
+        "icon": m.icon,
+        "port": m.port,
+        "requires": m.requires.core.to_string(),
+        "compatible": a.compatible,
+        "active": a.active,
+        "url": cfg.app_url(&m.id),
+    })
+}
+
+/// La Bibliothèque : les applis installées sur ce serveur (administrateurs).
+async fn list(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
+    require(me.admin)?;
+    let cfg = s.config.load();
+    Ok(Json(json!({
+        "core": strata_core::VERSION,
+        "apps": s.apps.list().iter().map(|a| app_json(a, &cfg)).collect::<Vec<_>>(),
+    })))
+}
+
+#[derive(Deserialize)]
+struct Patch {
+    active: Option<bool>,
+}
+
+/// Active ou désactive une appli (administrateurs).
+async fn update(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Json(b): Json<Patch>) -> ApiResult<Json<Value>> {
+    require(me.admin)?;
+    let Some(on) = b.active else { return Err(bad("nothing to change")) };
+    let s2 = s.clone();
+    let app = blocking(move || s2.apps.set_active(&id, on)).await?.map_err(|e| {
+        if e.starts_with("no such app") {
+            (axum::http::StatusCode::NOT_FOUND, e)
+        } else {
+            bad(e)
+        }
+    })?;
+    tracing::info!("{} {} by {}", app.manifest.id, if on { "activated" } else { "deactivated" }, me.username);
+    Ok(Json(app_json(&app, &s.config.load())))
 }
 
 /// Ce que montre le cockpit (`CockpitData` de @strata/ui) : les applis actives, ce serveur, une

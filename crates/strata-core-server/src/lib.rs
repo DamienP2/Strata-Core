@@ -11,6 +11,7 @@ pub mod config;
 pub mod guard;
 pub mod prefs;
 pub mod state;
+pub mod users;
 pub mod web;
 
 use axum::Router;
