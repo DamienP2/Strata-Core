@@ -32,7 +32,7 @@ fn refused(e: String) -> (StatusCode, String) {
 
 async fn list(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
     require(me.admin)?;
-    let mut users: Vec<PublicUser> = s.auth.users().iter().map(|u| u.public()).collect();
+    let mut users: Vec<PublicUser> = s.auth.users().iter().map(|u| u.public(&s.groups)).collect();
     users.sort_by_key(|u| u.display_name.to_lowercase());
     Ok(Json(json!({ "users": users })))
 }
@@ -55,7 +55,7 @@ async fn create(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(b): 
         .await?
         .map_err(bad)?;
     tracing::info!("user {} created by {}", user.username, me.username);
-    Ok(Json(user.public()))
+    Ok(Json(user.public(&s.groups)))
 }
 
 #[derive(Deserialize)]
@@ -64,12 +64,19 @@ struct UpdateBody {
     display_name: Option<String>,
     admin: Option<bool>,
     disabled: Option<bool>,
+    /// Les identifiants de ses groupes.
+    groups: Option<Vec<String>>,
 }
 
 async fn update(State(s): State<Shared>, CurrentUser(me): CurrentUser, Path(id): Path<String>, Json(b): Json<UpdateBody>) -> ApiResult<Json<PublicUser>> {
     require(me.admin)?;
     if id == me.id && (b.disabled == Some(true) || b.admin == Some(false)) {
         return Err(bad("you cannot disable your own account or take away your own admin rights"));
+    }
+    if let Some(g) = &b.groups {
+        if let Some(unknown) = g.iter().find(|g| !s.groups.exists(g)) {
+            return Err(bad(format!("no such group: {unknown}")));
+        }
     }
     let auth = s.auth.clone();
     let user = blocking(move || {
@@ -79,7 +86,16 @@ async fn update(State(s): State<Shared>, CurrentUser(me): CurrentUser, Path(id):
                 u.display_name = if n.is_empty() { u.username.clone() } else { n.to_string() };
             }
             if let Some(a) = b.admin {
+                // Un compte de l'annuaire changé à la main : l'annuaire n'y touche plus.
+                if a != u.admin && !u.sso.is_empty() {
+                    u.admin_fixed = true;
+                }
                 u.admin = a;
+            }
+            if let Some(mut g) = b.groups {
+                g.sort();
+                g.dedup();
+                u.groups = g;
             }
             if let Some(d) = b.disabled {
                 u.disabled = d;
@@ -89,7 +105,7 @@ async fn update(State(s): State<Shared>, CurrentUser(me): CurrentUser, Path(id):
     })
     .await?
     .map_err(refused)?;
-    Ok(Json(user.public()))
+    Ok(Json(user.public(&s.groups)))
 }
 
 #[derive(Deserialize)]

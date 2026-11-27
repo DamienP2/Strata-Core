@@ -20,6 +20,8 @@ pub struct ServerConfig {
     pub timezone: String,
     /// `https` ou `http` : le début des adresses des applis.
     pub scheme: String,
+    /// La connexion par l'annuaire de l'entreprise (OpenID Connect).
+    pub sso: crate::sso::SsoConfig,
 }
 
 /// Le nom de la machine (« strata01 »).
@@ -37,6 +39,7 @@ impl Default for ServerConfig {
             trusted_origins: Vec::new(),
             timezone: "Europe/Paris".into(),
             scheme: "https".into(),
+            sso: crate::sso::SsoConfig::default(),
         }
     }
 }
@@ -50,14 +53,25 @@ impl ServerConfig {
         }
         let c = ServerConfig::default();
         if !path.exists() {
-            if let Err(e) = strata_core::files::write_json(&path, &c, false) {
+            if let Err(e) = c.save(data_dir) {
                 tracing::warn!("cannot write {}: {e}", path.display());
             }
         }
         c
     }
 
+    /// Enregistre `config.json` (privé : il garde le secret du SSO).
+    pub fn save(&self, data_dir: &Path) -> std::io::Result<()> {
+        strata_core::files::write_json(&data_dir.join("config.json"), self, true)
+    }
+
+    /// L'adresse de retour à donner au fournisseur d'identité.
+    pub fn sso_redirect_uri(&self) -> String {
+        format!("{}://{}/api/auth/sso/callback", self.scheme, self.dns_name)
+    }
+
     fn normalized(mut self) -> Self {
+        self.sso.normalize();
         self.name = self.name.trim().to_string();
         self.dns_name = self.dns_name.trim().trim_end_matches('.').to_lowercase();
         if self.name.is_empty() {

@@ -44,5 +44,5 @@ async fn set(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(b): Jso
     })
     .await?
     .map_err(bad)?;
-    Ok(Json(user.public()))
+    Ok(Json(user.public(&s.groups)))
 }

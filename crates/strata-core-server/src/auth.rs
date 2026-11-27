@@ -62,6 +62,9 @@ pub struct User {
     /// « émetteur|sujet » d'un compte de l'annuaire (SSO).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub sso: String,
+    /// Compte de l'annuaire : son rôle d'administrateur est fixé à la main, l'annuaire n'y touche plus.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub admin_fixed: bool,
     /// Jamais envoyé au navigateur (voir `PublicUser`) ; vide : pas de connexion par mot de passe.
     #[serde(default)]
     password_hash: String,
@@ -75,8 +78,9 @@ impl User {
             &self.display_name
         }
     }
-    pub fn public(&self) -> PublicUser {
-        PublicUser::from(self)
+    /// Ce que l'API envoie de ce compte (les noms de ses groupes compris).
+    pub fn public(&self, groups: &crate::groups::Groups) -> PublicUser {
+        PublicUser::new(self, groups)
     }
 }
 
@@ -88,25 +92,51 @@ pub struct PublicUser {
     pub username: String,
     pub display_name: String,
     pub admin: bool,
+    /// Les identifiants de ses groupes.
     pub groups: Vec<String>,
+    /// Leurs noms.
+    pub group_names: Vec<String>,
     pub disabled: bool,
     pub lang: String,
     pub theme: String,
     pub sso: bool,
+    /// Son rôle d'administrateur est fixé à la main (l'annuaire n'y touche plus).
+    pub admin_fixed: bool,
 }
 
-impl From<&User> for PublicUser {
-    fn from(u: &User) -> Self {
+impl PublicUser {
+    pub fn new(u: &User, groups: &crate::groups::Groups) -> Self {
         PublicUser {
             id: u.id.clone(),
             username: u.username.clone(),
             display_name: u.name().to_string(),
             admin: u.admin,
             groups: u.groups.clone(),
+            group_names: groups.names_of(&u.groups),
             disabled: u.disabled,
             lang: u.lang.clone(),
             theme: u.theme.clone(),
             sso: !u.sso.is_empty(),
+            admin_fixed: u.admin_fixed,
+        }
+    }
+}
+
+impl User {
+    /// Un compte de l'annuaire (SSO) : pas de mot de passe.
+    pub fn from_directory(username: String, display_name: String, admin: bool, groups: Vec<String>, sso: String) -> User {
+        User {
+            id: strata_core::new_id(),
+            display_name: if display_name.trim().is_empty() { username.clone() } else { display_name.trim().to_string() },
+            username,
+            admin,
+            groups,
+            disabled: false,
+            lang: String::new(),
+            theme: String::new(),
+            sso,
+            admin_fixed: false,
+            password_hash: String::new(),
         }
     }
 }
@@ -302,6 +332,7 @@ impl Auth {
             lang: String::new(),
             theme: String::new(),
             sso: String::new(),
+            admin_fixed: false,
             password_hash: hash,
         };
         let u = user.clone();
@@ -445,7 +476,7 @@ pub fn session_cookie(token: &str, headers: &HeaderMap, domain: Option<&str>) ->
     HeaderValue::from_str(&format!("{COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age}{domain}{secure}")).expect("cookie")
 }
 
-fn host(headers: &HeaderMap) -> Option<&str> {
+pub fn host(headers: &HeaderMap) -> Option<&str> {
     headers.get("x-forwarded-host").or_else(|| headers.get("host")).and_then(|v| v.to_str().ok())
 }
 
@@ -482,10 +513,10 @@ pub fn routes() -> Router<Shared> {
 }
 
 /// Ouvre une session : `{user, token}` et le cookie.
-fn signed_in(s: &Shared, user: &User, headers: &HeaderMap) -> Response {
+pub fn signed_in(s: &Shared, user: &User, headers: &HeaderMap) -> Response {
     let token = s.auth.open_session(&user.id);
     let domain = s.config.load().cookie_domain(host(headers));
-    let mut res = Json(json!({"user": user.public(), "token": token})).into_response();
+    let mut res = Json(json!({"user": user.public(&s.groups), "token": token})).into_response();
     res.headers_mut().insert(header::SET_COOKIE, session_cookie(&token, headers, domain.as_deref()));
     res
 }
@@ -494,12 +525,12 @@ async fn state(State(s): State<Shared>, MaybeUser(user): MaybeUser) -> Json<serd
     let cfg = s.config.load();
     Json(json!({
         "needsSetup": s.auth.needs_setup(),
-        "user": user.as_ref().map(User::public),
+        "user": user.as_ref().map(|u| u.public(&s.groups)),
         "serverName": cfg.name,
         "timezone": cfg.timezone,
         "version": strata_core::VERSION,
-        // Le SSO arrivera avec la brique UTILISATEURS.
-        "sso": null,
+        "sso": cfg.sso.active().then(|| cfg.sso.button_name()),
+        "localAccounts": cfg.sso.local_accounts_now(),
     }))
 }
 
@@ -516,6 +547,14 @@ async fn login(State(s): State<Shared>, ConnectInfo(peer): ConnectInfo<SocketAdd
     let name = b.username.trim().to_string();
     if let Err(wait) = s.auth.logins.begin(ip, &name) {
         return Err((StatusCode::TOO_MANY_REQUESTS, format!("too many tries: wait {wait} s")));
+    }
+    // Un compte qui doit passer par l'annuaire : dit avant de regarder le mot de passe (la réponse ne
+    // dit jamais si un mot de passe était juste).
+    let sso = s.config.load().sso.clone();
+    if let Some(u) = s.auth.find_name(&name) {
+        if !sso.local_allowed(u.admin) && !guard::this_machine(peer, &headers) {
+            return Err((StatusCode::FORBIDDEN, format!("sign in with {}", sso.button_name())));
+        }
     }
     let user = s.auth.verify(&name, &b.password).await.filter(|u| !u.disabled);
     let Some(user) = user else {
