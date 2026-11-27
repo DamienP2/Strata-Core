@@ -28,5 +28,5 @@ perl -pi -e 's/"version": "[^"]*"/"version": "'"$V"'"/ if $. < 6' web/package.js
 perl -0pi -e 's/("name": "strata-core-web",\s*"version": ")[^"]+/${1}'"$V"'/g' web/package-lock.json
 # Crates Rust : la version du workspace, et celle de nos crates dans Cargo.lock (--locked).
 perl -pi -e 's/^version = "[^"]*"/version = "'"$V"'"/ if $. < 15' Cargo.toml
-perl -0pi -e 's/(name = "strata-(?:core|core-server|decklink|share|install)"\r?\nversion = ")[^"]+/${1}'"$V"'/g' Cargo.lock
+perl -0pi -e 's/(name = "strata-[a-z-]+"\r?\nversion = ")[^"]+/${1}'"$V"'/g' Cargo.lock
 echo "version : $V"
