@@ -24,7 +24,10 @@ Le Core ne contient **rien de métier** : pas de rendu graphique, pas d'enregist
 | Langage du serveur | **Rust** |
 | Plateforme | **Linux uniquement** |
 | Forme | un **crate Rust** + un **paquet web** (React / TypeScript), consommés par les applis |
-| Premier lot | **le design** |
+| Premier lot | **le design** — inventaire : [`docs/design/INVENTAIRE.md`](docs/design/INVENTAIRE.md) |
+| Architecture | **option A** : le Core est un service à part (`strata-core`) ; chaque appli est son propre service, installé et mis à jour par le Core, qui lui délègue la connexion |
+
+Une spec du design et des fonctions de base existe déjà, tirée de CG : `Strata-Network/docs/design.md`. Strata-Cut et Strata-Network ont été construits à partir d'elle. C'est la base de travail du Core.
 
 ## 3. Les six briques du Core
 
@@ -97,18 +100,14 @@ Tout le métier : le moteur de rendu, le designer et l'opérateur de CG ; l'enre
 
 ## 5. Questions ouvertes
 
-- **Comment les applis tournent à côté du Core** (la plus structurante, liée à la Bibliothèque) :
-  - *A.* Le Core est **un service à part** (`strata-core`) qui sert l'accueil, les comptes, le matériel, la santé et les mises à jour ; chaque appli est **son propre service**, installé et mis à jour par le Core, qui délègue la connexion au Core et utilise le crate et le paquet web pour le reste. Une appli qui plante n'emporte pas les autres.
-  - *B.* Le Core et les applis installées sont **compilés en un seul binaire** ; la Bibliothèque active ou désactive des modules.
-  - Recommandation : **A**, parce que la Bibliothèque et les mises à jour par appli supposent de pouvoir installer, arrêter et mettre à jour chaque appli séparément.
-- **Une seule adresse ou une par appli** : tout derrière le port du Core (`/graphics`, `/livecut`…) ou chaque appli sur son port ?
+- **Une seule adresse ou une par appli** : tout derrière le port du Core (`/graphics`, `/livecut`…) ou chaque appli sur son port ? (Cela joue aussi sur le thème et la langue d'une appli à l'autre : voir l'inventaire du design, § 6.)
 - **Attribution du matériel** : une carte DeckLink ou un flux 2110 peut-il être partagé entre deux applis, ou est-il réservé à une seule ?
 - **Migration** : comment reprendre les comptes, groupes et réglages des installations CG et LiveCut existantes.
 - **Versions** : comment une appli déclare la version du Core dont elle a besoin.
 
 ## 6. Prochaines étapes
 
-1. Renommer le dépôt `StrataCore` en `Strata-Core` (Damien, dans les réglages GitHub).
-2. Trancher la question A / B.
-3. **Premier lot : DESIGN.** Inventaire précis des jetons, composants et pages communs à CG et Cut ; choix de la version de référence de chacun ; plan du paquet web.
+1. ~~Renommer le dépôt en `Strata-Core`.~~ Fait.
+2. ~~Trancher l'architecture.~~ Option A.
+3. **Premier lot : DESIGN.** ~~Inventaire.~~ Fait ([`docs/design/INVENTAIRE.md`](docs/design/INVENTAIRE.md)). Puis : décisions de l'inventaire, maquette de la coquille commune, paquet `@strata/ui`.
 4. Puis, dans l'ordre à définir : UTILISATEURS, SERVEUR, SANTÉ, HARDWARE, BIBLIOTHÈQUE.
