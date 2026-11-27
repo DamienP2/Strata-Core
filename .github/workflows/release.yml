@@ -82,10 +82,17 @@ jobs:
           cmake --build build -j"$(nproc)"
           ls -l build/lib/libmxl.so*
 
+      - name: MTL et DPDK (ST 2110, embarqués dans l'archive du Core sous lib/mtl)
+        run: |
+          sudo apt-get install -y -q meson ninja-build python3-pyelftools libnuma-dev libjson-c-dev libpcap-dev libssl-dev libxdp-dev libbpf-dev systemtap-sdt-dev pkg-config
+          sudo scripts/build-mtl.sh /tmp/mtl-work /tmp/mtl-out
+          ls /tmp/mtl-out/lib/mtl
+
       - name: Serveur
         # Le pont DeckLink (C++) est exigé dans une release : sans lui, pas de cartes SDI.
         env:
           STRATA_DECKLINK_REQUIRED: '1'
+          STRATA_MTL_REQUIRED: '1'
         run: cargo build --release --locked -p strata-core-server
 
       - name: Archive du serveur
@@ -96,6 +103,7 @@ jobs:
           mkdir -p "build/$NAME/lib"
           cp -P /tmp/mxl/build/lib/libmxl.so* "build/$NAME/lib/"
           cp /tmp/mxl/LICENSE.txt "build/$NAME/lib/LICENSE-MXL.txt"
+          cp -a /tmp/mtl-out/lib/mtl "build/$NAME/lib/mtl"
           cp README.md "build/$NAME/"
           cp packages/ui/src/styles/fonts/OFL.txt "build/$NAME/OFL-Inter.txt"
           "build/$NAME/strata-core" --version

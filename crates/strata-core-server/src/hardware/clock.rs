@@ -196,7 +196,7 @@ fn system_root() -> (PathBuf, bool) {
 }
 
 /// Lance une commande (15 s au plus) : None si elle réussit, sinon pourquoi.
-fn run(program: &str, args: &[&str]) -> Option<String> {
+pub(crate) fn run(program: &str, args: &[&str]) -> Option<String> {
     let child = Command::new(program).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn();
     let mut child = match child {
         Ok(c) => c,

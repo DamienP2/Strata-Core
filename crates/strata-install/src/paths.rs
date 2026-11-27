@@ -13,6 +13,8 @@ pub const DATA: &str = "/var/lib/strata-core";
 pub const USER: &str = "strata";
 pub const UNIT: &str = "/etc/systemd/system/strata-core.service";
 pub const PTP_UNIT: &str = "/etc/systemd/system/strata-ptp4l.service";
+/// Hugepages et ports DPDK pour le ST 2110 (en root, relancé par le Core).
+pub const MEDIA_UNIT: &str = "/etc/systemd/system/strata-media.service";
 /// Le compte du service relance chrony et ptp4l (Matériel › Horloge).
 pub const POLKIT: &str = "/etc/polkit-1/rules.d/50-strata-core.rules";
 /// Les réglages que le Core écrit pour le système.

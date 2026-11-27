@@ -29,6 +29,14 @@ enum Cmd {
     Config(cli::ConfigArgs),
     /// Le service ptp4l de Strata (posé par l'installateur).
     Ptp4lUnit,
+    /// Le service strata-media (posé par l'installateur).
+    MediaUnit,
+    /// Hugepages et ports DPDK pour le ST 2110 (lancé en root par strata-media.service).
+    MediaSetup {
+        /// Le compte du service, à qui donner les ports DPDK.
+        #[arg(long, default_value = "strata")]
+        user: String,
+    },
 }
 
 #[derive(Args, Default)]
@@ -55,6 +63,11 @@ fn main() -> anyhow::Result<()> {
             print!("{}", strata_core_server::hardware::clock::PTP4L_UNIT);
             Ok(())
         }
+        Some(Cmd::MediaUnit) => {
+            print!("{}", strata_core_server::hardware::media::UNIT);
+            Ok(())
+        }
+        Some(Cmd::MediaSetup { user }) => strata_core_server::hardware::media::setup(&user).map_err(|e| anyhow::anyhow!(e)),
         Some(Cmd::Run(r)) => run(r),
         None => run(cli.run),
     }

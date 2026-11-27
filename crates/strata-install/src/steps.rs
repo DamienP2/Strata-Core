@@ -303,9 +303,11 @@ fn core_unit() -> String {
          ExecStart={bin} run --bind 0.0.0.0:{port} --data-dir {data}\n\
          Restart=always\n\
          RestartSec=2\n\
-         # Les ports 80 et 443 (cockpit), 161 (SNMP).\n\
-         AmbientCapabilities=CAP_NET_BIND_SERVICE\n\
-         CapabilityBoundingSet=CAP_NET_BIND_SERVICE\n\
+         # Les ports 80 et 443 (cockpit), 161 (SNMP) ; le ST 2110 par MTL : sockets brutes et\n\
+         # AF_XDP (NET_RAW, NET_ADMIN, BPF), mémoire verrouillée (IPC_LOCK), priorités (SYS_NICE).\n\
+         AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_NET_ADMIN CAP_BPF CAP_IPC_LOCK CAP_SYS_NICE\n\
+         CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_NET_ADMIN CAP_BPF CAP_IPC_LOCK CAP_SYS_NICE\n\
+         LimitMEMLOCK=infinity\n\
          # SIGTERM au Core, qui arrête ses applis ; SIGKILL au reste après le délai.\n\
          KillMode=mixed\n\
          TimeoutStopSec=20\n\
@@ -320,11 +322,12 @@ fn core_unit() -> String {
     )
 }
 
-const POLKIT_RULE: &str = "// Strata Core : le compte du service relance chrony et ptp4l (Réglages › Matériel › Horloge).\n\
+const POLKIT_RULE: &str = "// Strata Core : le compte du service relance chrony et ptp4l (Matériel › Horloge), et\n\
+// strata-media (hugepages et ports DPDK du ST 2110, Matériel › Réseau).\n\
 polkit.addRule(function (action, subject) {\n\
   if (action.id == \"org.freedesktop.systemd1.manage-units\" && subject.user == \"strata\") {\n\
     var unit = action.lookup(\"unit\");\n\
-    if (unit == \"chrony.service\" || unit == \"strata-ptp4l.service\") return polkit.Result.YES;\n\
+    if (unit == \"chrony.service\" || unit == \"strata-ptp4l.service\" || unit == \"strata-media.service\") return polkit.Result.YES;\n\
   }\n\
 });\n";
 
@@ -429,6 +432,12 @@ fn system_files(ctx: &Ctx) -> Result<String, String> {
         ctx.write(paths::PTP_UNIT, &ptp, 0o644)?;
     }
     ctx.write(paths::POLKIT, POLKIT_RULE, 0o644)?;
+    // Un Core plus ancien n'a pas ce service.
+    let media = ctx.core_plain(&["media-unit"]).unwrap_or_default();
+    if !media.trim().is_empty() {
+        ctx.write(paths::MEDIA_UNIT, &media, 0o644)?;
+        let _ = ctx.run("systemctl", &["enable", "strata-media"]);
+    }
     // Le Core réécrit ce fichier ; il doit le pouvoir.
     if !ctx.p(paths::CHRONY).exists() {
         ctx.write(paths::CHRONY, "# Strata Core : réglé dans Réglages › Matériel › Horloge.\n", 0o644)?;
@@ -437,7 +446,7 @@ fn system_files(ctx: &Ctx) -> Result<String, String> {
     ctx.write(paths::SYSCTL, SYSCTL_CONF, 0o644)?;
     let _ = ctx.run("sysctl", &["-q", "-p", &ctx.p(paths::SYSCTL).display().to_string()]);
     ctx.run("systemctl", &["daemon-reload"])?;
-    Ok("service, ptp4l, polkit, tampons réseau".into())
+    Ok("service, ptp4l, ST 2110, polkit, tampons réseau".into())
 }
 
 /// Le pilote Blackmagic : son paquet sorti de l'archive, installé avec DKMS.
@@ -752,10 +761,16 @@ pub fn steps(plan: &Plan) -> Vec<Step> {
             v.push(step("Arrêt du service", false, |ctx, _| {
                 let _ = ctx.run("systemctl", &["disable", "--now", "strata-core"]);
                 let _ = ctx.run("systemctl", &["disable", "--now", "strata-ptp4l"]);
+                // Les ports DPDK rendus au noyau, les hugepages rendues.
+                if ctx.p(paths::MEDIA_UNIT).exists() {
+                    let _ = ctx.write("/etc/strata/media.json", "{\"hugepages\": 0, \"dpdk\": []}\n", 0o644);
+                    let _ = ctx.run(paths::BIN, &["media-setup"]);
+                    let _ = ctx.run("systemctl", &["disable", "strata-media"]);
+                }
                 Ok("arrêté".into())
             }));
             v.push(step("Fichiers du système", false, |ctx, _| {
-                for f in [paths::UNIT, paths::PTP_UNIT, paths::POLKIT, paths::LINK, paths::CHRONY, paths::SYSCTL] {
+                for f in [paths::UNIT, paths::PTP_UNIT, paths::MEDIA_UNIT, paths::POLKIT, paths::LINK, paths::CHRONY, paths::SYSCTL] {
                     let _ = std::fs::remove_file(ctx.p(f));
                 }
                 let _ = std::fs::remove_dir_all(ctx.p(paths::ETC));

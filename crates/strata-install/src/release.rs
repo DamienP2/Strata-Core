@@ -114,8 +114,8 @@ pub fn extract_core(archive: &Path, to: &Path) -> Result<(), String> {
     Err("this archive holds no strata-core".into())
 }
 
-/// Sort les bibliothèques embarquées avec le Core (`lib/libmxl.so*` : MXL) dans `dir`. Rend
-/// combien.
+/// Sort les bibliothèques embarquées avec le Core (`lib/` de l'archive : MXL, et MTL avec DPDK
+/// sous `lib/mtl/`) dans `dir`, liens compris. Rend combien.
 pub fn extract_libs(archive: &Path, dir: &Path) -> Result<usize, String> {
     let f = std::fs::File::open(archive).map_err(|e| format!("cannot open {}: {e}", archive.display()))?;
     let mut ar = tar::Archive::new(flate2::read::GzDecoder::new(f));
@@ -123,15 +123,29 @@ pub fn extract_libs(archive: &Path, dir: &Path) -> Result<usize, String> {
     for e in ar.entries().map_err(|_| "not a .tar.gz archive".to_string())? {
         let mut e = e.map_err(|_| "the archive is damaged".to_string())?;
         let p = e.path().map_err(|e| e.to_string())?.to_path_buf();
-        let in_lib = p.parent().and_then(|d| d.file_name()).is_some_and(|d| d == "lib");
-        let Some(name) = p.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
-        if in_lib && (name.starts_with("libmxl") || name.starts_with("LICENSE")) {
-            std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-            let to = dir.join(&name);
-            let _ = std::fs::remove_file(&to);
-            e.unpack(&to).map_err(|e| format!("cannot write {}: {e}", to.display()))?;
-            n += 1;
+        // `strata-core-x.y.z-linux-x86_64/lib/<chemin>` : MXL, et MTL avec DPDK sous `mtl/`.
+        let mut parts = p.components();
+        parts.next();
+        if parts.next().map(|c| c.as_os_str()) != Some(std::ffi::OsStr::new("lib")) {
+            continue;
         }
+        let rest: std::path::PathBuf = parts.collect();
+        if rest.as_os_str().is_empty() || rest.components().any(|c| !matches!(c, std::path::Component::Normal(_))) {
+            continue;
+        }
+        let to = dir.join(&rest);
+        if e.header().entry_type().is_dir() {
+            std::fs::create_dir_all(&to).map_err(|e| format!("cannot create {}: {e}", to.display()))?;
+            continue;
+        }
+        let parent = to.parent().unwrap_or(dir);
+        std::fs::create_dir_all(parent).map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+        // Posé à côté puis renommé : un Core qui tourne garde l'ancienne en mémoire.
+        let tmp = parent.join(format!(".{}.new", to.file_name().unwrap_or_default().to_string_lossy()));
+        let _ = std::fs::remove_file(&tmp);
+        e.unpack(&tmp).map_err(|e| format!("cannot write {}: {e}", to.display()))?;
+        std::fs::rename(&tmp, &to).map_err(|e| format!("cannot write {}: {e}", to.display()))?;
+        n += 1;
     }
     Ok(n)
 }
@@ -154,6 +168,28 @@ mod tests {
         assert!(std::fs::read_to_string(dir.join("bin")).unwrap().contains("9.9.9"));
         assert_eq!(sha256_file(&dir.join("bin")).unwrap().len(), 64);
         assert!(extract_core(&dir.join("bin"), &dir.join("x")).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn takes_the_libraries_with_their_folders_and_links() {
+        let dir = std::env::temp_dir().join(format!("strata-install-libs-{}", std::process::id()));
+        let top = dir.join("pkg/strata-core-9.9.9-linux-x86_64");
+        std::fs::create_dir_all(top.join("lib/mtl/dpdk/pmds-26.2")).unwrap();
+        std::fs::write(top.join("strata-core"), b"x").unwrap();
+        std::fs::write(top.join("lib/libmxl.so.1.2.0"), b"mxl").unwrap();
+        std::os::unix::fs::symlink("libmxl.so.1.2.0", top.join("lib/libmxl.so")).unwrap();
+        std::fs::write(top.join("lib/mtl/dpdk/pmds-26.2/librte_net_ice.so"), b"ice").unwrap();
+        let status = std::process::Command::new("tar")
+            .args(["-C", dir.join("pkg").to_str().unwrap(), "-czf", dir.join("core.tar.gz").to_str().unwrap(), "strata-core-9.9.9-linux-x86_64"])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let out = dir.join("out");
+        assert_eq!(extract_libs(&dir.join("core.tar.gz"), &out).unwrap(), 3);
+        assert_eq!(std::fs::read_link(out.join("libmxl.so")).unwrap(), std::path::PathBuf::from("libmxl.so.1.2.0"));
+        assert_eq!(std::fs::read(out.join("mtl/dpdk/pmds-26.2/librte_net_ice.so")).unwrap(), b"ice");
+        assert!(!out.join("strata-core").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

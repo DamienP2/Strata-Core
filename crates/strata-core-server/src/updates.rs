@@ -297,7 +297,7 @@ pub fn replace_binary(exe: &Path, archive: &Path, expected: Option<&Version>) ->
     let previous = dir.join(format!("{name}.previous"));
     std::fs::copy(exe, &previous).map_err(|e| format!("cannot keep the current Core: {e}"))?;
     std::fs::rename(&new.0, exe).map_err(|e| format!("cannot replace {}: {e}", exe.display()))?;
-    // Les bibliothèques livrées avec lui (MXL), à côté : `<bin>/../lib`.
+    // Les bibliothèques livrées avec lui (MXL, MTL), à côté : `<bin>/../lib`.
     match put_libs(archive, &dir.join("../lib")) {
         Ok(n) if n > 0 => tracing::info!("{n} library files put in {}", dir.join("../lib").display()),
         Ok(_) => {}
@@ -307,25 +307,37 @@ pub fn replace_binary(exe: &Path, archive: &Path, expected: Option<&Version>) ->
     Ok(version)
 }
 
-/// Sort `lib/libmxl.so*` de l'archive du Core dans `dir`.
+/// Sort `lib/` de l'archive du Core (MXL ; MTL et DPDK sous `mtl/`) dans `dir`.
 fn put_libs(archive: &Path, dir: &Path) -> Result<usize, String> {
     let f = std::fs::File::open(archive).map_err(|e| e.to_string())?;
     let mut ar = tar::Archive::new(flate2::read::GzDecoder::new(std::io::BufReader::new(f)));
     let mut n = 0;
-    for e in ar.entries().map_err(|e| e.to_string())? {
-        let mut e = e.map_err(|e| e.to_string())?;
+    for e in ar.entries().map_err(|_| "not a .tar.gz archive".to_string())? {
+        let mut e = e.map_err(|_| "the archive is damaged".to_string())?;
         let p = e.path().map_err(|e| e.to_string())?.to_path_buf();
-        let in_lib = p.parent().and_then(|d| d.file_name()).is_some_and(|d| d == "lib");
-        let Some(name) = p.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
-        if in_lib && (name.starts_with("libmxl") || name.starts_with("LICENSE")) {
-            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-            let to = dir.join(&name);
-            let tmp = dir.join(format!(".{name}.new"));
-            let _ = std::fs::remove_file(&tmp);
-            e.unpack(&tmp).map_err(|e| e.to_string())?;
-            std::fs::rename(&tmp, &to).map_err(|e| e.to_string())?;
-            n += 1;
+        // `strata-core-x.y.z-linux-x86_64/lib/<chemin>` : MXL, et MTL avec DPDK sous `mtl/`.
+        let mut parts = p.components();
+        parts.next();
+        if parts.next().map(|c| c.as_os_str()) != Some(std::ffi::OsStr::new("lib")) {
+            continue;
         }
+        let rest: std::path::PathBuf = parts.collect();
+        if rest.as_os_str().is_empty() || rest.components().any(|c| !matches!(c, std::path::Component::Normal(_))) {
+            continue;
+        }
+        let to = dir.join(&rest);
+        if e.header().entry_type().is_dir() {
+            std::fs::create_dir_all(&to).map_err(|e| format!("cannot create {}: {e}", to.display()))?;
+            continue;
+        }
+        let parent = to.parent().unwrap_or(dir);
+        std::fs::create_dir_all(parent).map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+        // Posé à côté puis renommé : un Core qui tourne garde l'ancienne en mémoire.
+        let tmp = parent.join(format!(".{}.new", to.file_name().unwrap_or_default().to_string_lossy()));
+        let _ = std::fs::remove_file(&tmp);
+        e.unpack(&tmp).map_err(|e| format!("cannot write {}: {e}", to.display()))?;
+        std::fs::rename(&tmp, &to).map_err(|e| format!("cannot write {}: {e}", to.display()))?;
+        n += 1;
     }
     Ok(n)
 }

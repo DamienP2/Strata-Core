@@ -97,7 +97,8 @@ fn port_of(io: MediaIo, iface: &str, address: &str) -> Result<(String, Pmd, Ipv4
     let nic = net::nics().into_iter().find(|n| n.name == iface);
     match io {
         MediaIo::Dpdk => {
-            let pci = nic.as_ref().and_then(|n| n.pci.clone().map(|p| format!("{p}.{}", n.port.unwrap_or(0)))).ok_or(format!("{iface}: its PCI address is unknown"))?;
+            // Déjà en DPDK, le noyau ne le voit plus : son adresse PCI est gardée.
+            let pci = super::media::pci_of(iface, &super::media::read_wanted()).ok_or(format!("{iface}: its PCI address is unknown"))?;
             let (ip, mask) = cidr(address).ok_or(format!("{iface}: give its address (10.10.1.21/24), the kernel no longer sees it in DPDK"))?;
             Ok((pci, Pmd::Dpdk, ip, mask))
         }
@@ -153,6 +154,8 @@ fn plan(cfg: &HardwareConfig) -> Result<Option<Plan>, String> {
 impl Engine {
     /// Tient MTL en accord avec les réglages (bloquant ; rouvre tout quand ils changent).
     pub fn apply(&self, cfg: &HardwareConfig, mtl_loaded: Result<(), String>, mxl: Option<Arc<Mxl>>) {
+        // Les hugepages et les ports DPDK d'abord (et rendus quand on n'en veut plus).
+        let system = super::media::prepare(cfg);
         let want = match (plan(cfg), mtl_loaded, &mxl) {
             (Ok(None), _, _) => None,
             (Err(e), _, _) => {
@@ -169,6 +172,10 @@ impl Engine {
             }
             (Ok(Some(p)), Ok(()), Some(_)) => Some(p),
         };
+        if let (Some(_), Err(e)) = (&want, &system) {
+            self.stop(Some(e.clone()));
+            return;
+        }
         let mut run = self.running.lock().unwrap();
         if run.as_ref().map(|r| &r.plan) == want.as_ref() {
             return;
@@ -258,12 +265,15 @@ fn legs(f: &FlowPlan) -> Vec<Leg> {
     f.legs.iter().map(|(port, ip, udp)| Leg { port: *port, ip: *ip, udp: *udp }).collect()
 }
 
+/// Change l'état d'un flux.
+type Setter<'a> = &'a dyn Fn(&dyn Fn(&mut IoStatus));
+
 fn mxl_video(v: &strata_mtl::Video) -> strata_mxl::Video {
     strata_mxl::Video { width: v.width, height: v.height, rate: v.rate, interlaced: v.interlaced }
 }
 
 /// Reçu : MTL → flux MXL `2110/<flux>`.
-fn receive(f: &FlowPlan, mtl: &Mtl, mxl: &Mxl, stop: &AtomicBool, set: &dyn Fn(&dyn Fn(&mut IoStatus))) -> Result<(), String> {
+fn receive(f: &FlowPlan, mtl: &Mtl, mxl: &Mxl, stop: &AtomicBool, set: Setter) -> Result<(), String> {
     let rx = mtl.rx(&f.name, &legs(f), f.payload_type, &f.video)?;
     let id = strata_mxl::flow_id(&format!("2110/{}", f.id));
     let mut w = mxl.video_writer(id, &f.name, &mxl_video(&f.video))?;
@@ -301,7 +311,7 @@ fn receive(f: &FlowPlan, mtl: &Mtl, mxl: &Mxl, stop: &AtomicBool, set: &dyn Fn(&
 }
 
 /// Envoyé : flux MXL `2110/<flux>` (écrit par l'appli) → MTL ; du noir quand rien n'arrive.
-fn send(f: &FlowPlan, mtl: &Mtl, mxl: &Mxl, stop: &AtomicBool, set: &dyn Fn(&dyn Fn(&mut IoStatus))) -> Result<(), String> {
+fn send(f: &FlowPlan, mtl: &Mtl, mxl: &Mxl, stop: &AtomicBool, set: Setter) -> Result<(), String> {
     let tx = mtl.tx(&f.name, &legs(f), f.payload_type, &f.video)?;
     let id = strata_mxl::flow_id(&format!("2110/{}", f.id));
     let v = f.video;
@@ -353,7 +363,7 @@ fn send(f: &FlowPlan, mtl: &Mtl, mxl: &Mxl, stop: &AtomicBool, set: &dyn Fn(&dyn
         if v.interlaced {
             second = !second;
         }
-        if frames % 25 == 0 {
+        if frames.is_multiple_of(25) {
             let on = frame.is_some();
             set(&|s| {
                 s.state = if on { IoState::Running } else { IoState::Idle };

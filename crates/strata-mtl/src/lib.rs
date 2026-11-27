@@ -92,6 +92,7 @@ mod ffi {
     }
 }
 
+#[cfg(not(mtl_shim))]
 const NOT_BUILT: &str = "this Core was built without the MTL bridge";
 
 /// Où chercher la bibliothèque : `STRATA_MTL_LIB`, celle livrée avec le Core, puis le système.
@@ -100,6 +101,7 @@ pub fn library_paths() -> Vec<PathBuf> {
     if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.join("../lib/mtl/libmtl.so"))) {
         v.push(dir);
     }
+    // Livrée avec le Core (scripts/build-mtl.sh) : DPDK y cherche aussi ses pilotes.
     v.extend(["/opt/strata/lib/mtl/libmtl.so", "/usr/local/lib/x86_64-linux-gnu/libmtl.so", "/usr/local/lib/libmtl.so", "libmtl.so"].map(PathBuf::from));
     v
 }

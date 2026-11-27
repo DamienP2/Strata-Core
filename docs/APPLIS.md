@@ -180,13 +180,19 @@ Linux Foundation) : des flux en mémoire partagée, sur le serveur, sans passer 
 
 - **Le domaine** : `mxl.domain` dans `/api/hardware/shared` (en général `/dev/shm/mxl`). `mxl`
   vaut `null` quand MXL n'est pas installé : le Core retombe alors sur `strata-share` (plus bas).
-- **Les entrées** (SDI captées par le Core, et bientôt ST 2110 reçues) : un flux par entrée, son
-  identifiant dans `mxlFlow` du connecteur (`sdi`). L'appli le **lit**.
+- **Les entrées** (SDI captées par le Core, ST 2110 reçues par le Core) : un flux par entrée, son
+  identifiant dans `mxlFlow` du connecteur (`sdi`) ou du flux (`flows`). L'appli le **lit**.
 - **Les sorties** (SDI, flux ST 2110 envoyés) : `mxlFlow` du connecteur réglé en sortie, ou du flux
   ST 2110 sortant. L'appli **écrit** ce flux (son `label` est le nom montré dans les réglages) ; le
   Core l'envoie (SDI en 10 bits, calé sur la référence de la carte ; du noir quand rien n'arrive)
   et l'aperçu des réglages le montre. **Avec MXL, une appli n'ouvre jamais une sortie DeckLink
   elle-même.** Exemple : `crates/strata-mxl/examples/send.rs`.
+- **ST 2110** : quand *Réglages › Matériel › Réseau* confie les flux au Core (noyau, AF_XDP ou
+  DPDK, avec Intel Media Transport Library), le Core reçoit les flux entrants (2022-7 compris) et
+  envoie les sortants (cadencés ST 2110-21, du noir quand l'appli n'écrit pas) : l'appli ne
+  touche jamais le réseau, elle lit et écrit `mxlFlow` du flux comme pour le SDI. `io` de
+  `/api/hardware/flows` dit ce qui passe (paquets reçus, perdus). Réglé sur « Non », les applis
+  reçoivent et envoient elles-mêmes, comme avant.
 - Une appli peut aussi lire le flux qu'une autre écrit (Multiview qui montre le programme de
   LiveCut), sans rien demander au Core.
 - **Format** : vidéo v210 (YCbCr 4:2:2 10 bits, BT.709), un grain par image ; en entrelacé, un grain

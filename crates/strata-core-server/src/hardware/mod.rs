@@ -22,6 +22,7 @@ pub mod capture;
 pub mod clock;
 pub mod decklink;
 pub mod gpu;
+pub mod media;
 pub mod ndi;
 pub mod net;
 pub mod playout;

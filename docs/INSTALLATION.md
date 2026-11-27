@@ -41,8 +41,31 @@ Journal complet : `/var/log/strata-install.log`.
 | `strata-core.service` | le service, sous le compte `strata` (groupes `video` et `render` : cartes et GPU), port 80 (et 443, 161) |
 | `strata-ptp4l.service` | ptp4l, démarré seulement si le PTP est réglé (Matériel › Horloge) |
 | `/etc/strata/`, `/etc/chrony/conf.d/strata.conf` | ce que le Core écrit pour l'heure |
-| `/etc/polkit-1/rules.d/50-strata-core.rules` | le compte `strata` peut relancer chrony et ptp4l, rien d'autre |
+| `/opt/strata/lib` | MXL (`libmxl.so`), et sous `mtl/` Intel Media Transport Library avec DPDK (ST 2110) |
+| `strata-media.service` | en root, au démarrage et quand le Core le demande : réserve les hugepages et passe les ports média en DPDK (`/etc/strata/media.json`), seulement si le Core tient le ST 2110 |
+| `/etc/polkit-1/rules.d/50-strata-core.rules` | le compte `strata` peut relancer chrony, ptp4l et strata-media, rien d'autre |
 | `/etc/sysctl.d/60-strata.conf` | des tampons réseau larges (flux UDP) |
+
+Le service du Core a aussi les droits du ST 2110 par MTL : sockets brutes et AF_XDP
+(`CAP_NET_RAW`, `CAP_NET_ADMIN`, `CAP_BPF`), mémoire verrouillée (`CAP_IPC_LOCK`,
+`LimitMEMLOCK=infinity`), priorités (`CAP_SYS_NICE`). Un serveur mis à jour depuis le cockpit les
+reçoit en relançant l'installateur (*Mettre à jour* ou *Réparer*).
+
+## ST 2110 avec une Intel E810
+
+*Réglages › Matériel › Réseau*, « Flux reçus et envoyés par le Core » :
+
+- **Noyau** : rien à préparer. Pour quelques flux HD.
+- **AF_XDP** : rien à préparer non plus, bien plus rapide ; le port reste au noyau (son adresse
+  aussi).
+- **DPDK** : le plus rapide (UHD, nombreux flux). Les ports média quittent le noyau : donnez leur
+  adresse dans la page. Il faut l'IOMMU : ajoutez `intel_iommu=on iommu=pt` à
+  `GRUB_CMDLINE_LINUX` dans `/etc/default/grub`, puis `sudo update-grub` et redémarrez. Le port qui
+  porte la route par défaut (l'administration) n'est jamais passé en DPDK.
+
+Le Core réserve lui-même les hugepages (2 Go, plus 512 Mo par flux HD et 2 Go par flux UHD, au
+plus la moitié de la mémoire) et les rend quand on repasse à « Non ». Si la mémoire est trop
+morcelée pour les réserver, redémarrez le serveur.
 
 ## Relancé sur un serveur installé
 
