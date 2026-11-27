@@ -168,7 +168,9 @@ void *smtl_open(const smtl_port *ports, int n, uint32_t tai_offset, const char *
     }
     p.num_ports = (uint8_t)n;
     s->num_ports = n;
-    p.flags = MTL_FLAG_DEV_AUTO_START_STOP | MTL_FLAG_BIND_NUMA;
+    // Ses fils dorment quand ils n'ont rien à faire, au lieu de tourner à vide (un cœur pris en
+    // permanence) ; sous charge (de la vidéo à plein débit), ils ne s'arrêtent pas.
+    p.flags = MTL_FLAG_DEV_AUTO_START_STOP | MTL_FLAG_BIND_NUMA | MTL_FLAG_TASKLET_SLEEP;
     p.log_level = MTL_LOG_LEVEL_ERR;
     p.ptp_get_time_fn = system_tai;
     p.lcores = (char *)lcores;
