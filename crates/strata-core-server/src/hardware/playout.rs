@@ -131,20 +131,23 @@ impl Playouts {
                     stopped.push(run.remove(&k).unwrap());
                 }
             }
-            for w in wanted {
-                let key = (w.card.clone(), w.connector);
-                if run.contains_key(&key) {
-                    continue;
-                }
-                if let Some(m) = &mxl {
-                    tracing::info!("playing out SDI {} of card {}{}", w.connector, w.card, if w.device.is_none() { " (simulated)" } else { "" });
-                    run.insert(key, start(w, m.clone()));
-                }
-            }
         }
+        // D'abord fermées (hors du verrou) : une sortie changée (genlock, cadence) libère la carte
+        // avant d'être rouverte.
         for r in stopped {
             tracing::info!("no longer playing out SDI {} of card {}", r.wanted.connector, r.wanted.card);
             r.halt();
+        }
+        let mut run = self.running.lock().unwrap();
+        for w in wanted {
+            let key = (w.card.clone(), w.connector);
+            if run.contains_key(&key) {
+                continue;
+            }
+            if let Some(m) = &mxl {
+                tracing::info!("playing out SDI {} of card {}{}", w.connector, w.card, if w.device.is_none() { " (simulated)" } else { "" });
+                run.insert(key, start(w, m.clone()));
+            }
         }
     }
 
@@ -194,22 +197,17 @@ fn start(w: WantedOut, mxl: Arc<Mxl>) -> Running {
 
 fn run(w: &WantedOut, mxl: &Mxl, stop: &AtomicBool, status: &Mutex<OutStatus>) {
     let id = strata_mxl::flow_id(&format!("sdi-out/{}/{}", w.card, w.connector));
-    let mut reader: Option<strata_mxl::VideoReader> = None;
+    let mut follow = strata_mxl::Follow::new(id);
     let mut out: Option<(decklink_out::Out, Video)> = None;
     let mut last_new = Instant::now() - Duration::from_secs(10);
     let mut black_frame: Option<(Video, Vec<u8>)> = None;
     let mut woven: Vec<u8> = Vec::new();
     let set = |f: &dyn Fn(&mut OutStatus)| f(&mut status.lock().unwrap());
     while !stop.load(Ordering::Relaxed) {
-        // Le flux de l'appli : ouvert quand il apparaît, fermé quand il disparaît.
-        if mxl.is_active(id) {
-            if reader.is_none() {
-                reader = mxl.video_reader(id).ok();
-            }
-        } else {
-            reader = None;
-        }
-        let video = reader.as_ref().map_or(w.idle, |r| r.video);
+        // Le flux de l'appli : ouvert quand il apparaît, fermé quand il disparaît, rouvert quand
+        // l'appli le recrée à un autre format.
+        let reader = follow.reader(mxl);
+        let video = reader.map_or(w.idle, |r| r.video);
         // La sortie, au format du flux (rouverte s'il change).
         if out.as_ref().is_none_or(|(_, v)| *v != video) {
             out = None;
@@ -238,7 +236,7 @@ fn run(w: &WantedOut, mxl: &Mxl, stop: &AtomicBool, status: &Mutex<OutStatus>) {
         let stride = strata_mxl::v210_stride(v.width);
         // Progressif : poussé à la carte droit depuis MXL ; entrelacé : les deux trames remises
         // ensemble dans un tampon réutilisé (pas d'allocation à chaque image).
-        let got = reader.as_ref().is_some_and(|r| {
+        let got = follow.reader(mxl).is_some_and(|r| {
             if r.video.interlaced {
                 r.latest_into(period * 3, &mut woven) && {
                     o.push(&woven, stride);

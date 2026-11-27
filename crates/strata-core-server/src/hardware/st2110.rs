@@ -180,6 +180,10 @@ impl Canvas {
         self.lines[field] = self.lines[field].max(line as u32 + 1);
         let row = &mut self.fields[field][line * STRIDE..(line + 1) * STRIDE];
         let mut x = offset * 2;
+        // Un paquet au-delà de la ligne (malformé, ou un autre émetteur plus large) : ignoré.
+        if x >= STRIDE {
+            return;
+        }
         if self.eight_bits {
             let n = data.len().min(STRIDE.saturating_sub(x));
             row[x..x + n].copy_from_slice(&data[..n]);

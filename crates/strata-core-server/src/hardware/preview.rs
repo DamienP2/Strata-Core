@@ -61,7 +61,8 @@ impl Previews {
             let mut map = self.entries.lock().unwrap();
             map.entry(key.to_string()).or_insert_with(|| Arc::new(Mutex::new(Entry { asked: Instant::now(), made: None, feed: make() }))).clone()
         };
-        let mut e = entry.lock().unwrap();
+        // Une panique d'une requête précédente n'empêche pas les suivantes.
+        let mut e = entry.lock().unwrap_or_else(|p| p.into_inner());
         e.asked = Instant::now();
         if let Some((at, jpeg)) = &e.made {
             if at.elapsed() < EVERY {
@@ -97,7 +98,7 @@ impl Previews {
     /// L'état de la réception d'un flux entrant, s'il est regardé.
     pub fn flow_status(&self, key: &str) -> Option<st2110::Status> {
         let e = self.entries.lock().unwrap().get(key).cloned()?;
-        let e = e.lock().unwrap();
+        let e = e.lock().unwrap_or_else(|p| p.into_inner());
         match &e.feed {
             Feed::Flow(rx) => Some(rx.status()),
             Feed::Share { .. } | Feed::Mxl { .. } => None,
@@ -108,7 +109,15 @@ impl Previews {
     pub fn sweep(&self) {
         let idle: Vec<Arc<Mutex<Entry>>> = {
             let mut map = self.entries.lock().unwrap();
-            let keys: Vec<String> = map.iter().filter(|(_, e)| e.try_lock().is_ok_and(|e| e.asked.elapsed() > IDLE)).map(|(k, _)| k.clone()).collect();
+            let keys: Vec<String> = map
+                .iter()
+                .filter(|(_, e)| match e.try_lock() {
+                    Ok(e) => e.asked.elapsed() > IDLE,
+                    Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner().asked.elapsed() > IDLE,
+                    Err(std::sync::TryLockError::WouldBlock) => false,
+                })
+                .map(|(k, _)| k.clone())
+                .collect();
             keys.iter().filter_map(|k| map.remove(k)).collect()
         };
         // Hors du verrou : arrêter une réception attend la fin de son fil.
@@ -123,14 +132,18 @@ impl Previews {
 
 /// L'image la plus récente d'un flux MXL (écrite dans les 2 dernières secondes).
 fn from_mxl(mxl: &strata_mxl::Mxl, id: strata_mxl::Uuid, reader: &mut Option<strata_mxl::VideoReader>) -> Result<Option<Vec<u8>>, String> {
-    if reader.is_none() || !mxl.is_active(id) {
+    if !mxl.is_active(id) {
         *reader = None;
-        if !mxl.is_active(id) {
-            return Err("nothing is published here".into());
-        }
+        return Err("nothing is published here".into());
+    }
+    // Recréé à un autre format : rouvert (l'ancien lecteur ne verrait plus rien).
+    if reader.as_ref().is_some_and(|r| mxl.video_of(id) != Some(r.video)) {
+        *reader = None;
+    }
+    if reader.is_none() {
         *reader = Some(mxl.video_reader(id)?);
     }
-    let r = reader.as_ref().unwrap();
+    let Some(r) = reader.as_ref() else { return Ok(None) };
     let Some(v210) = r.latest(Duration::from_secs(2)) else { return Ok(None) };
     let (w, h) = (r.video.width as usize, r.video.height as usize);
     let stride = strata_mxl::v210_stride(r.video.width);

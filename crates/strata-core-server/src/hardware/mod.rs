@@ -542,7 +542,19 @@ pub fn routes() -> Router<Shared> {
 }
 
 /// Tient les captures en accord avec les réglages et les cartes présentes (bloquant).
+/// Une réconciliation à la fois (le gardien, un enregistrement, NMOS, le mode d'une carte).
+static RECONCILE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// Avant d'arrêter les entrées et sorties : une réconciliation en cours finit, aucune ne suit.
+pub fn stop_reconciling(s: &crate::state::AppState) {
+    s.stopping.store(true, std::sync::atomic::Ordering::SeqCst);
+    drop(RECONCILE.lock().unwrap_or_else(|e| e.into_inner()));
+}
+
 pub fn reconcile_inputs(s: &crate::state::AppState) {
+    let _one = RECONCILE.lock().unwrap_or_else(|e| e.into_inner());
+    if s.stopping.load(std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
     let cfg = HardwareConfig::load(&s.data_dir);
     let (detected, _, simulated) = decklink::detect();
     let tz = s.config.load().timezone.clone();
@@ -624,8 +636,12 @@ async fn decklink_profile(State(s): State<Shared>, CurrentUser(me): CurrentUser,
     let v = blocking(move || {
         let (cards, _, simulated) = decklink::detect();
         let card = cards.iter().find(|c| c.id == b.card).ok_or("no such card")?;
+        // Le gardien ne rouvre rien pendant le changement de mode.
+        let one = RECONCILE.lock().unwrap_or_else(|e| e.into_inner());
         s2.captures.stop_all();
+        s2.playouts.stop_all();
         let r = decklink::set_card_profile(card, &b.profile, simulated);
+        drop(one);
         let (cards, _, _) = decklink::detect();
         {
             let _w = write_lock();

@@ -88,6 +88,7 @@ struct FlowRun {
     plan: FlowPlan,
     stop: Arc<AtomicBool>,
     thread: JoinHandle<()>,
+    started: Instant,
 }
 
 #[derive(Default)]
@@ -162,9 +163,26 @@ fn plan(cfg: &HardwareConfig) -> Result<Option<Plan>, String> {
 impl Engine {
     /// Tient MTL en accord avec les réglages (bloquant ; rouvre tout quand ils changent).
     pub fn apply(&self, cfg: &HardwareConfig, mtl_loaded: Result<(), String>, mxl: Option<Arc<Mxl>>) {
-        // Les hugepages et les ports DPDK d'abord (et rendus quand on n'en veut plus).
+        let planned = plan(cfg);
+        // MTL fermé avant que ses ports soient rendus au noyau (ports changés, ou plus de ST 2110).
+        let ports_change = {
+            let run = self.running.lock().unwrap();
+            match (run.as_ref(), &planned) {
+                (Some(r), Ok(Some(p))) => r.ports != (p.ports.clone(), p.tai_offset),
+                (Some(_), _) => true,
+                (None, _) => false,
+            }
+        };
+        if ports_change {
+            let old = self.running.lock().unwrap().take();
+            if let Some(r) = old {
+                halt(r);
+            }
+            self.status.lock().unwrap().clear();
+        }
+        // Les hugepages et les ports DPDK ensuite (et rendus quand on n'en veut plus).
         let system = super::media::prepare(cfg);
-        let want = match (plan(cfg), mtl_loaded, &mxl) {
+        let want = match (planned, mtl_loaded, &mxl) {
             (Ok(None), _, _) => None,
             (Err(e), _, _) => {
                 self.stop(Some(e));
@@ -222,21 +240,28 @@ impl Engine {
         }
         let Some(r) = run.as_mut() else { return };
         // Les flux retirés ou changés s'arrêtent (ensemble, puis on attend leurs fils)…
-        let gone: Vec<String> = r.flows.iter().filter(|(id, f)| !plan.flows.iter().any(|p| &p.id == *id && *p == f.plan)).map(|(id, _)| id.clone()).collect();
+        // Un flux dont le fil s'est arrêté sur une erreur (lien pas encore monté, file occupée) est
+        // relancé, 5 s au plus tôt après son départ.
+        let dead = |f: &FlowRun| f.thread.is_finished() && f.started.elapsed() >= Duration::from_secs(5);
+        let gone: Vec<String> =
+            r.flows.iter().filter(|(id, f)| !plan.flows.iter().any(|p| &p.id == *id && *p == f.plan) || dead(f)).map(|(id, _)| id.clone()).collect();
         let stopping: Vec<FlowRun> = gone.iter().filter_map(|id| r.flows.remove(id)).collect();
         for f in &stopping {
             f.stop.store(true, Ordering::Relaxed);
         }
         for f in stopping {
             let _ = f.thread.join();
-            self.status.lock().unwrap().remove(&f.plan.id);
+            // Un flux relancé garde son état (son erreur reste visible jusqu'à ce qu'il reparte).
+            if !plan.flows.iter().any(|p| p.id == f.plan.id) {
+                self.status.lock().unwrap().remove(&f.plan.id);
+            }
         }
         // … puis les nouveaux démarrent.
         let new: Vec<&FlowPlan> = plan.flows.iter().filter(|p| !r.flows.contains_key(&p.id)).collect();
         for f in new {
             let stop = Arc::new(AtomicBool::new(false));
             if let Some(thread) = spawn_flow(f, &r.mtl, &mxl, &stop, &self.status) {
-                r.flows.insert(f.id.clone(), FlowRun { plan: f.clone(), stop, thread });
+                r.flows.insert(f.id.clone(), FlowRun { plan: f.clone(), stop, thread, started: Instant::now() });
             }
         }
     }
@@ -255,12 +280,18 @@ impl Engine {
 
     /// Le Core tient-il les flux (MTL ouvert) ?
     pub fn active(&self) -> bool {
-        self.running.lock().unwrap().is_some()
+        match self.running.try_lock() {
+            Ok(r) => r.is_some(),
+            // Apply en cours : MTL ouvert ou sur le point de l'être.
+            Err(_) => true,
+        }
     }
 
     /// Les compteurs de chaque port ouvert par MTL (dans l'ordre : port 1, port 2).
     pub fn port_stats(&self) -> Vec<Option<strata_mtl::PortStats>> {
-        let run = self.running.lock().unwrap();
+        // Pendant qu'apply ouvre MTL ou relance des flux (quelques secondes) : rien plutôt
+        // qu'attendre.
+        let Ok(run) = self.running.try_lock() else { return Vec::new() };
         let Some(r) = run.as_ref() else { return Vec::new() };
         (0..r.ports.0.len()).map(|i| r.mtl.port_stats(i)).collect()
     }
@@ -324,13 +355,18 @@ fn send_audio(f: &FlowPlan, a: &strata_mtl::Audio, mtl: &Mtl, mxl: &Mxl, stop: &
     let (mut blocks, mut heard) = (0u64, 0u64);
     // L'état chaque seconde, comme à la réception : les deux compteurs se comparent.
     let mut tick = Instant::now();
+    // L'écrivain de l'appli, revu deux fois par seconde (pas à chaque bloc de 10 ms).
+    let mut checked: Option<Instant> = None;
     while !stop.load(Ordering::Relaxed) {
-        if mxl.is_active(id) {
-            if reader.is_none() {
-                reader = mxl.audio_reader(id).ok();
+        if checked.is_none_or(|t| t.elapsed() >= Duration::from_millis(500)) {
+            checked = Some(Instant::now());
+            if mxl.is_active(id) {
+                if reader.is_none() {
+                    reader = mxl.audio_reader(id).ok();
+                }
+            } else {
+                reader = None;
             }
-        } else {
-            reader = None;
         }
         // Les canaux de l'appli rangés dans ceux du flux (en trop : ignorés ; en moins : silence).
         let pcm = reader.as_mut().and_then(|r| {
@@ -460,7 +496,7 @@ fn send(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: &At
         strata_mxl::uyvy_to_v210(&uyvy, &mut l, v.width as usize);
         l
     };
-    let mut reader: Option<strata_mxl::VideoReader> = None;
+    let mut follow = strata_mxl::Follow::new(id);
     // En entrelacé, la trame du bas de l'image en cours, gardée pour le paquet suivant (tampon
     // réutilisé).
     let mut bottom: Vec<u8> = Vec::new();
@@ -488,19 +524,13 @@ fn send(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: &At
         // Le flux de l'appli : pris s'il a la taille du flux envoyé (la cadence de l'appli peut
         // différer : on envoie sa dernière image à la cadence du flux).
         let mut mismatch = None;
-        if mxl.is_active(id) {
-            if reader.is_none() {
-                reader = mxl.video_reader(id).ok();
-            }
-            if let Some(r) = reader.as_ref().filter(|r| (r.video.width, r.video.height) != (v.width, v.height)) {
-                mismatch = Some(format!(
-                    "the app writes {}, the flow is set to {}",
-                    format_name(&strata_mtl::Video { width: r.video.width, height: r.video.height, rate: r.video.rate, interlaced: r.video.interlaced }),
-                    format_name(&v)
-                ));
-            }
-        } else {
-            reader = None;
+        // Rouvert quand l'appli recrée son flux à un autre format.
+        if let Some(r) = follow.reader(mxl).filter(|r| (r.video.width, r.video.height) != (v.width, v.height)) {
+            mismatch = Some(format!(
+                "the app writes {}, the flow is set to {}",
+                format_name(&strata_mtl::Video { width: r.video.width, height: r.video.height, rate: r.video.rate, interlaced: r.video.interlaced }),
+                format_name(&v)
+            ));
         }
         let Some(mut out) = tx.next() else { continue };
         let ls = out.linesize;
@@ -514,7 +544,7 @@ fn send(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: &At
         } else {
             // L'image la plus récente, copiée de MXL droit dans le tampon de MTL. Rien de nouveau :
             // la dernière (toujours dans MXL) pendant une seconde, puis du noir.
-            let src = reader.as_ref().filter(|_| mismatch.is_none());
+            let src = follow.reader(mxl).filter(|_| mismatch.is_none());
             // L'image de l'appli (une image, ou ses deux trames) vers ce flux (progressif, ou une
             // trame maintenant et l'autre au paquet suivant) : une copie par ligne, pas plus.
             let mut fill = |a: &[u8], b: Option<&[u8]>| {

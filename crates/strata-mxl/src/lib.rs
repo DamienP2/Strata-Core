@@ -258,8 +258,15 @@ impl VideoWriter {
             Some(l) if now <= l => l + 1,
             _ => now,
         };
-        if self.video.interlaced && first_field && i % 2 == 1 {
-            i += 1;
+        if self.video.interlaced {
+            match (first_field, self.last) {
+                (true, _) if i % 2 == 1 => i += 1,
+                // La seconde trame va juste après la première, quelle que soit l'heure d'arrivée
+                // (une trame qui finit d'arriver après la frontière tomberait sinon sur un pair).
+                (false, Some(l)) if l % 2 == 0 && i > l => i = l + 1,
+                (false, _) if i % 2 == 0 => i += 1,
+                _ => {}
+            }
         }
         self.last = Some(i);
         i
@@ -308,6 +315,51 @@ impl VideoWriter {
         let r = self.write_v210(&scratch, out);
         self.scratch = scratch;
         r
+    }
+}
+
+/// Un flux vidéo suivi par un consommateur (sortie SDI, envoi ST 2110, aperçu) : le lecteur est
+/// ouvert quand l'écrivain apparaît, fermé quand il disparaît, et rouvert quand il recrée le flux à
+/// un autre format (le flux recréé est un autre fichier : l'ancien lecteur ne verrait plus rien).
+/// Vérifié deux fois par seconde au plus (chaque vérification ouvre et verrouille un fichier).
+pub struct Follow {
+    id: Uuid,
+    reader: Option<VideoReader>,
+    checked: Option<std::time::Instant>,
+}
+
+impl Follow {
+    pub fn new(id: Uuid) -> Follow {
+        Follow { id, reader: None, checked: None }
+    }
+
+    pub fn id(&self) -> Uuid {
+        self.id
+    }
+
+    /// Le lecteur du moment, s'il y a un écrivain.
+    pub fn reader(&mut self, mxl: &Mxl) -> Option<&VideoReader> {
+        let due = self.checked.is_none_or(|t| t.elapsed() >= Duration::from_millis(500));
+        if due {
+            self.checked = Some(std::time::Instant::now());
+            if !mxl.is_active(self.id) {
+                self.reader = None;
+            } else {
+                if self.reader.as_ref().is_some_and(|r| mxl.video_of(self.id) != Some(r.video)) {
+                    self.reader = None;
+                }
+                if self.reader.is_none() {
+                    self.reader = mxl.video_reader(self.id).ok();
+                }
+            }
+        }
+        self.reader.as_ref()
+    }
+
+    /// Oublie le lecteur (revu au prochain appel).
+    pub fn reset(&mut self) {
+        self.reader = None;
+        self.checked = None;
     }
 }
 

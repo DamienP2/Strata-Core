@@ -538,7 +538,13 @@ impl Reader {
         }
         let map = Map::open(&file, len)?;
         let h = map.header();
-        if h.magic != MAGIC || h.version != VERSION || h.slots as usize > MAX_SLOTS || h.data_offset as usize + h.slots as usize * h.slot_bytes as usize > len {
+        // Un fichier étranger ou abîmé (0 case : division par zéro plus loin) n'est pas suivi.
+        if h.magic != MAGIC
+            || h.version != VERSION
+            || !(2..=MAX_SLOTS).contains(&(h.slots as usize))
+            || h.slot_bytes == 0
+            || h.data_offset as usize + h.slots as usize * h.slot_bytes as usize > len
+        {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "not a Strata share (or another version)"));
         }
         Ok(Reader { map, path: path.to_path_buf(), slot: None, last: 0 })

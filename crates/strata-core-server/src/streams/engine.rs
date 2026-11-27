@@ -123,6 +123,23 @@ pub struct Env {
     pub gpu: Option<(String, Option<String>)>,
 }
 
+/// Retire ceux qui ne sont plus voulus tels quels (à arrêter ensuite, hors du verrou).
+fn take_stale<C: Clone + PartialEq>(
+    run: &mut HashMap<String, Running<(C, Video)>>,
+    wanted: &[(C, Video)],
+    id: impl Fn(&C) -> &String,
+) -> Vec<Running<(C, Video)>> {
+    let mut out = Vec::new();
+    run.retain(|k, r| {
+        let keep = wanted.iter().any(|w| id(&w.0) == k && *w == r.key);
+        if !keep {
+            out.push(std::mem::replace(r, Running { key: r.key.clone(), stop: Arc::new(AtomicBool::new(true)), thread: None }));
+        }
+        keep
+    });
+    out
+}
+
 struct Running<K> {
     key: K,
     stop: Arc<AtomicBool>,
@@ -172,22 +189,35 @@ impl Engine {
             _ => None,
         };
         *self.problem.lock().unwrap() = problem;
-        // Les entrées.
-        let wanted: Vec<(InputCfg, Video)> = match &env {
+        // Ce qu'on veut : les entrées actives, les sorties qui ont une destination active.
+        let wanted_in: Vec<(InputCfg, Video)> = match &env {
             Some(e) => cfg.inputs.iter().filter(|i| i.enabled).map(|i| (i.clone(), e.house)).collect(),
             None => Vec::new(),
         };
-        let mut stopped = Vec::new();
+        let wanted_out: Vec<(OutputCfg, Video)> = match &env {
+            Some(e) => cfg.outputs.iter().filter(|o| o.enabled && o.destinations.iter().any(|d| d.enabled)).map(|o| (o.clone(), e.house)).collect(),
+            None => Vec::new(),
+        };
+        // D'abord arrêtées : une entrée changée libère son port d'écoute (RTMP, SRT en écoute), une
+        // sortie changée ferme sa publication, avant que la nouvelle ne parte.
+        let stopped = take_stale(&mut self.inputs.lock().unwrap(), &wanted_in, |c| &c.id);
+        let stopped_out = take_stale(&mut self.outputs.lock().unwrap(), &wanted_out, |c| &c.id);
+        for r in stopped {
+            tracing::info!("network input {} stopped", r.key.0.name);
+            let id = r.key.0.id.clone();
+            r.halt();
+            // Après l'arrêt du fil : il ne peut plus remettre son état.
+            self.in_status.lock().unwrap().remove(&id);
+        }
+        for r in stopped_out {
+            tracing::info!("network output {} stopped", r.key.0.name);
+            let id = r.key.0.id.clone();
+            r.halt();
+            self.out_status.lock().unwrap().remove(&id);
+        }
         {
             let mut run = self.inputs.lock().unwrap();
-            run.retain(|id, r| {
-                let keep = wanted.iter().any(|w| &w.0.id == id && *w == r.key);
-                if !keep {
-                    stopped.push(std::mem::replace(r, Running { key: r.key.clone(), stop: Arc::new(AtomicBool::new(true)), thread: None }));
-                }
-                keep
-            });
-            for w in wanted {
+            for w in wanted_in {
                 if run.contains_key(&w.0.id) {
                     continue;
                 }
@@ -200,22 +230,9 @@ impl Engine {
                 run.insert(w.0.id.clone(), Running { key: w, stop, thread });
             }
         }
-        // Les sorties : au moins une destination active.
-        let wanted: Vec<(OutputCfg, Video)> = match &env {
-            Some(e) => cfg.outputs.iter().filter(|o| o.enabled && o.destinations.iter().any(|d| d.enabled)).map(|o| (o.clone(), e.house)).collect(),
-            None => Vec::new(),
-        };
-        let mut stopped_out = Vec::new();
         {
             let mut run = self.outputs.lock().unwrap();
-            run.retain(|id, r| {
-                let keep = wanted.iter().any(|w| &w.0.id == id && *w == r.key);
-                if !keep {
-                    stopped_out.push(std::mem::replace(r, Running { key: r.key.clone(), stop: Arc::new(AtomicBool::new(true)), thread: None }));
-                }
-                keep
-            });
-            for w in wanted {
+            for w in wanted_out {
                 if run.contains_key(&w.0.id) {
                     continue;
                 }
@@ -227,16 +244,6 @@ impl Engine {
                 let thread = std::thread::Builder::new().name(format!("out-{}", c.id)).spawn(move || run_output(&c, &env, &s, &status)).ok();
                 run.insert(w.0.id.clone(), Running { key: w, stop, thread });
             }
-        }
-        for r in stopped {
-            self.in_status.lock().unwrap().remove(&r.key.0.id);
-            tracing::info!("network input {} stopped", r.key.0.name);
-            r.halt();
-        }
-        for r in stopped_out {
-            self.out_status.lock().unwrap().remove(&r.key.0.id);
-            tracing::info!("network output {} stopped", r.key.0.name);
-            r.halt();
         }
     }
 
@@ -292,7 +299,9 @@ pub fn source_video(desc: &str) -> Option<Video> {
         return None;
     }
     let name = |x: f64| if x.fract() == 0.0 { format!("{x:.0}") } else { format!("{x}") };
-    // En entrelacé, ffmpeg donne les images par seconde (25 pour du 1080i50).
+    // En entrelacé, ffmpeg donne les images par seconde (25 pour du 1080i50). MXL ne prend
+    // l'entrelacé qu'en 25 et 29,97 images/s : les autres cadences sont rangées en progressif.
+    let interlaced = interlaced && (r == 25.0 || r == 29.97);
     let f = if interlaced {
         format!(
             "1080i{}",
@@ -567,7 +576,18 @@ fn run_input(c: &InputCfg, env: &Env, stop: &AtomicBool, status: &Mutex<HashMap<
             drop(vw.take());
             match env.mxl.video_writer(vid, &c.name, &v) {
                 Ok(w) => vw = Some(w),
-                Err(e) => tracing::warn!("network input {}: {e}", c.name),
+                // Dit dans l'état (sinon l'entrée resterait « en attente », sans image ni erreur),
+                // puis repris au format maison.
+                Err(e) => {
+                    tracing::warn!("network input {}: {e}", c.name);
+                    set(&|s| {
+                        set_state(s, State::Error, |s| (&mut s.state, &mut s.since));
+                        s.error = Some(format!("MXL refuses the format of this source ({e}): written in the house format"));
+                    });
+                    v = env.house;
+                    vw = env.mxl.video_writer(vid, &c.name, &v).ok();
+                    pause(stop, Duration::from_secs(2));
+                }
             }
             continue;
         }
@@ -1012,17 +1032,35 @@ fn run_destination(d: &Destination, hls_dir: &Path, rx: mpsc::Receiver<Arc<Vec<u
             }
         };
         let mut stdin = p.child.stdin.take();
+        // Jamais bloqué sur une destination qui ne lit plus (réseau coupé, serveur muet) : l'arrêt
+        // et les changements de réglages passent quand même. Ce qui n'a pas pu partir attend
+        // (8 Mo au plus), le reste est jeté par paquets entiers.
+        if let Some(w) = &stdin {
+            set_nonblocking(w);
+        }
+        let mut pending: Vec<u8> = Vec::new();
         let mut tick = Instant::now();
         let started = Instant::now();
         loop {
-            match rx.recv_timeout(Duration::from_millis(500)) {
+            let next = if pending.is_empty() { rx.recv_timeout(Duration::from_millis(500)) } else { rx.recv_timeout(Duration::from_millis(20)) };
+            match next {
                 Ok(chunk) => {
-                    if stdin.as_mut().is_none_or(|w| w.write_all(&chunk).is_err()) {
-                        break;
+                    if pending.len() < 8 << 20 {
+                        pending.extend_from_slice(&chunk);
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break 'outer,
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
+            }
+            if !pending.is_empty() {
+                let Some(w) = stdin.as_mut() else { break };
+                match w.write(&pending) {
+                    Ok(n) => {
+                        pending.drain(..n);
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(_) => break,
+                }
             }
             if stop.load(Ordering::Relaxed) {
                 break 'outer;
@@ -1066,6 +1104,18 @@ fn run_destination(d: &Destination, hls_dir: &Path, rx: mpsc::Receiver<Arc<Vec<u
         }
     }
     let _ = &stop;
+}
+
+/// Le tube vers ffmpeg sans attente (O_NONBLOCK).
+fn set_nonblocking(w: &impl std::os::fd::AsRawFd) {
+    let fd = w.as_raw_fd();
+    // SAFETY: fcntl on a descriptor we own; no memory involved.
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        if flags >= 0 {
+            libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        }
+    }
 }
 
 #[cfg(test)]

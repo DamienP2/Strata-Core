@@ -169,6 +169,7 @@ async fn write(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(mut c
     require(me.admin)?;
     let s2 = s.clone();
     blocking(move || {
+        let _w = super::write_lock();
         let old = StreamsConfig::load(&s2.data_dir);
         keep_keys(&mut cfg, &old);
         cfg.check().map_err(bad)?;
@@ -295,6 +296,7 @@ async fn app_put(
     app_allowed(&s, peer, &headers, user.is_some_and(|u| u.admin), &b.app)?;
     let s2 = s.clone();
     blocking(move || {
+        let _w = super::write_lock();
         let mut cfg = StreamsConfig::load(&s2.data_dir);
         let old = cfg.clone();
         let oid = app_output_id(&b.app, &id);
@@ -352,6 +354,7 @@ async fn app_delete(
     app_allowed(&s, peer, &headers, user.is_some_and(|u| u.admin), &q.app)?;
     let s2 = s.clone();
     blocking(move || {
+        let _w = super::write_lock();
         let mut cfg = StreamsConfig::load(&s2.data_dir);
         let oid = app_output_id(&q.app, &id);
         let before = cfg.outputs.len();

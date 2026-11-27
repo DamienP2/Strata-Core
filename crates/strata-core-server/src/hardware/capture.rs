@@ -149,19 +149,22 @@ impl Captures {
                     stopped.push(run.remove(&k).unwrap());
                 }
             }
-            for w in wanted {
-                let key = (w.card.clone(), w.connector);
-                if run.contains_key(&key) {
-                    continue;
-                }
-                tracing::info!("capturing SDI {} of card {}{}", w.connector, w.card, if w.device.is_none() { " (simulated)" } else { "" });
-                let mxl = self.mxl.lock().unwrap().clone();
-                run.insert(key, start(w, mxl));
-            }
         }
+        // D'abord fermées (hors du verrou) : une entrée changée libère la carte avant d'être
+        // rouverte.
         for r in stopped {
             tracing::info!("no longer capturing SDI {} of card {}", r.wanted.connector, r.wanted.card);
             r.halt();
+        }
+        let mut run = self.running.lock().unwrap();
+        for w in wanted {
+            let key = (w.card.clone(), w.connector);
+            if run.contains_key(&key) {
+                continue;
+            }
+            tracing::info!("capturing SDI {} of card {}{}", w.connector, w.card, if w.device.is_none() { " (simulated)" } else { "" });
+            let mxl = self.mxl.lock().unwrap().clone();
+            run.insert(key, start(w, mxl));
         }
     }
 
@@ -433,9 +436,12 @@ fn capture(writer: &mut Sink, device: u32, stop: &AtomicBool, status: &Mutex<Sta
         let mut scratch = Vec::new();
         let mut seq = 0u64;
         let mut meter = Meter::new();
+        let mut refused: Option<String> = None;
         while !stop.load(Ordering::Relaxed) {
+            let mut got = false;
             if input.wait(seq, 200) {
                 if let Some(t) = input.take(&mut buf, &mut seq) {
+                    got = true;
                     let (w, h) = (t.width, t.height);
                     let m = input.current_mode();
                     let (num, den) = (m.timescale.max(1) as u64, m.duration.max(1) as u64);
@@ -459,7 +465,17 @@ fn capture(writer: &mut Sink, device: u32, stop: &AtomicBool, status: &Mutex<Sta
                     };
                     // 10 bits : copiée telle quelle dans MXL ; une carte qui ne donne que du 8 bits :
                     // convertie.
-                    let published = if t.v210 { writer.publish_v210(&info, &buf, t.stride, &mut scratch) } else { writer.publish(&info, &buf) }.is_ok();
+                    let published = match if t.v210 { writer.publish_v210(&info, &buf, t.stride, &mut scratch) } else { writer.publish(&info, &buf) } {
+                        Ok(_) => {
+                            refused = None;
+                            true
+                        }
+                        // Dit dans l'état (format que MXL ou le partage refuse…), pas avalé.
+                        Err(e) => {
+                            refused = Some(format!("{} not shared: {e}", m.name));
+                            false
+                        }
+                    };
                     // Le son embarqué de cette image, calé sur elle.
                     if let Some((pcm, ch, last)) = input.audio() {
                         let _ = writer.publish_audio(&pcm, ch, last);
@@ -479,7 +495,15 @@ fn capture(writer: &mut Sink, device: u32, stop: &AtomicBool, status: &Mutex<Sta
                 if signal == Some(false) {
                     s.fps = 0.0;
                 }
+                if refused.is_some() || s.error.as_deref().is_some_and(|e| e.contains(" not shared: ")) {
+                    s.error = refused.clone();
+                }
             });
+            // Sans signal, la carte réveille l'attente tout de suite : on patiente un peu plutôt
+            // que de tourner à vide (un cœur entier par entrée débranchée).
+            if !got && signal == Some(false) {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
         }
     }
 }
@@ -612,7 +636,8 @@ pub fn jpeg(buf: &[u8], w: u32, h: u32, stride: usize, width: u32) -> Result<Vec
     for oy in 0..oh {
         let row = &buf[(oy * step) as usize * stride..];
         for ox in 0..ow {
-            let x = (ox * step) as usize;
+            // Une largeur impaire : la dernière paire de pixels reste dans la ligne.
+            let x = ((ox * step) as usize).min((w as usize & !1).saturating_sub(1));
             let p = (x & !1) * 2;
             let (cb, y, cr) = (row[p] as f32 - 128.0, row[p + 1 + 2 * (x & 1)] as f32 - 16.0, row[p + 2] as f32 - 128.0);
             // BT.709, plage limitée.

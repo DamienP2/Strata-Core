@@ -197,6 +197,11 @@ fn system_root() -> (PathBuf, bool) {
 
 /// Lance une commande (15 s au plus) : None si elle réussit, sinon pourquoi.
 pub(crate) fn run(program: &str, args: &[&str]) -> Option<String> {
+    run_for(program, args, Duration::from_secs(15))
+}
+
+/// Comme `run`, avec son délai.
+pub(crate) fn run_for(program: &str, args: &[&str], limit: Duration) -> Option<String> {
     let child = Command::new(program).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn();
     let mut child = match child {
         Ok(c) => c,
@@ -213,9 +218,11 @@ pub(crate) fn run(program: &str, args: &[&str]) -> Option<String> {
                 }
                 return Some(err.trim().lines().last().unwrap_or("failed").to_string());
             }
-            Ok(None) if start.elapsed() < Duration::from_secs(15) => std::thread::sleep(Duration::from_millis(50)),
+            Ok(None) if start.elapsed() < limit => std::thread::sleep(Duration::from_millis(50)),
             _ => {
                 let _ = child.kill();
+                // Récupéré : pas de processus zombie.
+                let _ = child.wait();
                 return Some(format!("{program} did not finish"));
             }
         }

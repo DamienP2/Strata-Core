@@ -64,6 +64,8 @@ pub struct AppState {
     restart: AtomicBool,
     pub restart_signal: tokio::sync::Notify,
     pub started_at: Instant,
+    /// Le Core s'arrête : les entrées et sorties ne sont plus (re)lancées.
+    pub stopping: AtomicBool,
 }
 
 impl AppState {
@@ -98,6 +100,7 @@ impl AppState {
             restart: AtomicBool::new(false),
             restart_signal: tokio::sync::Notify::new(),
             started_at: Instant::now(),
+            stopping: AtomicBool::new(false),
             data_dir,
         })
     }

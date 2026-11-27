@@ -64,8 +64,9 @@ fn outcome_path() -> PathBuf {
 /// Ce qu'il faut d'après les réglages (rien en mode « Off »).
 pub fn wanted(cfg: &HardwareConfig) -> Wanted {
     let r = &cfg.network;
-    let video: Vec<_> = cfg.flows.iter().filter(|f| f.essence == Essence::Video).collect();
-    let audio = cfg.flows.iter().any(|f| f.essence == Essence::Audio);
+    // Les flux coupés ne comptent pas (ni hugepages ni ports retirés au noyau pour rien).
+    let video: Vec<_> = cfg.flows.iter().filter(|f| f.enabled && f.essence == Essence::Video).collect();
+    let audio = cfg.flows.iter().any(|f| f.enabled && f.essence == Essence::Audio);
     if r.media_io == MediaIo::Off || (video.is_empty() && !audio) {
         return Wanted::default();
     }
@@ -108,15 +109,17 @@ fn read_outcome() -> Option<Outcome> {
 }
 
 /// Ce qui a été demandé la dernière fois, et sa réponse.
-static LAST: Mutex<Option<(Wanted, Result<(), String>)>> = Mutex::new(None);
+type Asked = (Wanted, Result<(), String>, std::time::Instant);
+static LAST: Mutex<Option<Asked>> = Mutex::new(None);
 
 /// Côté Core : obtient du système ce qu'il faut (si ça a changé) ; Err : pourquoi MTL ne
 /// pourra pas s'ouvrir.
 pub fn prepare(cfg: &HardwareConfig) -> Result<(), String> {
     let want = wanted(cfg);
     let mut last = LAST.lock().unwrap();
-    if let Some((w, r)) = last.as_ref() {
-        if *w == want {
+    if let Some((w, r, at)) = last.as_ref() {
+        // Un échec est redemandé 30 s plus tard (le service a pu finir entre-temps).
+        if *w == want && (r.is_ok() || at.elapsed() < std::time::Duration::from_secs(30)) {
             return r.clone();
         }
     }
@@ -124,7 +127,7 @@ pub fn prepare(cfg: &HardwareConfig) -> Result<(), String> {
     if let Err(e) = &r {
         tracing::warn!("media setup: {e}");
     }
-    *last = Some((want, r.clone()));
+    *last = Some((want, r.clone(), std::time::Instant::now()));
     r
 }
 
@@ -144,7 +147,8 @@ fn ask(want: &Wanted) -> Result<(), String> {
     }
     let json = serde_json::to_string_pretty(want).unwrap_or_default();
     std::fs::write(etc(), json).map_err(|e| format!("cannot write {}: {e}", etc().display()))?;
-    if let Some(e) = super::clock::run("systemctl", &["restart", "strata-media"]) {
+    // Réserver beaucoup de hugepages et rattacher des ports à vfio peut prendre du temps.
+    if let Some(e) = super::clock::run_for("systemctl", &["restart", "strata-media"], std::time::Duration::from_secs(90)) {
         // Le bilan dit mieux pourquoi.
         return Err(read_outcome().and_then(|o| o.error).unwrap_or(format!("strata-media: {e}")));
     }

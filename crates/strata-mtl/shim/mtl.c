@@ -58,7 +58,7 @@ static void set_err(char *err, int len, const char *msg) {
         if (!p_##name) {                                                         \
             snprintf(err, (size_t)errlen, "libmtl has no %s (another version?)", \
                      #name);                                                     \
-            return -1;                                                           \
+            goto fail;                                                           \
         }                                                                        \
     } while (0)
 
@@ -100,6 +100,13 @@ int smtl_load(const char *path, char *err, int errlen) {
     SYM(st30_calculate_framebuff_size);
     p_mtl_get_port_stats = (__typeof__(p_mtl_get_port_stats))dlsym(lib, "mtl_get_port_stats");
     return 0;
+fail:
+    // Une version qui ne convient pas : refermée, et la suivante essayée en entier (aucune
+    // fonction de celle-ci ne sera appelée).
+    dlclose(l);
+    lib = NULL;
+    p_mtl_get_port_stats = NULL;
+    return -1;
 }
 
 // Un port média : son nom pour MTL (« 0000:3b:00.0 » en DPDK,
@@ -257,7 +264,8 @@ int smtl_rx_get(void *rx, smtl_frame *out) {
     out->data = (uint8_t *)f->addr[0];
     out->linesize = f->linesize[0];
     out->width = f->width;
-    out->height = f->height;
+    // Les lignes du tampon : une trame (la moitié) en entrelacé.
+    out->height = f->interlaced ? f->height / 2 : f->height;
     out->second_field = f->second_field;
     out->complete = f->status == ST_FRAME_STATUS_COMPLETE || f->status == ST_FRAME_STATUS_RECONSTRUCTED;
     out->timestamp = f->timestamp;
@@ -326,7 +334,8 @@ int smtl_tx_get(void *tx, smtl_frame *out) {
     out->data = (uint8_t *)f->addr[0];
     out->linesize = f->linesize[0];
     out->width = f->width;
-    out->height = f->height;
+    // Les lignes du tampon : une trame (la moitié) en entrelacé.
+    out->height = f->interlaced ? f->height / 2 : f->height;
     out->second_field = f->second_field;
     out->complete = 1;
     out->timestamp = 0;

@@ -259,6 +259,13 @@ pub fn audio_of(flow: &str) -> String {
     format!("{flow}/audio")
 }
 
+/// Une seule écriture de `streams.json` à la fois (la page, les applis) : relu, changé, écrit
+/// sous ce verrou.
+pub fn write_lock() -> std::sync::MutexGuard<'static, ()> {
+    static W: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    W.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Une adresse de flux pour le journal : sans identifiants ni paramètres (mot de passe RTSP,
 /// `passphrase` SRT, clé de diffusion).
 pub fn redacted(url: &str) -> String {
