@@ -106,6 +106,57 @@ impl Ctx {
         self.run_input(prog, args, None)
     }
 
+    /// Une commande longue (apt, pilotes) : son avancement montré au fil de l'eau (`say`).
+    pub fn run_live(&self, prog: &str, args: &[&str], say: &dyn Fn(String)) -> Result<String, String> {
+        use std::io::BufRead;
+        let line = format!("$ {prog} {}", args.join(" "));
+        if self.dry() {
+            self.log(&format!("{line}   (essai à blanc : non lancée)"));
+            return Ok(String::new());
+        }
+        self.log(&line);
+        let mut child = Command::new(prog)
+            .args(args)
+            .env("DEBIAN_FRONTEND", "noninteractive")
+            .env("NEEDRESTART_MODE", "l")
+            .env("LC_ALL", "C")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("{prog}: {e}"))?;
+        let err = child.stderr.take().map(|e| {
+            std::thread::spawn(move || {
+                let mut s = String::new();
+                let _ = std::io::Read::read_to_string(&mut { e }, &mut s);
+                s
+            })
+        });
+        let mut last = String::new();
+        if let Some(out) = child.stdout.take() {
+            for l in std::io::BufReader::new(out).lines().map_while(Result::ok) {
+                self.log(&format!("  {l}"));
+                if let Some(p) = progress_of(&l) {
+                    say(p);
+                }
+                if !l.trim().is_empty() {
+                    last = l;
+                }
+            }
+        }
+        let status = child.wait().map_err(|e| e.to_string())?;
+        let stderr = err.and_then(|h| h.join().ok()).unwrap_or_default();
+        for l in stderr.lines() {
+            self.log(&format!("  {l}"));
+        }
+        if status.success() {
+            Ok(last)
+        } else {
+            let why = stderr.lines().chain(std::iter::once(last.as_str())).rfind(|l| !l.trim().is_empty()).unwrap_or("failed").to_string();
+            Err(format!("{prog}: {why}"))
+        }
+    }
+
     pub fn run_input(&self, prog: &str, args: &[&str], input: Option<&str>) -> Result<String, String> {
         let line = format!("$ {prog} {}", args.join(" "));
         if self.dry() {
@@ -191,6 +242,29 @@ fn exec(ctx: &Ctx, prog: &str, args: &[&str], input: Option<&str>) -> Result<Str
         let last = stderr.lines().chain(stdout.lines()).rfind(|l| !l.trim().is_empty()).unwrap_or("failed").to_string();
         Err(format!("{prog}: {last}"))
     }
+}
+
+/// Une ligne d'apt (ou de DKMS) dite en clair, pour l'avancement d'une étape.
+fn progress_of(l: &str) -> Option<String> {
+    let pkg = |rest: &str| rest.split_whitespace().next().unwrap_or_default().split(':').next().unwrap_or_default().to_string();
+    if l.starts_with("Get:") {
+        // « Get:12 http://archive.ubuntu.com/ubuntu noble/restricted amd64 nvidia-driver-580 amd64 … »
+        let w: Vec<&str> = l.split_whitespace().collect();
+        return w.get(4).map(|p| format!("téléchargement : {p}"));
+    }
+    if let Some(r) = l.strip_prefix("Unpacking ") {
+        return Some(format!("décompression : {}", pkg(r)));
+    }
+    if let Some(r) = l.strip_prefix("Setting up ") {
+        return Some(format!("installation : {}", pkg(r)));
+    }
+    if l.contains("Building initial module") || l.contains("Building module") || l.starts_with("Building for ") {
+        return Some("compilation du module du noyau (quelques minutes)…".into());
+    }
+    if l.starts_with("update-initramfs") || l.contains("Generating /boot/initrd") {
+        return Some("préparation du démarrage (initramfs)…".into());
+    }
+    None
 }
 
 /// L'erreur du Core : « Error: … », puis ses causes (« Caused by: »), sur une ligne.
@@ -361,7 +435,7 @@ fn system_files(ctx: &Ctx) -> Result<String, String> {
 }
 
 /// Le pilote Blackmagic : son paquet sorti de l'archive, installé avec DKMS.
-fn desktop_video(ctx: &Ctx, src: &Path) -> Result<String, String> {
+fn desktop_video(ctx: &Ctx, src: &Path, say: &dyn Fn(String)) -> Result<String, String> {
     // Ce qui a été copié : l'archive de Blackmagic (.tar.gz, .tar), son dossier déjà déballé, le
     // paquet .deb, ou un installateur .sh / .run.
     let dir = if src.is_dir() {
@@ -370,6 +444,7 @@ fn desktop_video(ctx: &Ctx, src: &Path) -> Result<String, String> {
         let out = ctx.p("/var/cache/strata/desktopvideo");
         let _ = std::fs::remove_dir_all(&out);
         std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+        say("décompression de l'archive Blackmagic…".into());
         unpack_any(src, &out)?;
         // Une archive dans l'archive (un .tar.gz dans le .tar) : déballée à son tour.
         for inner in files_in(&out).into_iter().filter(|f| is_archive(f)) {
@@ -383,9 +458,9 @@ fn desktop_video(ctx: &Ctx, src: &Path) -> Result<String, String> {
     };
     let files = if src.is_file() && !is_archive(src) { vec![src.to_path_buf()] } else { files_in(&dir) };
     let headers = format!("linux-headers-{}", String::from_utf8_lossy(&Command::new("uname").arg("-r").output().map(|o| o.stdout).unwrap_or_default()).trim());
-    ctx.run("apt-get", &["install", "-y", "-q", "dkms", &headers])?;
+    ctx.run_live("apt-get", &["install", "-y", "-q", "dkms", &headers], say)?;
     if let Some(deb) = pick_deb(&files) {
-        ctx.run("apt-get", &["install", "-y", "-q", &deb.display().to_string()])?;
+        ctx.run_live("apt-get", &["install", "-y", "-q", &deb.display().to_string()], say)?;
     } else if let Some(sh) = pick_installer(&files) {
         // L'installateur de Blackmagic : lancé dans son dossier, chaque question acceptée.
         let cwd = sh.parent().unwrap_or(Path::new("/"));
@@ -518,17 +593,18 @@ fn ndi(ctx: &Ctx, lib: &Path) -> Result<String, String> {
 }
 
 /// Le pilote NVIDIA recommandé pour cette carte (celui d'Ubuntu, avec NVENC/NVDEC).
-fn nvidia(ctx: &Ctx) -> Result<String, String> {
-    ctx.run("apt-get", &["install", "-y", "-q", "ubuntu-drivers-common"])?;
-    ctx.run("ubuntu-drivers", &["install"])?;
+fn nvidia(ctx: &Ctx, say: &dyn Fn(String)) -> Result<String, String> {
+    say("recherche du pilote recommandé…".into());
+    ctx.run_live("apt-get", &["install", "-y", "-q", "ubuntu-drivers-common"], say)?;
+    ctx.run_live("ubuntu-drivers", &["install"], say)?;
     let loaded = !ctx.dry() && Command::new("nvidia-smi").output().is_ok_and(|o| o.status.success());
     Ok(if loaded { "pilote NVIDIA en place".into() } else { "pilote installé : redémarrez le serveur pour le charger".into() })
 }
 
-fn vaapi(ctx: &Ctx, pkgs: &[String]) -> Result<String, String> {
+fn vaapi(ctx: &Ctx, pkgs: &[String], say: &dyn Fn(String)) -> Result<String, String> {
     let mut args = vec!["install", "-y", "-q"];
     args.extend(pkgs.iter().map(String::as_str));
-    ctx.run("apt-get", &args)?;
+    ctx.run_live("apt-get", &args, say)?;
     Ok(pkgs.join(", "))
 }
 
@@ -587,11 +663,12 @@ pub fn steps(plan: &Plan) -> Vec<Step> {
                 pkgs.push("avahi-daemon");
             }
             let pkgs: Vec<String> = pkgs.into_iter().map(String::from).collect();
-            v.push(step("Paquets du système", false, move |ctx, _| {
+            v.push(step("Paquets du système", false, move |ctx, say| {
+                say("mise à jour de la liste des paquets…".into());
                 ctx.run("apt-get", &["update", "-q"])?;
                 let mut args = vec!["install", "-y", "-q"];
                 args.extend(pkgs.iter().map(String::as_str));
-                ctx.run("apt-get", &args)?;
+                ctx.run_live("apt-get", &args, say)?;
                 Ok(pkgs.join(", "))
             }));
             v.push(step("Compte du service", false, |ctx, _| service_user(ctx)));
@@ -604,17 +681,17 @@ pub fn steps(plan: &Plan) -> Vec<Step> {
             }));
             v.push(step("Fichiers du système", false, |ctx, _| system_files(ctx)));
             if let Some(dv) = plan.desktop_video.clone() {
-                v.push(step("Pilote Blackmagic Desktop Video", true, move |ctx, _| desktop_video(ctx, &dv)));
+                v.push(step("Pilote Blackmagic Desktop Video", true, move |ctx, say| desktop_video(ctx, &dv, say)));
             }
             if let Some(lib) = plan.ndi.clone() {
                 v.push(step("Bibliothèque NDI", true, move |ctx, _| ndi(ctx, &lib)));
             }
             if plan.nvidia {
-                v.push(step("Pilote NVIDIA", true, |ctx, _| nvidia(ctx)));
+                v.push(step("Pilote NVIDIA", true, |ctx, say| nvidia(ctx, say)));
             }
             if !plan.vaapi.is_empty() {
                 let pkgs = plan.vaapi.clone();
-                v.push(step("Pilotes VA-API (Intel, AMD)", true, move |ctx, _| vaapi(ctx, &pkgs)));
+                v.push(step("Pilotes VA-API (Intel, AMD)", true, move |ctx, say| vaapi(ctx, &pkgs, say)));
             }
             if let Some((name, pw)) = plan.admin.clone() {
                 v.push(step(format!("Compte administrateur « {name} »"), false, move |ctx, _| admin(ctx, &name, &pw)));
@@ -640,17 +717,17 @@ pub fn steps(plan: &Plan) -> Vec<Step> {
                 }));
             }
             if let Some(dv) = plan.desktop_video.clone() {
-                v.push(step("Pilote Blackmagic Desktop Video", true, move |ctx, _| desktop_video(ctx, &dv)));
+                v.push(step("Pilote Blackmagic Desktop Video", true, move |ctx, say| desktop_video(ctx, &dv, say)));
             }
             if let Some(lib) = plan.ndi.clone() {
                 v.push(step("Bibliothèque NDI", true, move |ctx, _| ndi(ctx, &lib)));
             }
             if plan.nvidia {
-                v.push(step("Pilote NVIDIA", true, |ctx, _| nvidia(ctx)));
+                v.push(step("Pilote NVIDIA", true, |ctx, say| nvidia(ctx, say)));
             }
             if !plan.vaapi.is_empty() {
                 let pkgs = plan.vaapi.clone();
-                v.push(step("Pilotes VA-API (Intel, AMD)", true, move |ctx, _| vaapi(ctx, &pkgs)));
+                v.push(step("Pilotes VA-API (Intel, AMD)", true, move |ctx, say| vaapi(ctx, &pkgs, say)));
             }
             v.push(step("Droits sur les données", false, |ctx, _| ctx.chown(paths::DATA, true).map(|_| paths::DATA.to_string())));
             v.push(step("Redémarrage du service", false, |ctx, _| start(ctx, true)));
@@ -732,6 +809,29 @@ pub fn run(ctx: &Ctx, steps: &[Step], on: &(dyn Fn(Event) + Sync)) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn apt_lines_said_plainly() {
+        assert_eq!(
+            progress_of("Get:12 http://archive.ubuntu.com/ubuntu noble/restricted amd64 nvidia-driver-580 amd64 580.95-0ubuntu1 [490 kB]").unwrap(),
+            "téléchargement : nvidia-driver-580"
+        );
+        assert_eq!(progress_of("Unpacking libnvidia-encode-580:amd64 (580.95-0ubuntu1) ...").unwrap(), "décompression : libnvidia-encode-580");
+        assert_eq!(progress_of("Setting up nvidia-dkms-580 (580.95-0ubuntu1) ...").unwrap(), "installation : nvidia-dkms-580");
+        assert!(progress_of("Building initial module nvidia/580.95 for 6.8.0-49-generic").unwrap().contains("module du noyau"));
+        assert!(progress_of("Reading package lists...").is_none());
+    }
+
+    #[test]
+    fn live_commands_tell_their_progress() {
+        // Pour de vrai (racine « / »), mais sans journal : rien n'est écrit dans /var/log.
+        let ctx = Ctx { root: "/".into(), log: Mutex::new(None) };
+        let said = std::sync::Mutex::new(Vec::new());
+        let out = ctx.run_live("sh", &["-c", "echo 'Setting up a (1) ...'; echo 'Unpacking b (2) ...'; echo fin"], &|s| said.lock().unwrap().push(s)).unwrap();
+        assert_eq!(out, "fin");
+        assert_eq!(*said.lock().unwrap(), vec!["installation : a".to_string(), "décompression : b".to_string()]);
+        assert!(ctx.run_live("sh", &["-c", "echo boom >&2; exit 3"], &|_| {}).unwrap_err().contains("boom"));
+    }
 
     #[test]
     fn unpacks_tar_whatever_its_name() {
