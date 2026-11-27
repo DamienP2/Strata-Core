@@ -28,18 +28,20 @@ use crate::{
     Args,
 };
 
-// Fond sombre, texte clair ; posés partout (le thème du terminal ne compte pas).
-const BG: Color = Color::Rgb(11, 13, 19);
-const PANEL: Color = Color::Rgb(22, 26, 36);
-const LINE: Color = Color::Rgb(52, 58, 74);
-const FG: Color = Color::Rgb(236, 238, 243);
-const DIM: Color = Color::Rgb(150, 156, 172);
-const ACCENT: Color = Color::Rgb(143, 163, 255);
+// Fond sombre, texte clair ; posés partout (le thème du terminal ne compte pas). Les 256 couleurs
+// standard, pas les couleurs 24 bits : le Terminal de macOS, PuTTY et d'autres ignorent ces
+// dernières (et SSH ne transmet pas COLORTERM pour le savoir).
+const BG: Color = Color::Indexed(233); // #121212
+const PANEL: Color = Color::Indexed(235); // #262626
+const LINE: Color = Color::Indexed(240); // #585858
+const FG: Color = Color::Indexed(255); // #eeeeee
+const DIM: Color = Color::Indexed(248); // #a8a8a8
+const ACCENT: Color = Color::Indexed(111); // #87afff
 /// Le texte sur la barre de sélection.
-const ON_ACCENT: Color = Color::Rgb(10, 12, 22);
-const OK: Color = Color::Rgb(52, 211, 113);
-const WARN: Color = Color::Rgb(250, 178, 60);
-const BAD: Color = Color::Rgb(255, 92, 118);
+const ON_ACCENT: Color = Color::Indexed(16); // #000000
+const OK: Color = Color::Indexed(78); // #5fd787
+const WARN: Color = Color::Indexed(214); // #ffaf00
+const BAD: Color = Color::Indexed(204); // #ff5f87
 
 /// La largeur du contenu, centré : lisible même sur un grand écran.
 const WIDTH: u16 = 92;
@@ -1352,8 +1354,22 @@ mod tests {
         app.checks = Some(checks::system(true));
         app.cards = 2;
         let color = |c: Color| match c {
-            Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
-            _ => "#0b0d13".into(),
+            Color::Indexed(i) => {
+                let (r, g, b) = match i {
+                    16..=231 => {
+                        let v = |x: u8| if x == 0 { 0 } else { 55 + 40 * x };
+                        let i = i - 16;
+                        (v(i / 36), v(i / 6 % 6), v(i % 6))
+                    }
+                    232..=255 => {
+                        let g = 8 + 10 * (i - 232);
+                        (g, g, g)
+                    }
+                    _ => (0, 0, 0),
+                };
+                format!("#{r:02x}{g:02x}{b:02x}")
+            }
+            _ => "#121212".into(),
         };
         for (name, screen, sel) in [
             ("1-welcome", Screen::Welcome, 0),
