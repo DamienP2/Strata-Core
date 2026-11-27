@@ -121,6 +121,8 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 apps::reconcile(&s).await;
                 reconcile_inputs(&s).await;
+                let s2 = s.clone();
+                let _ = tokio::task::spawn_blocking(move || s2.previews.sweep()).await;
                 updates::tick(&s).await;
                 tick += 1;
                 if tick.is_multiple_of(12 * 3600 / 5) {

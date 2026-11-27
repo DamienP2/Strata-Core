@@ -17,6 +17,10 @@
 //!   ne retaille jamais celui qu'un lecteur a ouvert. Un lecteur dont l'écrivain s'est arrêté, ou dont
 //!   le fichier a été remplacé, le voit ([`Reader::gone`]) et rouvre.
 //!
+//! - **Sorties** : une appli qui envoie une sortie SDI ou un flux ST 2110 y publie aussi ce qu'elle
+//!   envoie ([`sdi_out_path`], [`flow_path`]), pour l'aperçu des réglages et les applis qui
+//!   voudraient la lire. Elle n'en a besoin que quand quelqu'un regarde ([`Writer::watched`]).
+//!
 //! Format des images : UYVY 8 bits (4:2:2), lignes contiguës (`stride` octets par ligne).
 use std::{
     fs, io,
@@ -48,8 +52,22 @@ pub fn dir() -> PathBuf {
 
 /// Le fichier d'une entrée SDI : `strata-sdi-<carte>-<n>` (n : le numéro logiciel, SDI n).
 pub fn sdi_path(card: &str, connector: u32) -> PathBuf {
-    let card: String = card.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c.to_ascii_lowercase() } else { '_' }).collect();
-    dir().join(format!("strata-sdi-{card}-{connector}"))
+    dir().join(format!("strata-sdi-{}-{connector}", clean(card)))
+}
+
+/// Le fichier d'une sortie SDI, écrit par l'appli qui l'envoie : `strata-sdi-out-<carte>-<n>`.
+pub fn sdi_out_path(card: &str, connector: u32) -> PathBuf {
+    dir().join(format!("strata-sdi-out-{}-{connector}", clean(card)))
+}
+
+/// Le fichier d'un flux ST 2110 sortant, écrit par l'appli qui l'envoie : `strata-2110-<flux>`
+/// (`flow-1`, l'identifiant du flux dans les réglages).
+pub fn flow_path(flow: &str) -> PathBuf {
+    dir().join(format!("strata-2110-{}", clean(flow)))
+}
+
+fn clean(s: &str) -> String {
+    s.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c.to_ascii_lowercase() } else { '_' }).collect()
 }
 
 // ---------- La disposition en mémoire ----------
@@ -71,7 +89,9 @@ struct Header {
     latest: AtomicU64,
     /// Le dernier signe de vie de l'écrivain (ms depuis 1970).
     beat: AtomicU64,
-    _reserved: [u64; 8],
+    /// Quelqu'un regarde (un aperçu) jusqu'à cette heure (ms depuis 1970).
+    watch: AtomicU64,
+    _reserved: [u64; 7],
     readers: [ReaderSlot; MAX_READERS],
     metas: [Meta; MAX_SLOTS],
 }
@@ -392,6 +412,14 @@ impl Writer {
         readers_of(self.map.header(), true)
     }
 
+    /// Quelqu'un lit ou regarde : un lecteur inscrit, ou un aperçu ouvert ([`Reader::watch`]).
+    /// Une sortie n'a besoin d'être publiée que dans ce cas (une image par seconde suffit à
+    /// l'aperçu). Peu coûteux : à appeler à chaque image.
+    pub fn watched(&self) -> bool {
+        let h = self.map.header();
+        h.watch.load(Ordering::Relaxed) > now_ms() || h.readers.iter().any(|r| r.pid.load(Ordering::Relaxed) != 0)
+    }
+
     /// Le nombre d'images publiées.
     pub fn published(&self) -> u64 {
         self.no
@@ -441,6 +469,32 @@ fn readers_of(h: &Header, clean: bool) -> Vec<ReaderInfo> {
         out.push(ReaderInfo { pid, app: read_app(r), seen_ms: r.seen.load(Ordering::Relaxed), frames: r.frames.load(Ordering::Relaxed) });
     }
     out
+}
+
+fn meta_of(m: &Meta) -> Option<Frame> {
+    let format = Format::from_fourcc(m.fourcc.load(Ordering::Relaxed))?;
+    let flags = m.flags.load(Ordering::Relaxed);
+    let tc = m.timecode.load(Ordering::Relaxed);
+    Some(Frame {
+        no: m.no.load(Ordering::Relaxed),
+        info: FrameInfo {
+            width: m.width.load(Ordering::Relaxed),
+            height: m.height.load(Ordering::Relaxed),
+            stride: m.stride.load(Ordering::Relaxed),
+            format,
+            rate: (m.rate_num.load(Ordering::Relaxed), m.rate_den.load(Ordering::Relaxed)),
+            interlaced: flags & 1 != 0,
+            timecode: (flags & 2 != 0).then_some(Timecode {
+                hours: (tc >> 24) as u8,
+                minutes: (tc >> 16) as u8,
+                seconds: (tc >> 8) as u8,
+                frames: tc as u8,
+                drop_frame: flags & 4 != 0,
+                field_mark: flags & 8 != 0,
+            }),
+        },
+        captured_ns: m.captured_ns.load(Ordering::Relaxed),
+    })
 }
 
 // ---------- Le lecteur ----------
@@ -572,29 +626,7 @@ impl Reader {
                 std::hint::spin_loop();
                 continue;
             }
-            let format = Format::from_fourcc(m.fourcc.load(Ordering::Relaxed))?;
-            let flags = m.flags.load(Ordering::Relaxed);
-            let tc = m.timecode.load(Ordering::Relaxed);
-            let frame = Frame {
-                no: m.no.load(Ordering::Relaxed),
-                info: FrameInfo {
-                    width: m.width.load(Ordering::Relaxed),
-                    height: m.height.load(Ordering::Relaxed),
-                    stride: m.stride.load(Ordering::Relaxed),
-                    format,
-                    rate: (m.rate_num.load(Ordering::Relaxed), m.rate_den.load(Ordering::Relaxed)),
-                    interlaced: flags & 1 != 0,
-                    timecode: (flags & 2 != 0).then_some(Timecode {
-                        hours: (tc >> 24) as u8,
-                        minutes: (tc >> 16) as u8,
-                        seconds: (tc >> 8) as u8,
-                        frames: tc as u8,
-                        drop_frame: flags & 4 != 0,
-                        field_mark: flags & 8 != 0,
-                    }),
-                },
-                captured_ns: m.captured_ns.load(Ordering::Relaxed),
-            };
+            let frame = meta_of(m)?;
             let len = (m.len.load(Ordering::Relaxed) as usize).min(h.slot_bytes as usize);
             // SAFETY: inside the slot; a concurrent write is detected by `seq` below.
             let data = unsafe { std::slice::from_raw_parts(self.map.slot(i), len) };
@@ -611,6 +643,41 @@ impl Reader {
             return Some(frame);
         }
         None
+    }
+
+    /// Ce que décrit la plus récente image (format, timecode…), sans la lire ni la marquer lue.
+    pub fn info(&self) -> Option<Frame> {
+        let h = self.map.header();
+        for _ in 0..8 {
+            let no = h.latest.load(Ordering::Acquire);
+            if no == 0 {
+                return None;
+            }
+            let m = &h.metas[(no % h.slots as u64) as usize];
+            let s1 = m.seq.load(Ordering::Acquire);
+            if s1 & 1 == 1 {
+                std::hint::spin_loop();
+                continue;
+            }
+            let f = meta_of(m)?;
+            fence(Ordering::Acquire);
+            if m.seq.load(Ordering::Relaxed) == s1 && f.no == no {
+                return Some(f);
+            }
+        }
+        None
+    }
+
+    /// Demande des images à l'écrivain pendant `d`, sans s'inscrire comme lecteur (l'aperçu du
+    /// Core, sur une sortie publiée seulement quand on la regarde). À renouveler.
+    pub fn watch(&self, d: Duration) {
+        let until = now_ms() + d.as_millis() as u64;
+        self.map.header().watch.fetch_max(until, Ordering::Relaxed);
+    }
+
+    /// Le processus qui écrit.
+    pub fn writer_pid(&self) -> u32 {
+        self.map.header().writer_pid.load(Ordering::Relaxed)
     }
 
     /// Attend jusqu'à `timeout` une image plus récente que la dernière lue (ou un changement d'état) :
@@ -806,5 +873,30 @@ mod tests {
         let junk = tmp("junk");
         fs::write(&junk, vec![1u8; 8192]).unwrap();
         assert!(Reader::observe(&junk).is_err());
+    }
+
+    #[test]
+    fn outputs_are_published_when_watched() {
+        std::env::remove_var("STRATA_SHARE_DIR");
+        assert_eq!(sdi_out_path("7B10A04E", 2), PathBuf::from("/dev/shm/strata-sdi-out-7b10a04e-2"));
+        assert_eq!(flow_path("flow-3"), PathBuf::from("/dev/shm/strata-2110-flow-3"));
+        let p = tmp("out");
+        let mut w = Writer::create(&p, 2, 64 * 32 * 2).unwrap();
+        assert!(!w.watched());
+        let r = Reader::observe(&p).unwrap();
+        assert_eq!(r.writer_pid(), std::process::id());
+        assert!(r.info().is_none());
+        r.watch(Duration::from_secs(5));
+        assert!(w.watched());
+        w.publish(&info(64, 32), &vec![1u8; 64 * 32 * 2]).unwrap();
+        // Les métadonnées seules, sans marquer l'image lue.
+        assert_eq!(r.info().unwrap().info.width, 64);
+        let mut r = r;
+        assert!(r.latest(&mut Vec::new()).is_some());
+        // Un lecteur inscrit compte aussi.
+        let p2 = tmp("out2");
+        let w2 = Writer::create(&p2, 2, 4096).unwrap();
+        let _r2 = Reader::open(&p2, "multiview").unwrap();
+        assert!(w2.watched());
     }
 }

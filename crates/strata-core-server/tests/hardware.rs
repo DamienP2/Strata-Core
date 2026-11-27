@@ -119,7 +119,9 @@ async fn hardware_settings_and_what_apps_read() {
     assert_eq!((card["name"].as_str(), card["present"].as_bool()), (Some("Plateau"), Some(true)));
     let share = srv.dir.join("shm").join(format!("strata-sdi-{}-1", quad_id.to_ascii_lowercase()));
     assert_eq!(card["connectors"][0], json!({"number": 1, "name": "Caméra 1", "function": "input", "device": quad["devices"][0], "share": share}));
-    assert_eq!(card["connectors"][1]["share"], Value::Null);
+    // Une sortie : où l'appli qui l'envoie publie ses images.
+    let out_share = srv.dir.join("shm").join(format!("strata-sdi-out-{}-2", quad_id.to_ascii_lowercase()));
+    assert_eq!(card["connectors"][1]["share"], json!(out_share));
     assert_eq!(card["connectors"][1]["function"], "output");
     assert_eq!(v["network"]["ndi"]["ip"], "127.0.0.1");
     assert_eq!(v["flows"][0]["blue"], "239.20.2.1:5004");
@@ -146,7 +148,51 @@ async fn hardware_settings_and_what_apps_read() {
     }
     assert_eq!(st, StatusCode::OK);
     let (st, _) = call(&srv.remote, "GET", &format!("/api/hardware/inputs/{quad_id}/2/preview.jpg"), host, c, None).await;
-    assert_eq!(st, StatusCode::NOT_FOUND, "an output has no picture");
+    assert_eq!(st, StatusCode::NOT_FOUND, "an output is not an input");
+
+    // La sortie : rien d'envoyé, puis une appli qui publie seulement quand l'aperçu regarde.
+    let (_, v) = call(&srv.remote, "GET", "/api/hardware/outputs", host, c, None).await;
+    assert_eq!((v["outputs"][0]["connector"].as_u64(), v["outputs"][0]["sending"].as_bool()), (Some(2), Some(false)), "{v}");
+    let url = format!("/api/hardware/outputs/{quad_id}/2/preview.jpg");
+    assert_eq!(call(&srv.remote, "GET", &url, host, c, None).await.0, StatusCode::NOT_FOUND);
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let app = {
+        let (stop, path) = (stop.clone(), out_share.clone());
+        std::thread::spawn(move || {
+            let mut w = strata_share::Writer::create(&path, 2, 64 * 32 * 2).unwrap();
+            let info = strata_share::FrameInfo {
+                width: 64,
+                height: 32,
+                stride: 128,
+                format: strata_share::Format::Uyvy,
+                rate: (25, 1),
+                interlaced: false,
+                timecode: None,
+            };
+            let mut sent = 0;
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                if w.watched() {
+                    w.publish(&info, &[128u8; 64 * 32 * 2]).unwrap();
+                    sent += 1;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            sent
+        })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let (st, _) = call(&srv.remote, "GET", &url, host, c, None).await;
+    assert_eq!(st, StatusCode::OK);
+    let (_, v) = call(&srv.remote, "GET", "/api/hardware/outputs", host, c, None).await;
+    assert_eq!((v["outputs"][0]["sending"].as_bool(), v["outputs"][0]["format"].as_str()), (Some(true), Some("32p25")), "{v}");
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(app.join().unwrap() > 0);
+
+    // Les flux : un flux reçu n'est rejoint que quand on regarde son aperçu.
+    let (_, v) = call(&srv.remote, "GET", "/api/hardware/flows", host, c, None).await;
+    assert_eq!(v["flows"][0], json!({"id": "flow-1", "reception": null}));
+    let (st, _) = call(&srv.remote, "GET", "/api/hardware/flows/flow-9/preview.jpg", host, c, None).await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
     // Plus d'entrée dans les réglages : la capture s'arrête, le partage disparaît.
     let (st, _) = call(
         &srv.remote,

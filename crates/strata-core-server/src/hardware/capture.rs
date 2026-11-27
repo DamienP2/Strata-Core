@@ -253,7 +253,7 @@ impl Meter {
     }
 }
 
-fn tc_text(t: &Timecode) -> String {
+pub fn tc_text(t: &Timecode) -> String {
     format!("{:02}:{:02}:{:02}{}{:02}", t.hours, t.minutes, t.seconds, if t.drop_frame { ';' } else { ':' }, t.frames)
 }
 
@@ -431,7 +431,11 @@ pub fn preview(share: &std::path::Path, width: u32) -> Result<Vec<u8>, String> {
     let mut r = Reader::observe(share).map_err(|e| format!("cannot read the input: {e}"))?;
     let mut buf = Vec::new();
     let f = r.latest(&mut buf).ok_or("no picture yet")?;
-    let (w, h, stride) = (f.info.width, f.info.height, f.info.stride as usize);
+    jpeg(&buf, f.info.width, f.info.height, f.info.stride as usize, width)
+}
+
+/// Une image UYVY réduite à `width` pixels au plus, en JPEG.
+pub fn jpeg(buf: &[u8], w: u32, h: u32, stride: usize, width: u32) -> Result<Vec<u8>, String> {
     if w < 2 || h < 2 || buf.len() < stride * h as usize {
         return Err("no picture yet".into());
     }
@@ -454,6 +458,15 @@ pub fn preview(share: &std::path::Path, width: u32) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
     jpeg_encoder::Encoder::new(&mut out, 72).encode(&rgb, ow as u16, oh as u16, jpeg_encoder::ColorType::Rgb).map_err(|e| e.to_string())?;
     Ok(out)
+}
+
+/// « 1080i50 », « 720p59.94 » (en entrelacé : des trames par seconde).
+pub fn format_name(info: &FrameInfo) -> String {
+    let (num, den) = (info.rate.0.max(1) as f64, info.rate.1.max(1) as f64);
+    let r = num / den * if info.interlaced { 2.0 } else { 1.0 };
+    let r = (r * 100.0).round() / 100.0;
+    let r = if r.fract() == 0.0 { format!("{r:.0}") } else { format!("{r}") };
+    format!("{}{}{r}", info.height, if info.interlaced { 'i' } else { 'p' })
 }
 
 #[cfg(test)]

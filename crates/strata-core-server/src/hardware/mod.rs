@@ -14,6 +14,8 @@
 //! - **GPU** : NVIDIA, Intel, AMD, leur pilote et ce qu'ils encodent (`gpu.rs`).
 //! - **Entrées** : chaque entrée SDI captée une fois par le Core et partagée avec les applis
 //!   (`capture.rs`, `strata-share`).
+//! - **Aperçus** : entrées et sorties SDI, flux ST 2110, une image par seconde seulement pendant
+//!   qu'on regarde (`preview.rs`, `st2110.rs`).
 //!
 //! Gardé dans `hardware.json`. Les applis le lisent par `GET /api/hardware/shared` (docs/APPLIS.md).
 pub mod capture;
@@ -22,6 +24,8 @@ pub mod decklink;
 pub mod gpu;
 pub mod ndi;
 pub mod net;
+pub mod preview;
+pub mod st2110;
 pub mod sync;
 
 use axum::{
@@ -351,6 +355,10 @@ pub fn routes() -> Router<Shared> {
         .route("/api/hardware/shared", get(shared))
         .route("/api/hardware/inputs", get(inputs))
         .route("/api/hardware/inputs/{card}/{n}/preview.jpg", get(preview))
+        .route("/api/hardware/outputs", get(outputs))
+        .route("/api/hardware/outputs/{card}/{n}/preview.jpg", get(output_preview))
+        .route("/api/hardware/flows", get(flows))
+        .route("/api/hardware/flows/{id}/preview.jpg", get(flow_preview))
 }
 
 /// Tient les captures en accord avec les réglages et les cartes présentes (bloquant).
@@ -371,12 +379,151 @@ async fn inputs(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiRes
     Ok(Json(json!({ "inputs": list })))
 }
 
-/// L'image la plus récente d'une entrée, en petit (JPEG).
+fn jpeg_response(jpeg: std::sync::Arc<Vec<u8>>) -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "no-store")], (*jpeg).clone())
+}
+
+/// L'image la plus récente d'une entrée, en petit (JPEG), une par seconde pour tous.
 async fn preview(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath((card, n)): UrlPath<(String, u32)>) -> ApiResult<impl IntoResponse> {
     require(me.admin)?;
     let share = s.captures.share_of(&card, n).ok_or((StatusCode::NOT_FOUND, "this input is not captured".to_string()))?;
-    let jpeg = blocking(move || capture::preview(&share, 480)).await?.map_err(|e| (StatusCode::NOT_FOUND, e))?;
-    Ok(([(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "no-store")], jpeg))
+    let s2 = s.clone();
+    let key = format!("in/{card}/{n}");
+    let jpeg = blocking(move || s2.previews.jpeg(&key, || preview::Feed::share(share))).await?.map_err(|e| (StatusCode::NOT_FOUND, e))?;
+    Ok(jpeg_response(jpeg))
+}
+
+/// Ce qu'une appli publie dans un partage de sortie : qui, quel format, quel timecode.
+fn published(path: &Path, s: &crate::state::AppState) -> Value {
+    let Ok(r) = strata_share::Reader::observe(path) else {
+        return json!({"sending": false, "share": path});
+    };
+    if r.gone() {
+        return json!({"sending": false, "share": path});
+    }
+    let pid = r.writer_pid();
+    // L'appli : STRATA_APP_ID dans l'environnement du processus (lancé par le Core).
+    let app = std::fs::read(format!("/proc/{pid}/environ"))
+        .ok()
+        .and_then(|env| env.split(|&b| b == 0).find_map(|kv| kv.strip_prefix(b"STRATA_APP_ID=").map(|v| String::from_utf8_lossy(v).into_owned())));
+    let name = app.as_deref().and_then(|a| s.apps.get(a)).map(|a| a.manifest.name);
+    let f = r.info();
+    json!({
+        "sending": true,
+        "share": path,
+        "app": app,
+        "appName": name,
+        "format": f.map(|f| capture::format_name(&f.info)),
+        "timecode": f.and_then(|f| f.info.timecode).map(|t| capture::tc_text(&t)),
+    })
+}
+
+/// Les sorties SDI réglées sur les cartes présentes, et ce que les applis y envoient.
+async fn outputs(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
+    require(me.admin)?;
+    let s2 = s.clone();
+    let v = blocking(move || {
+        let cfg = HardwareConfig::load(&s2.data_dir);
+        let (detected, _, _) = decklink::detect();
+        let mut out = Vec::new();
+        for c in &cfg.cards {
+            let Some(d) = detected.iter().find(|d| d.id == c.id) else { continue };
+            for (i, k) in c.connectors.iter().enumerate() {
+                if k.function != Function::Output || d.ports.get(i) == Some(&decklink::Port::In) {
+                    continue;
+                }
+                let mut v = published(&strata_share::sdi_out_path(&c.id, i as u32 + 1), &s2);
+                v["card"] = json!(c.id);
+                v["connector"] = json!(i + 1);
+                out.push(v);
+            }
+        }
+        json!({ "outputs": out })
+    })
+    .await?;
+    Ok(Json(v))
+}
+
+async fn output_preview(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath((card, n)): UrlPath<(String, u32)>) -> ApiResult<impl IntoResponse> {
+    require(me.admin)?;
+    let s2 = s.clone();
+    let key = format!("out/{card}/{n}");
+    let jpeg = blocking(move || s2.previews.jpeg(&key, || preview::Feed::share(strata_share::sdi_out_path(&card, n))))
+        .await?
+        .map_err(|e| (StatusCode::NOT_FOUND, e))?;
+    Ok(jpeg_response(jpeg))
+}
+
+/// Les pattes d'un flux reçu : le réseau rouge par le port média 1 (ou le port choisi), le bleu
+/// par le port 2.
+fn legs(cfg: &HardwareConfig, f: &Flow) -> Vec<st2110::Leg> {
+    let ip = |name: &str| net::interface_ip(name).unwrap_or(Ipv4Addr::UNSPECIFIED);
+    let r = &cfg.network;
+    match (r.media_mode, f.blue) {
+        (MediaMode::Redundant, Some(blue)) => {
+            vec![st2110::Leg { group: f.red, iface: ip(&r.media1), name: "red" }, st2110::Leg { group: blue, iface: ip(&r.media2), name: "blue" }]
+        }
+        (MediaMode::Redundant, None) => vec![st2110::Leg { group: f.red, iface: ip(&r.media1), name: "red" }],
+        (MediaMode::Separate, _) => {
+            vec![st2110::Leg { group: f.red, iface: ip(if f.port == 2 { &r.media2 } else { &r.media1 }), name: if f.port == 2 { "port2" } else { "port1" } }]
+        }
+    }
+}
+
+/// La clé de l'aperçu d'un flux : change avec ses adresses, pour qu'un flux modifié soit
+/// rejoint à nouveau.
+fn flow_key(cfg: &HardwareConfig, f: &Flow) -> String {
+    let legs: Vec<String> = legs(cfg, f).iter().map(|l| format!("{}@{}", l.group, l.iface)).collect();
+    format!("flow/{}/{:?}/{}", f.id, f.direction, legs.join(","))
+}
+
+/// Les flux ST 2110 : pour un flux sortant, ce que l'appli y envoie ; pour un flux entrant
+/// regardé, la réception de l'aperçu.
+async fn flows(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
+    require(me.admin)?;
+    let s2 = s.clone();
+    let v = blocking(move || {
+        let cfg = HardwareConfig::load(&s2.data_dir);
+        let list: Vec<Value> = cfg
+            .flows
+            .iter()
+            .map(|f| {
+                let mut v = match f.direction {
+                    Direction::Output => published(&strata_share::flow_path(&f.id), &s2),
+                    Direction::Input => json!({ "reception": s2.previews.flow_status(&flow_key(&cfg, f)) }),
+                };
+                v["id"] = json!(f.id);
+                v
+            })
+            .collect();
+        json!({ "flows": list })
+    })
+    .await?;
+    Ok(Json(v))
+}
+
+/// L'aperçu d'un flux vidéo : publié par l'appli qui l'envoie, ou reçu pendant qu'on le regarde.
+async fn flow_preview(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<impl IntoResponse> {
+    require(me.admin)?;
+    let s2 = s.clone();
+    let jpeg = blocking(move || {
+        let cfg = HardwareConfig::load(&s2.data_dir);
+        let f = cfg.flows.iter().find(|f| f.id == id).ok_or("no such flow")?;
+        if f.essence != Essence::Video {
+            return Err("only video flows have a picture".to_string());
+        }
+        let key = flow_key(&cfg, f);
+        match f.direction {
+            Direction::Output => s2.previews.jpeg(&key, || preview::Feed::share(strata_share::flow_path(&f.id))),
+            Direction::Input => {
+                let legs = legs(&cfg, f);
+                s2.previews.jpeg(&key, || preview::Feed::Flow(st2110::Receiver::start(legs)))
+            }
+        }
+    })
+    .await?
+    .map_err(|e| (StatusCode::NOT_FOUND, e))?;
+    Ok(jpeg_response(jpeg))
 }
 
 async fn read(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
@@ -476,7 +623,11 @@ async fn shared(State(s): State<Shared>, ConnectInfo(peer): ConnectInfo<SocketAd
                         "name": k.name,
                         "function": k.function,
                         "device": d.and_then(|d| d.devices.get(i)),
-                        "share": s2.captures.share_of(&c.id, i as u32 + 1),
+                        "share": match k.function {
+                            Function::Input => s2.captures.share_of(&c.id, i as u32 + 1),
+                            Function::Output => Some(strata_share::sdi_out_path(&c.id, i as u32 + 1)),
+                            Function::Unused => None,
+                        },
                     })).collect::<Vec<_>>(),
                 })
             })
@@ -494,7 +645,14 @@ async fn shared(State(s): State<Shared>, ConnectInfo(peer): ConnectInfo<SocketAd
                 "ptp": {"interface": r.ptp, "ip": ip(&r.ptp)},
             },
             "ndi": {"configDir": ndi::config_dir(&s2.data_dir), "discovery": cfg.ndi.discovery, "machine": cfg.ndi.machine},
-            "flows": cfg.flows,
+            // Un flux sortant : où l'appli qui l'envoie publie aussi ses images (pour l'aperçu).
+            "flows": cfg.flows.iter().map(|f| {
+                let mut v = json!(f);
+                if f.direction == Direction::Output {
+                    v["share"] = json!(strata_share::flow_path(&f.id));
+                }
+                v
+            }).collect::<Vec<_>>(),
             "ptp": cfg.ptp,
             // Les GPU : où encoder, décoder ou rendre.
             "gpus": gpu::detect().into_iter().map(|g| json!({"pci": g.pci, "vendor": g.vendor, "name": g.name, "driver": g.driver, "renderNode": g.render_node, "api": g.api, "encode": g.encode, "decode": g.decode, "ready": g.ready})).collect::<Vec<_>>(),

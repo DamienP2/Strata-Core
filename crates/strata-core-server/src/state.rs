@@ -31,6 +31,8 @@ pub struct AppState {
     pub clock: crate::hardware::sync::Watch,
     /// Les entrées SDI captées et partagées.
     pub captures: crate::hardware::capture::Captures,
+    /// Les aperçus des réglages (entrées, sorties, flux), seulement pendant qu'on regarde.
+    pub previews: crate::hardware::preview::Previews,
     /// Les relevés des ressources (Santé).
     pub resources: crate::resources::Resources,
     /// Les alertes (Santé).
@@ -66,6 +68,7 @@ impl AppState {
             updates: Updates::default(),
             clock: Default::default(),
             captures: Default::default(),
+            previews: Default::default(),
             resources: Default::default(),
             alerts: crate::alerts::Alerts::new(&data_dir),
             snmp_settings: Mutex::new(crate::snmp::SnmpSettings::load(&data_dir)),

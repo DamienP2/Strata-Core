@@ -6,7 +6,7 @@ import { Badge, Card, Dropdown, Empty, Field, FieldGrid, Modal, NumberField, Pag
 import { api } from '../../api';
 import { friendly } from '../../errors';
 import { HwSaveBar, useHardware } from './common';
-import { InputsCard } from './Inputs';
+import { FlowsCard, InputsCard, OutputsCard } from './Inputs';
 import { DeckLink3D, Pcie3D, SDI_COLOR, nicLook, printedOf, type Jack } from './Card3D';
 import { cardOf, editCard, editHw, loadHw, type DetectedCard, type Flow, type Fn, type HwConfig, type Nic, type Port, type Snapshot } from './store';
 
@@ -137,6 +137,7 @@ export function SdiPage() {
         dl.cards.map((d) => <SdiCard key={d.id} d={d} snap={snap} draft={draft} />)
       )}
       <InputsCard cfg={snap.config} />
+      <OutputsCard cfg={snap.config} />
       {absent.map((c) => (
         <Card
           key={c.id}
@@ -360,7 +361,7 @@ export function St2110Page() {
   const hw = useHardware();
   const [editing, setEditing] = useState<{ flow: Flow; index: number } | null>(null);
   if (!hw) return null;
-  const [, draft] = hw;
+  const [snap, draft] = hw;
   const redundant = draft.network.mediaMode !== 'separate';
   const n = draft.network;
   const blank: Flow = { id: '', name: '', direction: 'input', essence: 'video', red: '', blue: '', port: 1 };
@@ -440,6 +441,7 @@ export function St2110Page() {
           </tbody>
         </table>
       )}
+      <FlowsCard flows={snap.config.flows} />
       {editing && (
         <FlowEditor
           flow={editing.flow}

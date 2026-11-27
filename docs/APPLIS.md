@@ -141,9 +141,9 @@ GET $STRATA_CORE_URL/api/hardware/shared
 
 | Partie | Contenu |
 | --- | --- |
-| `sdi` | les cartes DeckLink : nom, modèle, présente ou non, genlock ; pour chaque connecteur (`number` = SDI n, numéro logiciel), son nom, sa fonction (`input`, `output`, `unused`), l'appareil Desktop Video (`device`) et, pour une entrée captée, le fichier à lire (`share`) |
+| `sdi` | les cartes DeckLink : nom, modèle, présente ou non, genlock ; pour chaque connecteur (`number` = SDI n, numéro logiciel), son nom, sa fonction (`input`, `output`, `unused`), l'appareil Desktop Video (`device`) et le fichier partagé (`share`) : à lire pour une entrée captée, à écrire pour une sortie |
 | `network` | les interfaces et leur adresse : `management`, `ndi`, `media1`, `media2`, `ptp` ; `mediaMode` : `redundant` (SMPTE 2022-7 : `media1` rouge, `media2` bleu) ou `separate` (deux ports indépendants) |
-| `flows` | les flux ST 2110 : nom, sens, essence, `red` (et `blue` en 2022-7), `port` (1 ou 2, ports indépendants) |
+| `flows` | les flux ST 2110 : identifiant (`id`), nom, sens, essence, `red` (et `blue` en 2022-7), `port` (1 ou 2, ports indépendants) ; pour un flux envoyé, le fichier où publier ses images (`share`) |
 | `ndi` | le dossier des réglages NDI (`configDir`), le serveur de découverte, le nom de machine |
 | `ptp` | le domaine PTP, le décalage TAI − UTC |
 | `gpus` | les GPU : fabricant, nom, pilote, nœud de rendu (`renderNode`), interface (`nvenc` ou `vaapi`), codecs encodés et décodés, prêt ou non |
@@ -210,6 +210,39 @@ loop {
 - Le format : une carte qui détecte le format suit le signal d'elle-même ; les autres sont ouvertes
   en 1080i50.
 - Pas encore d'audio : le pont DeckLink du Core ne capte que la vidéo et le timecode.
+
+## Montrer ce qu'on envoie (sorties SDI, flux ST 2110)
+
+Une appli qui envoie une sortie SDI ou un flux ST 2110 vidéo publie aussi ce qu'elle envoie, dans
+le fichier `share` de la sortie ou du flux (`/api/hardware/shared`) :
+`/dev/shm/strata-sdi-out-<carte>-<n>` ou `/dev/shm/strata-2110-<flux>`. *Réglages › Matériel*
+en montre l'image et le nom de l'appli ; une autre appli peut la lire comme une entrée.
+
+**Seulement quand quelqu'un regarde** : l'aperçu des réglages le demande pendant qu'il est à
+l'écran ; sinon rien n'est copié.
+
+```rust
+use strata_share::{FrameInfo, Writer};
+
+let mut w = Writer::create(share.as_ref(), 3, 1920 * 1080 * 2)?;
+loop {
+    // … l'image part sur la sortie …
+    if w.watched() {
+        w.publish(&info, &frame_uyvy)?; // une image par seconde suffit à l'aperçu
+    } else {
+        w.beat();
+    }
+}
+```
+
+- Même format que les entrées : UYVY 8 bits, avec cadence, entrelacement et timecode. Une image
+  sur 25 suffit ; toutes, si une autre appli la lit.
+- Le fichier disparaît avec le `Writer` : l'appli qui s'arrête n'envoie plus rien, les réglages
+  le montrent.
+- Un exemple complet : `crates/strata-share/examples/send.rs`.
+
+Les flux ST 2110 **reçus** n'ont rien à publier : le Core les rejoint lui-même pour l'aperçu,
+seulement pendant qu'on le regarde (une image par seconde), et les quitte ensuite.
 
 ## Déclarer une alerte
 
