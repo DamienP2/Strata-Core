@@ -266,6 +266,8 @@ export interface PortLoad {
 
 export interface Capacity {
   redundant: boolean;
+  /** Le format maison (« 1080i50 »). */
+  house?: string | null;
   headroom: number;
   ports: PortLoad[];
   formats: { name: string; mbps: number; rx?: number | null; tx?: number | null }[];

@@ -98,6 +98,8 @@ pub struct FormatRoom {
 #[serde(rename_all = "camelCase")]
 pub struct Capacity {
     pub redundant: bool,
+    /// Le format maison (en 1080), pour le résumé « encore N flux ».
+    pub house: Option<String>,
     pub headroom: f64,
     pub ports: Vec<PortLoad>,
     pub formats: Vec<FormatRoom>,
@@ -213,7 +215,8 @@ pub fn evaluate(s: &AppState) -> Capacity {
         });
     }
     let formats = room(&cfg, redundant, &ports);
-    Capacity { redundant, headroom: HEADROOM, ports, formats }
+    let house = cfg.video_of(&Flow { format: String::new(), ..blank() }).map(crate::nmos::sdp::format_name);
+    Capacity { redundant, house, headroom: HEADROOM, ports, formats }
 }
 
 /// Combien de flux de chaque format tiennent encore.

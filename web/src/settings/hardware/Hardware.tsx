@@ -2,7 +2,8 @@
 // les cinq pages (store.ts) et enregistrés d'un coup.
 import { useState } from 'react';
 import { Cable, Gauge, MonitorPlay, Network as NetIcon, Pencil, Plus, Radio, RefreshCw, Search, Trash2, Waves } from 'lucide-react';
-import { Badge, Card, Dropdown, Empty, Field, FieldGrid, Modal, NumberField, PageHead, Segmented, Switch, confirmDialog, t, tn, toast, type DropOption } from '@strata/ui';
+import { Badge, Card, Dropdown, Empty, Field, FieldGrid, InfoTip, Modal, NumberField, PageHead, Segmented, SubTabs, Switch, confirmDialog, t, tn, toast, type DropOption } from '@strata/ui';
+import { navigate } from '../../router';
 import { api } from '../../api';
 import { friendly } from '../../errors';
 import { HwSaveBar, useHardware } from './common';
@@ -244,7 +245,47 @@ function nicOptions(nics: Nic[]): DropOption<string>[] {
   return [{ value: '', label: t('None') }, ...nics.map((n) => ({ value: n.name, label: n.name, note: n.ipv4[0] ?? '' }))];
 }
 
-/** Une carte réseau ajoutée (plusieurs ports sur une même carte PCI), en 3D. */
+type RoleKey = 'management' | 'ndi' | 'ptp' | 'media1' | 'media2';
+
+/** Les rôles qu'un port peut prendre, dans l'ordre où on les propose. */
+function roleChoices(cfg: HwConfig): { k: RoleKey; label: string; color: string }[] {
+  const redundant = cfg.network.mediaMode !== 'separate';
+  return [
+    { k: 'media1', label: redundant ? t('ST 2110 red') : t('Media 1'), color: redundant ? ROLE_COLOR.red : ROLE_COLOR.media1 },
+    { k: 'media2', label: redundant ? t('ST 2110 blue') : t('Media 2'), color: redundant ? ROLE_COLOR.blue : ROLE_COLOR.media2 },
+    { k: 'ptp', label: 'PTP', color: ROLE_COLOR.ptp },
+    { k: 'ndi', label: 'NDI', color: ROLE_COLOR.ndi },
+    { k: 'management', label: t('Management'), color: ROLE_COLOR.management },
+  ];
+}
+
+/** Les rôles d'un port, d'un clic : un rôle va à un seul port (pris ailleurs, il y est retiré). */
+function RolePicker({ name, cfg }: { name: string; cfg: HwConfig }) {
+  const pick = (k: RoleKey, on: boolean) =>
+    editHw((x) => {
+      const n = x.network as Record<RoleKey, string>;
+      n[k] = on ? '' : name;
+      // Les deux ports média sont deux interfaces différentes.
+      if (!on && k === 'media1' && n.media2 === name) n.media2 = '';
+      if (!on && k === 'media2' && n.media1 === name) n.media1 = '';
+    });
+  return (
+    <div className="core-role-pick" onClick={(e) => e.stopPropagation()}>
+      <span className="st-muted">{t('Role of {name}', { name })}</span>
+      {roleChoices(cfg).map((r) => {
+        const on = (cfg.network as Record<RoleKey, string>)[r.k] === name;
+        return (
+          <button key={r.k} type="button" className={`core-hw-role ${on ? 'on' : ''}`} style={{ ['--c' as string]: r.color }} onClick={() => pick(r.k, on)}>
+            {r.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Une carte réseau ajoutée (plusieurs ports sur une même carte PCI), en 3D ; un clic sur un port
+ *  donne ses rôles. */
 function NicCard({ ports, cfg }: { ports: Nic[]; cfg: HwConfig }) {
   const [sel, setSel] = useState<number | null>(null);
   const sfp = ports.some((p) => p.connector === 'sfp');
@@ -257,15 +298,44 @@ function NicCard({ ports, cfg }: { ports: Nic[]; cfg: HwConfig }) {
     <Card icon={<NetIcon size={16} />} title={model} actions={<span className="st-muted st-mono">{ports[0].pci}</span>}>
       <div className="core-hw-body">
         <div className="core-hw-figure">
-          <Pcie3D look={nicLook(ports[0].model, ports.length, sfp)} kind={sfp ? 'sfp' : 'rj45'} jacks={jacks} sel={sel} onPick={setSel} title={model} />
+          <Pcie3D look={nicLook(ports[0].model, ports.length, sfp)} kind={sfp ? 'sfp' : 'rj45'} jacks={jacks} sel={sel} onPick={(k) => setSel(sel === k ? null : k)} title={model} />
         </div>
         <div className="core-hw-ports">
           {ports.map((p, i) => (
-            <NicRow key={p.name} n={p} cfg={cfg} sel={sel === i} onClick={() => setSel(i)} />
+            <NicRow key={p.name} n={p} cfg={cfg} sel={sel === i} onClick={() => setSel(sel === i ? null : i)} />
           ))}
+          {sel !== null && ports[sel] && <RolePicker name={ports[sel].name} cfg={cfg} />}
         </div>
       </div>
     </Card>
+  );
+}
+
+/** Les interfaces de la carte mère et les virtuelles : repliées quand il y a des cartes ajoutées. */
+function OtherNics({ nics, cfg, folded }: { nics: Nic[]; cfg: HwConfig; folded: boolean }) {
+  const [sel, setSel] = useState<string | null>(null);
+  const list = (
+    <div className="core-hw-ports">
+      {nics.map((n) => (
+        <NicRow key={n.name} n={n} cfg={cfg} sel={sel === n.name} onClick={() => setSel(sel === n.name ? null : n.name)} />
+      ))}
+      {sel && <RolePicker name={sel} cfg={cfg} />}
+    </div>
+  );
+  if (!folded)
+    return (
+      <Card icon={<NetIcon size={16} />} title={t('Motherboard and others')}>
+        {list}
+      </Card>
+    );
+  const roles = nics.flatMap((n) => rolesOf(cfg, n.name));
+  return (
+    <details className="core-fold" open={roles.length > 0 || undefined}>
+      <summary>
+        {tn(nics.length, '{n} other interface', '{n} other interfaces')} <span className="st-muted">{t('motherboard, virtual')}</span>
+      </summary>
+      <div className="core-fold-body">{list}</div>
+    </details>
   );
 }
 
@@ -294,73 +364,167 @@ function rate(mbps: number): string {
   return mbps >= 1000 ? `${(mbps / 1000).toLocaleString(undefined, { maximumFractionDigits: 1 })} Gb/s` : `${Math.round(mbps)} Mb/s`;
 }
 
-/** La charge des ports média en direct, et les flux qui y tiennent encore. */
-function PortsLoadCard({ cap }: { cap: Capacity | null }) {
+/** La charge des ports média : une tuile par port, la place restante au format maison, le détail
+ *  par format replié. */
+function PortsLoad({ cap }: { cap: Capacity | null }) {
   if (!cap || cap.ports.length === 0) return null;
   const margin = Math.round(cap.headroom * 100);
-  const side = (p: Capacity['ports'][number], dir: 'rx' | 'tx') => {
+  const row = (p: Capacity['ports'][number], dir: 'rx' | 'tx') => {
     const used = p.used[dir];
     const pctOf = p.speed ? (used / p.speed) * 100 : 0;
     return (
-      <div className="core-use" title={p.measured ? t('Measured {m} · planned {p}', { m: rate(p.measured[dir]), p: rate(p.planned[dir]) }) : t('Planned {p}', { p: rate(p.planned[dir]) })}>
-        {p.speed ? <Meter value={pctOf} warn={margin - 10} bad={margin} /> : null}
-        <span className="st-mono">{rate(used)}</span>
-        {p.speed ? <span className="st-muted">{Math.round(pctOf)} %</span> : null}
+      <div className="core-port-row" title={p.measured ? t('Measured {m} · planned {p}', { m: rate(p.measured[dir]), p: rate(p.planned[dir]) }) : t('Planned {p}', { p: rate(p.planned[dir]) })}>
+        <span className="st-muted">{dir === 'rx' ? t('Received') : t('Sent')}</span>
+        {p.speed ? <Meter value={pctOf} warn={margin - 10} bad={margin} /> : <span />}
+        <span className="st-mono">
+          {rate(used)}
+          {p.speed ? <span className="st-muted"> · {Math.round(pctOf)} %</span> : null}
+        </span>
       </div>
     );
   };
+  const house = cap.formats.find((f) => f.name === cap.house) ?? cap.formats[0];
+  const help = cap.redundant
+    ? t('Used: the larger of the measured rate and what the flows set need. Margin: {m} % of the link. In SMPTE 2022-7 each flow uses both ports.', { m: margin })
+    : t('Used: the larger of the measured rate and what the flows set need. Margin: {m} % of the link.', { m: margin });
   return (
-    <Card icon={<Gauge size={16} />} title={t('Media ports load')}>
-      <table className="st-table">
-        <thead>
-          <tr>
-            <th>{t('Port')}</th>
-            <th>{t('Link')}</th>
-            <th>{t('Received')}</th>
-            <th>{t('Sent')}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {cap.ports.map((p) => (
-            <tr key={p.iface}>
-              <td>
-                <strong>{cap.redundant ? (p.n === 1 ? t('Port 1 · red') : t('Port 2 · blue')) : t('Port {n}', { n: p.n })}</strong> <span className="st-mono st-muted">{p.iface}</span>
-              </td>
-              <td>
-                {p.up === false ? <Badge tone="bad">{t('Down')}</Badge> : p.speed ? rate(p.speed) : <span className="st-muted">{t('Unknown')}</span>}
-                {p.dropped ? <span className="st-muted"> · {tn(Math.round(p.dropped), '{n} packet dropped/s', '{n} packets dropped/s')}</span> : null}
-              </td>
-              <td>{side(p, 'rx')}</td>
-              <td>{side(p, 'tx')}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <p className="st-muted core-note">
-        {cap.redundant
-          ? t('Used: the larger of the measured rate and what the flows set need. Margin: {m} % of the link. In SMPTE 2022-7 each flow uses both ports.', { m: margin })
-          : t('Used: the larger of the measured rate and what the flows set need. Margin: {m} % of the link.', { m: margin })}
+    <Card
+      icon={<Gauge size={16} />}
+      title={
+        <>
+          {t('Load')} <InfoTip text={help} />
+        </>
+      }
+    >
+      <div className="core-port-tiles">
+        {cap.ports.map((p) => (
+          <div key={p.iface} className="core-port-tile">
+            <header>
+              <strong>{cap.redundant ? (p.n === 1 ? t('Port 1 · red') : t('Port 2 · blue')) : t('Port {n}', { n: p.n })}</strong>
+              <span className="st-mono st-muted">{p.iface}</span>
+              <span className="st-spacer" />
+              {p.up === false ? <Badge tone="bad">{t('Down')}</Badge> : <span className="st-muted">{p.speed ? rate(p.speed) : t('Unknown')}</span>}
+            </header>
+            {row(p, 'rx')}
+            {row(p, 'tx')}
+            {p.dropped ? <span className="st-muted">{tn(Math.round(p.dropped), '{n} packet dropped/s', '{n} packets dropped/s')}</span> : null}
+          </div>
+        ))}
+      </div>
+      {house && house.rx != null && house.tx != null && (
+        <p className="core-room">{t('Still room for {rx} received and {tx} sent flows in {format}.', { rx: String(house.rx), tx: String(house.tx), format: house.name })}</p>
+      )}
+      <details className="core-fold core-fold-inline">
+        <summary>{t('Room by format')}</summary>
+        <div className="core-fold-body">
+          <table className="st-table">
+            <thead>
+              <tr>
+                <th>{t('Format')}</th>
+                <th>{t('Rate')}</th>
+                <th>{t('Still room to receive')}</th>
+                <th>{t('Still room to send')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cap.formats.map((f) => (
+                <tr key={f.name}>
+                  <td>{f.name}</td>
+                  <td className="st-mono">{rate(f.mbps)}</td>
+                  <td>{f.rx ?? '—'}</td>
+                  <td>{f.tx ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </Card>
+  );
+}
+
+const IO_HELP: Record<'off' | 'kernel' | 'afXdp' | 'dpdk', string> = {
+  off: 'The flows are only set: the apps receive and send them themselves.',
+  kernel: 'Through the kernel: simple, for a few HD flows.',
+  afXdp: 'AF_XDP: the port stays with the kernel, much faster.',
+  dpdk: 'DPDK: the fastest (UHD, many flows); the ports are reserved for ST 2110 and need their own address.',
+};
+
+/** Les ports média du ST 2110 : leur usage (2022-7 ou séparés), qui les tient (MTL), lesquels. */
+function MediaPortsCard({ draft }: { draft: HwConfig }) {
+  const r = draft.network;
+  const redundant = r.mediaMode !== 'separate';
+  const set = (k: keyof HwConfig['network'], v: string) => editHw((x) => void ((x.network as Record<string, string>)[k] = v));
+  const io = r.mediaIo ?? 'off';
+  const modeHelp = redundant
+    ? t('Each flow goes through both ports at once, on two networks: if one fails, the other carries on.')
+    : t('Each flow goes through one port or the other: twice the bandwidth, no redundancy.');
+  return (
+    <Card
+      icon={<Waves size={16} />}
+      title={t('Media ports')}
+      actions={
+        <button type="button" className="st-btn small" onClick={() => navigate('/reglages/reseau')}>
+          <NetIcon size={13} /> {t('Choose the ports')}
+        </button>
+      }
+    >
+      <p className="core-room">
+        {redundant
+          ? t('Port 1 (red): {a} · port 2 (blue): {b}', { a: r.media1 || '—', b: r.media2 || '—' })
+          : t('Port 1: {a} · port 2: {b}', { a: r.media1 || '—', b: r.media2 || '—' })}
       </p>
-      <table className="st-table">
-        <thead>
-          <tr>
-            <th>{t('Format')}</th>
-            <th>{t('Rate')}</th>
-            <th>{t('Still room to receive')}</th>
-            <th>{t('Still room to send')}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {cap.formats.map((f) => (
-            <tr key={f.name}>
-              <td>{f.name}</td>
-              <td className="st-mono">{rate(f.mbps)}</td>
-              <td>{f.rx ?? '—'}</td>
-              <td>{f.tx ?? '—'}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <FieldGrid two>
+        <Field
+          label={
+            <>
+              {t('Use of the two ports')} <InfoTip text={modeHelp} />
+            </>
+          }
+          group
+        >
+          <Segmented<'redundant' | 'separate'>
+            value={redundant ? 'redundant' : 'separate'}
+            onChange={(v) => set('mediaMode', v)}
+            options={[
+              { value: 'redundant', label: t('SMPTE 2022-7 (red + blue)') },
+              { value: 'separate', label: t('Two separate ports') },
+            ]}
+          />
+        </Field>
+        <Field
+          label={
+            <>
+              {t('Flows received and sent by the Core (MTL)')} <InfoTip text={t(IO_HELP[io])} />
+            </>
+          }
+          group
+        >
+          <Segmented<'off' | 'kernel' | 'afXdp' | 'dpdk'>
+            value={io}
+            onChange={(v) => set('mediaIo', v)}
+            options={[
+              { value: 'off', label: t('No') },
+              { value: 'kernel', label: t('Kernel') },
+              { value: 'afXdp', label: 'AF_XDP' },
+              { value: 'dpdk', label: 'DPDK' },
+            ]}
+          />
+        </Field>
+      </FieldGrid>
+      {io === 'dpdk' && (
+        <>
+          <p className="st-muted core-note">{t(IO_HELP.dpdk)}</p>
+          <FieldGrid two>
+            <Field label={t('Address of port 1')}>
+              <input className="st-mono" value={r.media1Address ?? ''} placeholder="10.10.1.21/24" onChange={(e) => set('media1Address', e.target.value)} />
+            </Field>
+            <Field label={t('Address of port 2')}>
+              <input className="st-mono" value={r.media2Address ?? ''} placeholder="10.20.1.21/24" onChange={(e) => set('media2Address', e.target.value)} />
+            </Field>
+          </FieldGrid>
+        </>
+      )}
     </Card>
   );
 }
@@ -373,147 +537,89 @@ function NmosCard({ draft, opts, status }: { draft: HwConfig; opts: DropOption<s
       x.nmos = { ...(x.nmos ?? { enabled: false, port: 3212, interface: '' }) };
       fn(x.nmos);
     });
+  const badge = !n.enabled ? undefined : status?.error ? <Badge tone="bad">{t('Error')}</Badge> : status?.running ? <Badge tone="ok">{t('Announced')}</Badge> : undefined;
   return (
-    <Card icon={<Cable size={16} />} title="NMOS (IS-04 · IS-05)">
-      <Switch checked={n.enabled} onChange={(v) => set((x) => void (x.enabled = v))} label={t('Announce the ST 2110 flows to an NMOS controller')} />
-      <p className="st-muted core-note">
-        {t('Without a registry: the Core announces itself in mDNS (peer-to-peer) and the controller connects the receivers. The addresses of the flows sent stay those set here.')}
-      </p>
+    <Card icon={<Cable size={16} />} title="NMOS (IS-04 · IS-05)" actions={badge}>
+      <span className="core-service">
+        <Switch checked={n.enabled} onChange={(v) => set((x) => void (x.enabled = v))} label={t('Announce the ST 2110 flows to an NMOS controller')} />
+        <InfoTip text={t('Without a registry: the Core announces itself in mDNS (peer-to-peer) and the controller connects the receivers. The addresses of the flows sent stay those set here.')} />
+      </span>
       {n.enabled && (
         <>
+          {status?.error ? <p className="core-warn">{friendly(status.error)}</p> : status?.running && status.url ? <p className="core-note st-mono">{status.url}</p> : null}
           <FieldGrid two>
-            <Field label={t('Interface')} hint={t('The controller reaches the Core through it.')} group>
+            <Field
+              label={
+                <>
+                  {t('Interface')} <InfoTip text={t('The controller reaches the Core through it.')} />
+                </>
+              }
+              group
+            >
               <Dropdown value={n.interface} options={[{ value: '', label: t('Management interface') }, ...opts.filter((o) => o.value !== '')]} onChange={(v) => set((x) => void (x.interface = v))} />
             </Field>
             <Field label={t('Port')}>
               <NumberField value={n.port} min={1} max={65535} onChange={(v) => set((x) => void (x.port = v))} />
             </Field>
           </FieldGrid>
-          <FieldGrid two>
-            <Field label={t('Allowed controllers')} hint={t('Addresses or networks (10.0.0.0/24); empty: any address of this network.')}>
-              <TagInput value={n.allowed ?? []} onChange={(v) => set((x) => void (x.allowed = v))} placeholder="10.10.0.0/24" />
-            </Field>
-            <Field label={t('Web pages allowed to connect')} hint={t('Only for a controller that runs in a web browser (http://10.0.0.5:8080). Others can only read.')}>
-              <TagInput value={n.origins ?? []} onChange={(v) => set((x) => void (x.origins = v))} placeholder="http://10.10.0.5:8080" />
-            </Field>
-          </FieldGrid>
-          {status?.error ? (
-            <p className="core-note">
-              <Badge tone="bad">{t('Error')}</Badge> {friendly(status.error)}
-            </p>
-          ) : status?.running && status.url ? (
-            <p className="core-note">
-              <Badge tone="ok">{t('Announced')}</Badge> <span className="st-mono">{status.url}</span>
-            </p>
-          ) : null}
+          <details className="core-fold core-fold-inline" open={(n.allowed?.length ?? 0) + (n.origins?.length ?? 0) > 0 || undefined}>
+            <summary>{t('Who may connect')}</summary>
+            <div className="core-fold-body">
+              <FieldGrid two>
+                <Field
+                  label={
+                    <>
+                      {t('Allowed controllers')} <InfoTip text={t('Addresses or networks (10.0.0.0/24); empty: any address of this network.')} />
+                    </>
+                  }
+                >
+                  <TagInput value={n.allowed ?? []} onChange={(v) => set((x) => void (x.allowed = v))} placeholder="10.10.0.0/24" />
+                </Field>
+                <Field
+                  label={
+                    <>
+                      {t('Web pages allowed to connect')} <InfoTip text={t('Only for a controller that runs in a web browser (http://10.0.0.5:8080). Others can only read.')} />
+                    </>
+                  }
+                >
+                  <TagInput value={n.origins ?? []} onChange={(v) => set((x) => void (x.origins = v))} placeholder="http://10.10.0.5:8080" />
+                </Field>
+              </FieldGrid>
+            </div>
+          </details>
         </>
       )}
     </Card>
   );
 }
 
+/** Réseau : les cartes de la machine et leurs rôles (un clic sur un port). Le ST 2110 (usage des
+ *  ports, charge, NMOS) est sur sa page. */
 export function NetworkPage() {
-  const nmos = usePoll<NmosStatus>('/api/hardware/nmos');
-  const cap = usePoll<Capacity>('/api/hardware/ports');
   const hw = useHardware();
   if (!hw) return null;
   const [snap, draft] = hw;
-  const r = draft.network;
-  const opts = nicOptions(snap.nics);
-  const setRole = (k: keyof HwConfig['network'], v: string) => editHw((x) => void ((x.network as Record<string, string>)[k] = v));
-  // Les cartes ajoutées, par carte PCI ; le reste (carte mère, virtuelles) dans un tableau.
+  // Les cartes ajoutées, par carte PCI ; le reste (carte mère, virtuelles) à part.
   const cards = new Map<string, Nic[]>();
   const rest: Nic[] = [];
   for (const n of snap.nics) {
     if (n.pci && !n.onboard && n.kind === 'ethernet') cards.set(n.pci, [...(cards.get(n.pci) ?? []), n]);
     else rest.push(n);
   }
-  const redundant = r.mediaMode !== 'separate';
+  const unset = roleChoices(draft).filter((r) => !(draft.network as Record<RoleKey, string>)[r.k]);
   return (
     <>
       <PageHead title={t('Network')} sub={tn(snap.nics.length, '{n} interface', '{n} interfaces')}>
         <Rescan />
       </PageHead>
-      <Card icon={<Waves size={16} />} title={t('ST 2110 media ports')}>
-        <Segmented<'redundant' | 'separate'>
-          value={redundant ? 'redundant' : 'separate'}
-          onChange={(v) => setRole('mediaMode', v)}
-          options={[
-            { value: 'redundant', label: t('SMPTE 2022-7 (red + blue)') },
-            { value: 'separate', label: t('Two separate ports') },
-          ]}
-        />
-        <p className="st-muted core-note">
-          {redundant ? t('Each flow goes through both ports at once, on two networks: if one fails, the other carries on.') : t('Each flow goes through one port or the other: twice the bandwidth, no redundancy.')}
-        </p>
-        <FieldGrid two>
-          <Field label={redundant ? t('Port 1 · red network') : t('Media port 1')} group>
-            <Dropdown value={r.media1} options={opts} onChange={(v) => setRole('media1', v)} />
-          </Field>
-          <Field label={redundant ? t('Port 2 · blue network') : t('Media port 2')} group>
-            <Dropdown value={r.media2} options={opts} onChange={(v) => setRole('media2', v)} />
-          </Field>
-        </FieldGrid>
-        <Field label={t('Flows received and sent by the Core (MTL)')} group>
-          <Segmented<'off' | 'kernel' | 'afXdp' | 'dpdk'>
-            value={r.mediaIo ?? 'off'}
-            onChange={(v) => setRole('mediaIo', v)}
-            options={[
-              { value: 'off', label: t('No') },
-              { value: 'kernel', label: t('Kernel') },
-              { value: 'afXdp', label: 'AF_XDP' },
-              { value: 'dpdk', label: 'DPDK' },
-            ]}
-          />
-        </Field>
-        <p className="st-muted core-note">
-          {
-            {
-              off: t('The flows are only set: the apps receive and send them themselves.'),
-              kernel: t('Through the kernel: simple, for a few HD flows.'),
-              afXdp: t('AF_XDP: the port stays with the kernel, much faster.'),
-              dpdk: t('DPDK: the fastest (UHD, many flows); the ports are reserved for ST 2110 and need their own address.'),
-            }[r.mediaIo ?? 'off']
-          }
-        </p>
-        {r.mediaIo === 'dpdk' && (
-          <FieldGrid two>
-            <Field label={t('Address of port 1')}>
-              <input className="st-mono" value={r.media1Address ?? ''} placeholder="10.10.1.21/24" onChange={(e) => setRole('media1Address', e.target.value)} />
-            </Field>
-            <Field label={t('Address of port 2')}>
-              <input className="st-mono" value={r.media2Address ?? ''} placeholder="10.20.1.21/24" onChange={(e) => setRole('media2Address', e.target.value)} />
-            </Field>
-          </FieldGrid>
-        )}
-      </Card>
-      <PortsLoadCard cap={cap} />
-      <NmosCard draft={draft} opts={opts} status={nmos} />
-      <Card icon={<NetIcon size={16} />} title={t('Roles')}>
-        <FieldGrid>
-          <Field label={t('Management')} hint={t('The control room reaches the cockpit through it.')} group>
-            <Dropdown value={r.management} options={opts} onChange={(v) => setRole('management', v)} />
-          </Field>
-          <Field label="NDI" hint={t('NDI sends and looks for sources on it only.')} group>
-            <Dropdown value={r.ndi} options={opts} onChange={(v) => setRole('ndi', v)} />
-          </Field>
-          <Field label="PTP" hint={t('ptp4l runs on it.')} group>
-            <Dropdown value={r.ptp} options={opts} onChange={(v) => setRole('ptp', v)} />
-          </Field>
-        </FieldGrid>
-      </Card>
+      <p className="st-muted core-note">
+        {t('Click a port to give it its roles.')}
+        {unset.length > 0 && <> {t('Not given yet: {roles}.', { roles: unset.map((r) => r.label).join(', ') })}</>}
+      </p>
       {[...cards.values()].map((ports) => (
         <NicCard key={ports[0].pci} ports={ports.sort((a, b) => (a.port ?? 0) - (b.port ?? 0))} cfg={draft} />
       ))}
-      {rest.length > 0 && (
-        <Card icon={<NetIcon size={16} />} title={t('Motherboard and others')}>
-          <div className="core-hw-ports">
-            {rest.map((n) => (
-              <NicRow key={n.name} n={n} cfg={draft} />
-            ))}
-          </div>
-        </Card>
-      )}
+      {rest.length > 0 && <OtherNics nics={rest} cfg={draft} folded={cards.size > 0} />}
       <HwSaveBar />
     </>
   );
@@ -618,24 +724,39 @@ export function St2110Page() {
   const io = usePoll<{ flows: { id: string; io?: { state: string; format?: string | null; lost: number; error?: string | null } | null }[]; io?: { active: boolean } }>('/api/hardware/flows');
   const ioOf = (id: string) => (io?.io?.active ? io.flows.find((x) => x.id === id)?.io : undefined);
   const nmos = usePoll<NmosStatus>('/api/hardware/nmos');
+  const [tab, setTab] = useState<'flows' | 'ports' | 'nmos'>('flows');
+  const cap = usePoll<Capacity>(tab === 'ports' ? '/api/hardware/ports' : null);
   if (!hw) return null;
   const [snap, draft] = hw;
   const redundant = draft.network.mediaMode !== 'separate';
-  const n = draft.network;
   const blank: Flow = { id: '', name: '', direction: 'input', essence: 'video', red: '', blue: '', port: 1 };
+  const nmosOn = draft.nmos?.enabled ?? false;
   return (
     <>
-      <PageHead title="ST 2110" sub={`${tn(draft.flows.length, '{n} flow', '{n} flows')} · ${redundant ? t('SMPTE 2022-7 (red + blue)') : t('Two separate ports')}`}>
-        <button type="button" className="st-btn primary" onClick={() => setEditing({ flow: blank, index: -1 })}>
-          <Plus size={14} /> {t('New flow')}
-        </button>
-      </PageHead>
-      <p className="st-muted core-note">
-        {redundant
-          ? t('Port 1 (red): {a} · port 2 (blue): {b} — set in Network.', { a: n.media1 || '—', b: n.media2 || '—' })
-          : t('Port 1: {a} · port 2: {b} — set in Network.', { a: n.media1 || '—', b: n.media2 || '—' })}
-      </p>
-      {draft.flows.length === 0 ? (
+      <PageHead title="ST 2110" sub={`${tn(draft.flows.length, '{n} flow', '{n} flows')} · ${redundant ? t('SMPTE 2022-7 (red + blue)') : t('Two separate ports')}`} />
+      <SubTabs<'flows' | 'ports' | 'nmos'>
+        items={[
+          { id: 'flows', label: t('Flows'), count: draft.flows.length },
+          { id: 'ports', label: t('Media ports') },
+          { id: 'nmos', label: nmosOn ? 'NMOS' : t('NMOS (off)') },
+        ]}
+        value={tab}
+        onChange={setTab}
+      >
+        {tab === 'flows' && (
+          <button type="button" className="st-btn primary" onClick={() => setEditing({ flow: blank, index: -1 })}>
+            <Plus size={14} /> {t('New flow')}
+          </button>
+        )}
+      </SubTabs>
+      {tab === 'ports' && (
+        <>
+          <MediaPortsCard draft={draft} />
+          <PortsLoad cap={cap} />
+        </>
+      )}
+      {tab === 'nmos' && <NmosCard draft={draft} opts={nicOptions(snap.nics)} status={nmos} />}
+      {tab === 'flows' && (draft.flows.length === 0 ? (
         <div className="core-empty">
           <Empty icon={Waves} text={t('No ST 2110 flow')} />
         </div>
@@ -731,8 +852,8 @@ export function St2110Page() {
             ))}
           </tbody>
         </table>
-      )}
-      <FlowsCard flows={snap.config.flows} state={io as Parameters<typeof FlowsCard>[0]['state']} />
+      ))}
+      {tab === 'flows' && <FlowsCard flows={snap.config.flows} state={io as Parameters<typeof FlowsCard>[0]['state']} />}
       {editing && (
         <FlowEditor
           flow={editing.flow}

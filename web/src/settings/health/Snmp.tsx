@@ -2,7 +2,7 @@
 // destinations des traps, la MIB, et ce que l'agent répond maintenant.
 import { useEffect, useState } from 'react';
 import { Download, ListTree, Network } from 'lucide-react';
-import { Badge, Card, Field, FieldGrid, NumberField, PageHead, SaveBar, Switch, t, toast } from '@strata/ui';
+import { Badge, Card, Field, FieldGrid, InfoTip, NumberField, PageHead, SaveBar, Switch, t, tn, toast } from '@strata/ui';
 import { api } from '../../api';
 import { friendly } from '../../errors';
 
@@ -73,6 +73,8 @@ export function SnmpPage() {
         <div className="core-clock-form">
           {st.error && <p className="core-warn">{friendly(st.error)}</p>}
           <Switch checked={draft.enabled} onChange={(v) => edit({ enabled: v })} label={t('Answer the supervision')} />
+          {draft.enabled && (
+            <>
           <FieldGrid>
             <Field label={t('Community')}>
               <input type="password" value={draft.community} autoComplete="new-password" onChange={(e) => edit({ community: e.target.value })} />
@@ -82,10 +84,22 @@ export function SnmpPage() {
             </Field>
           </FieldGrid>
           <FieldGrid two>
-            <Field label={t('Allowed machines')} hint={t('One per line: 10.0.0.5 or 10.0.0.0/24; empty: all')}>
+            <Field
+              label={
+                <>
+                  {t('Allowed machines')} <InfoTip text={t('One per line: 10.0.0.5 or 10.0.0.0/24; empty: all')} />
+                </>
+              }
+            >
               <textarea rows={3} className="st-mono" value={lines(draft.allowed)} onChange={(e) => edit({ allowed: split(e.target.value) })} />
             </Field>
-            <Field label={t('Trap destinations')} hint={t('One per line: 10.0.0.9 or 10.0.0.9:162')}>
+            <Field
+              label={
+                <>
+                  {t('Trap destinations')} <InfoTip text={t('One per line: 10.0.0.9 or 10.0.0.9:162')} />
+                </>
+              }
+            >
               <textarea rows={3} className="st-mono" value={lines(draft.traps)} onChange={(e) => edit({ traps: split(e.target.value) })} />
             </Field>
           </FieldGrid>
@@ -97,22 +111,33 @@ export function SnmpPage() {
               <input value={draft.location} placeholder={t('Control room A, rack 3')} onChange={(e) => edit({ location: e.target.value })} />
             </Field>
           </FieldGrid>
+            </>
+          )}
         </div>
       </Card>
 
-      <Card icon={<ListTree size={16} />} title={t('What the agent answers')} actions={<span className="st-muted st-mono">{st.root}</span>}>
-        <table className="core-table">
-          <tbody>
-            {st.walk.map((w) => (
-              <tr key={w.oid}>
-                <td className="st-mono st-muted">{w.oid}</td>
-                <td>{w.name}</td>
-                <td className="st-mono">{w.value}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Card>
+      {/* Un outil de contrôle, pas un réglage : replié. */}
+      <details className="core-fold">
+        <summary>
+          <ListTree size={15} /> {t('What the agent answers')}{' '}
+          <span className="st-muted">
+            {tn(st.walk.length, '{n} value', '{n} values')} · {st.root}
+          </span>
+        </summary>
+        <div className="core-fold-body">
+          <table className="core-table">
+            <tbody>
+              {st.walk.map((w) => (
+                <tr key={w.oid}>
+                  <td className="st-mono st-muted">{w.oid}</td>
+                  <td>{w.name}</td>
+                  <td className="st-mono">{w.value}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
       <SaveBar dirty={dirty} saving={saving} onSave={() => void save()} onDiscard={() => setDraft(st.settings)} />
     </>
   );

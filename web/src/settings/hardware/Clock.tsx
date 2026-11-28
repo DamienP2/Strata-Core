@@ -3,7 +3,7 @@
 // et NTP, les réglages, et les fichiers que le Core écrit pour le système.
 import { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, Clock, FileCode2, Info, ListChecks, RefreshCw, Timer, TriangleAlert, XCircle } from 'lucide-react';
-import { Badge, Card, Field, FieldGrid, NumberField, PageHead, Segmented, Switch, formatDateTime, t, toast } from '@strata/ui';
+import { Badge, Card, Field, FieldGrid, InfoTip, NumberField, PageHead, Segmented, Switch, formatDateTime, t, toast } from '@strata/ui';
 import { api } from '../../api';
 import { friendly } from '../../errors';
 import { HwSaveBar, useHardware } from './common';
@@ -154,16 +154,18 @@ function SystemFiles({ files }: { files: ClockStatus['files'] }) {
     }
     setBusy(false);
   };
+  // Du détail technique (ce que le Core écrit pour chrony et ptp4l) : replié.
   return (
-    <Card
-      icon={<FileCode2 size={16} />}
-      title={t('System files')}
-      actions={
+    <details className="core-fold" open={steps?.some((x) => !x.ok) || undefined}>
+      <summary>
+        <FileCode2 size={15} /> {t('System files')} <span className="st-muted">chrony · ptp4l</span>
+      </summary>
+      <div className="core-fold-body">
+      <div>
         <button type="button" className="st-btn small" disabled={busy} onClick={() => void apply()}>
           <RefreshCw size={13} /> {t('Apply again')}
         </button>
-      }
-    >
+      </div>
       {steps && (
         <div className="core-checks">
           {steps.map((s, i) => {
@@ -193,7 +195,8 @@ function SystemFiles({ files }: { files: ClockStatus['files'] }) {
           <pre>{files.ptp4lUnit}</pre>
         </details>
       )}
-    </Card>
+      </div>
+    </details>
   );
 }
 
@@ -278,41 +281,19 @@ export function ClockPage() {
         </Card>
       </div>
 
-      <Card icon={<Clock size={16} />} title={t('Settings')}>
+      <Card icon={<Timer size={16} />} title={t('Rate and timecode')}>
         <div className="core-clock-form">
           <Field label={t('House rate')} group>
             <Segmented<HouseRate> value={c.house.rate} options={RATES} onChange={(v) => editHw((x) => void (x.clock.house.rate = v))} />
           </Field>
-          <Field label={t('Server time')} group>
-            <Segmented<'ptp' | 'ntp'>
-              value={c.source}
-              options={[
-                { value: 'ptp', label: t('PTP, NTP as a backup') },
-                { value: 'ntp', label: t('NTP only') },
-              ]}
-              onChange={(v) => editHw((x) => void (x.clock.source = v))}
-            />
-          </Field>
-          <Field label={t('NTP servers')} hint={t('One per line')}>
-            <textarea
-              rows={3}
-              className="st-mono"
-              value={c.ntpServers.join('\n')}
-              placeholder="10.0.0.1"
-              onChange={(e) => editHw((x) => void (x.clock.ntpServers = e.target.value.split('\n')))}
-            />
-          </Field>
-          {c.source === 'ptp' && (
-            <FieldGrid two>
-              <Field label={t('PTP domain')} group>
-                <NumberField value={draft.ptp.domain} min={0} max={127} onChange={(v) => editHw((x) => void (x.ptp.domain = Math.round(v)))} />
-              </Field>
-              <Field label={t('TAI − UTC (seconds)')} group>
-                <NumberField value={draft.ptp.taiOffset} min={0} max={100} onChange={(v) => editHw((x) => void (x.ptp.taiOffset = Math.round(v)))} />
-              </Field>
-            </FieldGrid>
-          )}
-          <Field label={t('Timecode time')} group hint={t('Like the LTC of the leader')}>
+          <Field
+            label={
+              <>
+                {t('Timecode time')} <InfoTip text={t('Like the LTC of the leader')} />
+              </>
+            }
+            group
+          >
             <div className="core-service">
               <Segmented<'local' | 'utc' | 'fixed'>
                 value={c.house.offset}
@@ -342,6 +323,47 @@ export function ClockPage() {
                 <input className="st-mono" value={c.house.dailyJam} placeholder="00:00" onChange={(e) => editHw((x) => void (x.clock.house.dailyJam = e.target.value))} />
               </Field>
             </FieldGrid>
+          )}
+        </div>
+      </Card>
+
+      <Card icon={<Clock size={16} />} title={t('Server time')}>
+        <div className="core-clock-form">
+          <Field label={t('Source')} group>
+            <Segmented<'ptp' | 'ntp'>
+              value={c.source}
+              options={[
+                { value: 'ptp', label: t('PTP, NTP as a backup') },
+                { value: 'ntp', label: t('NTP only') },
+              ]}
+              onChange={(v) => editHw((x) => void (x.clock.source = v))}
+            />
+          </Field>
+          <Field label={t('NTP servers')} hint={t('One per line')}>
+            <textarea
+              rows={3}
+              className="st-mono"
+              value={c.ntpServers.join('\n')}
+              placeholder="10.0.0.1"
+              onChange={(e) => editHw((x) => void (x.clock.ntpServers = e.target.value.split('\n')))}
+            />
+          </Field>
+          {c.source === 'ptp' && (
+            <details className="core-fold core-fold-inline" open={draft.ptp.domain !== 127 || draft.ptp.taiOffset !== 37 || undefined}>
+              <summary>
+                {t('Advanced')} <span className="st-muted">{t('PTP domain {d} · TAI − UTC {o} s', { d: String(draft.ptp.domain), o: String(draft.ptp.taiOffset) })}</span>
+              </summary>
+              <div className="core-fold-body">
+                <FieldGrid two>
+                  <Field label={t('PTP domain')} group>
+                    <NumberField value={draft.ptp.domain} min={0} max={127} onChange={(v) => editHw((x) => void (x.ptp.domain = Math.round(v)))} />
+                  </Field>
+                  <Field label={t('TAI − UTC (seconds)')} group>
+                    <NumberField value={draft.ptp.taiOffset} min={0} max={100} onChange={(v) => editHw((x) => void (x.ptp.taiOffset = Math.round(v)))} />
+                  </Field>
+                </FieldGrid>
+              </div>
+            </details>
           )}
         </div>
       </Card>

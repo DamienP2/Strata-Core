@@ -176,3 +176,33 @@
 .core-dest-tools input { flex: 1; min-width: 0; }
 .core-dest-add { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 8px; }
 @media (max-width: 1100px) { .core-hw-body { flex-direction: column; } .core-hw-figure { flex-basis: auto; width: 100%; } }
+
+/* Une section repliée par défaut (le détail technique, les éléments secondaires). */
+.core-fold { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.core-fold > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px; padding: 12px 16px; font-weight: 600; color: var(--text-2); user-select: none; }
+.core-fold > summary::-webkit-details-marker { display: none; }
+.core-fold > summary::before { content: ''; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform 0.15s; margin-right: 2px; }
+.core-fold[open] > summary::before { transform: rotate(45deg); }
+.core-fold > summary .st-muted { font-weight: 400; }
+.core-fold > .core-fold-body { padding: 0 16px 16px; display: flex; flex-direction: column; gap: 10px; }
+.core-fold-inline > summary { padding: 4px 0; }
+.core-fold-inline { border: none; background: none; }
+.core-fold-inline > .core-fold-body { padding: 4px 0 0; }
+
+/* Le rôle d'un port réseau : choisi d'un clic. */
+.core-role-pick { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 10px 12px; border-radius: 8px; background: var(--panel-2); }
+.core-role-pick > .st-muted { margin-right: 4px; }
+button.core-hw-role { border: 1px dashed color-mix(in srgb, var(--c) 45%, transparent); background: none; cursor: pointer; opacity: 0.75; }
+button.core-hw-role:hover { opacity: 1; }
+button.core-hw-role.on { border-style: solid; background: color-mix(in srgb, var(--c) 18%, transparent); opacity: 1; }
+.core-hw-port.nic { cursor: pointer; }
+
+/* La charge des ports média : une tuile par port. */
+.core-port-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.core-port-tile { border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.core-port-tile header { display: flex; align-items: baseline; gap: 8px; }
+.core-port-tile header .st-spacer { flex: 1; }
+.core-port-tile .core-port-row { display: grid; grid-template-columns: 70px 1fr auto; align-items: center; gap: 10px; font-size: var(--fs-12); }
+.core-port-tile .core-meter { width: 100%; }
+.core-room { font-size: var(--fs-13, 13px); }
+.core-room strong { font-variant-numeric: tabular-nums; }

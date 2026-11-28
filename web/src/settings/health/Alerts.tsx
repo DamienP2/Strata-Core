@@ -2,7 +2,7 @@
 // envoyer, et les derniers messages.
 import { useEffect, useState } from 'react';
 import { BellRing, CircleAlert, Send, Settings2 } from 'lucide-react';
-import { Badge, Card, Empty, Field, FieldGrid, NumberField, PageHead, SaveBar, Segmented, Switch, t, timeAgo, toast } from '@strata/ui';
+import { Badge, Card, Empty, Field, FieldGrid, NumberField, PageHead, SaveBar, Segmented, SubTabs, Switch, t, timeAgo, toast } from '@strata/ui';
 import { api } from '../../api';
 import { navigate } from '../../router';
 import { friendly } from '../../errors';
@@ -63,6 +63,7 @@ export function AlertsPage({ onCount }: { onCount?: (n: number) => void }) {
   const [draft, setDraft] = useState<Settings | null>(null);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [tab, setTab] = useState<'now' | 'settings'>('now');
   const read = async (first = false) => {
     try {
       const r = await api<State>('GET', '/api/health/alerts');
@@ -111,7 +112,17 @@ export function AlertsPage({ onCount }: { onCount?: (n: number) => void }) {
   return (
     <>
       <PageHead title={t('Alerts')} sub={st.settings.enabled ? t('Sent after {n} s', { n: st.settings.delaySecs }) : t('Not sent')} />
+      <SubTabs<'now' | 'settings'>
+        items={[
+          { id: 'now', label: t('Now'), count: st.active.length },
+          { id: 'settings', label: t('Sending') },
+        ]}
+        value={tab}
+        onChange={setTab}
+      />
 
+      {tab === 'now' && (
+        <>
       <Card icon={<CircleAlert size={16} />} title={t('Now')} actions={st.active.length ? <Badge tone="warn">{st.active.length}</Badge> : <Badge tone="ok">{t('All good')}</Badge>}>
         {st.active.length === 0 ? (
           <Empty text={t('Nothing to report')} />
@@ -131,6 +142,11 @@ export function AlertsPage({ onCount }: { onCount?: (n: number) => void }) {
         )}
       </Card>
 
+      <RecentCard recent={st.recent} />
+        </>
+      )}
+
+      {tab === 'settings' && (
       <Card
         icon={<Settings2 size={16} />}
         title={t('Sending')}
@@ -142,6 +158,9 @@ export function AlertsPage({ onCount }: { onCount?: (n: number) => void }) {
       >
         <div className="core-clock-form">
           <Switch checked={draft.enabled} onChange={(v) => edit({ enabled: v })} label={t('Send the alerts')} />
+          {!draft.enabled && <p className="st-muted core-note">{t('Nothing is sent: the problems are only shown here and in the supervision (SNMP).')}</p>}
+          {draft.enabled && (
+            <>
           <div className="core-channel">
             <Switch checked={draft.webhookEnabled} onChange={(v) => edit({ webhookEnabled: v })} label="Webhook" />
             {draft.webhookEnabled && (
@@ -220,15 +239,26 @@ export function AlertsPage({ onCount }: { onCount?: (n: number) => void }) {
               ))}
             </div>
           </Field>
+            </>
+          )}
         </div>
       </Card>
+      )}
 
+      <SaveBar dirty={dirty} saving={saving} onSave={() => void save()} onDiscard={() => setDraft(st.settings)} />
+    </>
+  );
+}
+
+/** Les derniers messages envoyés (et ce qui a échoué). */
+function RecentCard({ recent }: { recent: State['recent'] }) {
+  return (
       <Card icon={<BellRing size={16} />} title={t('Last messages')}>
-        {st.recent.length === 0 ? (
+        {recent.length === 0 ? (
           <Empty text={t('No message sent yet')} />
         ) : (
           <div className="core-checks">
-            {st.recent.map((m, i) => {
+            {recent.map((m, i) => {
               const failed = m.results.filter(([, e]) => e);
               return (
                 <div key={i} className={`core-check ${m.level === 'problem' ? 'warn' : 'ok'}`}>
@@ -249,7 +279,5 @@ export function AlertsPage({ onCount }: { onCount?: (n: number) => void }) {
           </div>
         )}
       </Card>
-      <SaveBar dirty={dirty} saving={saving} onSave={() => void save()} onDiscard={() => setDraft(st.settings)} />
-    </>
   );
 }
