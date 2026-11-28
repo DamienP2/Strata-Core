@@ -10,7 +10,7 @@ import { HwSaveBar, useHardware } from './common';
 import { Meter } from '../health/Resources';
 import { TagInput } from '../TagInput';
 import { FlowsCard, InputsCard, OutputsCard, usePoll } from './Inputs';
-import { DeckLink3D, Pcie3D, SDI_COLOR, nicLook, printedOf, type Jack } from './Card3D';
+import { DeckLink3D, SDI_COLOR, printedOf } from './Card3D';
 import { cardOf, editCard, editHw, loadHw, type DetectedCard, type Flow, type Fn, type Capacity, type HwConfig, type Nic, type NmosStatus, type Port, type Snapshot } from './store';
 
 function Rescan() {
@@ -259,103 +259,155 @@ function roleChoices(cfg: HwConfig): { k: RoleKey; label: string; color: string 
   ];
 }
 
-/** Les rôles d'un port, d'un clic : un rôle va à un seul port (pris ailleurs, il y est retiré). */
-function RolePicker({ name, cfg }: { name: string; cfg: HwConfig }) {
-  const pick = (k: RoleKey, on: boolean) =>
-    editHw((x) => {
-      const n = x.network as Record<RoleKey, string>;
-      n[k] = on ? '' : name;
-      // Les deux ports média sont deux interfaces différentes.
-      if (!on && k === 'media1' && n.media2 === name) n.media2 = '';
-      if (!on && k === 'media2' && n.media1 === name) n.media1 = '';
-    });
+/** Ce que fait chaque rôle, dans l'ordre où on les règle. */
+function roleRows(cfg: HwConfig): { k: RoleKey; label: string; color: string; help: string }[] {
+  const redundant = cfg.network.mediaMode !== 'separate';
+  const by = Object.fromEntries(roleChoices(cfg).map((r) => [r.k, r]));
+  return [
+    { ...by.management, help: t('The cockpit, the apps, SSH and the updates (the port of the default route)') },
+    { ...by.ptp, help: t('The clock: the port that hears the PTP grandmaster, ideally with a hardware clock') },
+    { ...by.media1, help: redundant ? t('ST 2110 flows, red network (SMPTE 2022-7)') : t('ST 2110 flows, first media port') },
+    { ...by.media2, help: redundant ? t('ST 2110 flows, blue network (SMPTE 2022-7)') : t('ST 2110 flows, second media port') },
+    { ...by.ndi, help: t('NDI sources and outputs (empty: the management port)') },
+  ];
+}
+
+/** L'état d'un port en une ligne : lien, vitesse, adresse. */
+function NicState({ n }: { n?: Nic }) {
+  if (!n) return <span className="st-muted">—</span>;
   return (
-    <div className="core-role-pick" onClick={(e) => e.stopPropagation()}>
-      <span className="st-muted">{t('Role of {name}', { name })}</span>
-      {roleChoices(cfg).map((r) => {
-        const on = (cfg.network as Record<RoleKey, string>)[r.k] === name;
-        return (
-          <button key={r.k} type="button" className={`core-hw-role ${on ? 'on' : ''}`} style={{ ['--c' as string]: r.color }} onClick={() => pick(r.k, on)}>
-            {r.label}
-          </button>
-        );
-      })}
-    </div>
+    <span className="core-nic-state">
+      <span className={`st-dot ${n.up ? 'ok' : n.up === false ? 'bad' : ''}`} />
+      <span>{n.up === false ? t('No link') : speed(n.speed)}</span>
+      <span className="st-muted st-mono">{n.ipv4[0] ?? t('no address')}</span>
+    </span>
   );
 }
 
-/** Une carte réseau ajoutée (plusieurs ports sur une même carte PCI), en 3D ; un clic sur un port
- *  donne ses rôles. */
-function NicCard({ ports, cfg }: { ports: Nic[]; cfg: HwConfig }) {
-  const [sel, setSel] = useState<number | null>(null);
-  const sfp = ports.some((p) => p.connector === 'sfp');
-  const model = ports[0].model ?? t('Network card');
-  const jacks: Jack[] = ports.map((p, i) => {
-    const roles = rolesOf(cfg, p.name);
-    return { k: i, etched: String((p.port ?? i) + 1), label: p.name, sub: roles.map((r) => r.label).join(' · ') || undefined, color: roles[0]?.color ?? '' };
-  });
+/** Les rôles des ports : une ligne par rôle, le port choisi dans une liste. */
+function RolesCard({ nics, cfg }: { nics: Nic[]; cfg: HwConfig }) {
+  const n = cfg.network as Record<RoleKey, string>;
+  const usable = nics.filter((x) => x.kind !== 'virtual' || x.ipv4.length > 0);
+  const options = (current: string): DropOption<string>[] => {
+    const list = usable.some((x) => x.name === current) || !current ? usable : [...usable, { name: current, ipv4: [], onboard: false } as Nic];
+    return [
+      { value: '', label: t('None') },
+      ...list.map((x) => ({ value: x.name, label: x.name, note: [x.model ?? (x.onboard ? t('motherboard') : x.kind === 'virtual' ? t('virtual') : ''), x.ipv4[0], x.speed ? speed(x.speed) : ''].filter(Boolean).join(' · ') })),
+    ];
+  };
+  const set = (k: RoleKey, v: string) =>
+    editHw((x) => {
+      const m = x.network as Record<RoleKey, string>;
+      m[k] = v;
+      // Les deux ports média sont deux interfaces différentes.
+      if (v && k === 'media1' && m.media2 === v) m.media2 = '';
+      if (v && k === 'media2' && m.media1 === v) m.media1 = '';
+    });
   return (
-    <Card icon={<NetIcon size={16} />} title={model} actions={<span className="st-muted st-mono">{ports[0].pci}</span>}>
-      <div className="core-hw-body">
-        <div className="core-hw-figure">
-          <Pcie3D look={nicLook(ports[0].model, ports.length, sfp)} kind={sfp ? 'sfp' : 'rj45'} jacks={jacks} sel={sel} onPick={(k) => setSel(sel === k ? null : k)} title={model} />
-        </div>
-        <div className="core-hw-ports">
-          {ports.map((p, i) => (
-            <NicRow key={p.name} n={p} cfg={cfg} sel={sel === i} onClick={() => setSel(sel === i ? null : i)} />
-          ))}
-          {sel !== null && ports[sel] && <RolePicker name={ports[sel].name} cfg={cfg} />}
-        </div>
-      </div>
+    <Card icon={<Cable size={16} />} title={t('Roles of the ports')}>
+      <table className="st-table core-roles">
+        <tbody>
+          {roleRows(cfg).map((r) => {
+            const nic = nics.find((x) => x.name === n[r.k]);
+            return (
+              <tr key={r.k}>
+                <td>
+                  <span className="core-hw-role on" style={{ ['--c' as string]: r.color }}>
+                    {r.label}
+                  </span>
+                  <div className="st-muted core-role-help">{r.help}</div>
+                </td>
+                <td className="core-role-port">
+                  <Dropdown value={n[r.k] ?? ''} options={options(n[r.k] ?? '')} onChange={(v) => set(r.k, v)} />
+                </td>
+                <td>
+                  {!n[r.k] ? (
+                    <Badge tone={r.k === 'management' ? 'warn' : undefined}>{t('Not given')}</Badge>
+                  ) : nic ? (
+                    <NicState n={nic} />
+                  ) : (
+                    <Badge tone="bad">{t('Not on this server')}</Badge>
+                  )}
+                  {r.k === 'ptp' && nic && !nic.phc && <div className="st-muted">{t('no hardware clock: less precise')}</div>}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </Card>
   );
 }
 
-/** Les interfaces de la carte mère et les virtuelles : repliées quand il y a des cartes ajoutées. */
-function OtherNics({ nics, cfg, folded }: { nics: Nic[]; cfg: HwConfig; folded: boolean }) {
-  const [sel, setSel] = useState<string | null>(null);
-  const list = (
-    <div className="core-hw-ports">
-      {nics.map((n) => (
-        <NicRow key={n.name} n={n} cfg={cfg} sel={sel === n.name} onClick={() => setSel(sel === n.name ? null : n.name)} />
-      ))}
-      {sel && <RolePicker name={sel} cfg={cfg} />}
-    </div>
-  );
-  if (!folded)
-    return (
-      <Card icon={<NetIcon size={16} />} title={t('Motherboard and others')}>
-        {list}
-      </Card>
-    );
-  const roles = nics.flatMap((n) => rolesOf(cfg, n.name));
+/** Toutes les interfaces, rangées par carte : cartes ajoutées, carte mère, Wi-Fi, virtuelles (celles
+ *  sans adresse ni rôle sont seulement comptées). */
+function InterfacesCard({ nics, cfg }: { nics: Nic[]; cfg: HwConfig }) {
+  const groups: { title: string; note?: string; list: Nic[] }[] = [];
+  const cards = new Map<string, Nic[]>();
+  const board: Nic[] = [];
+  const wifi: Nic[] = [];
+  const virt: Nic[] = [];
+  for (const x of nics) {
+    if (x.kind === 'virtual') virt.push(x);
+    else if (x.kind === 'wifi') wifi.push(x);
+    else if (x.pci && !x.onboard) cards.set(x.pci, [...(cards.get(x.pci) ?? []), x]);
+    else board.push(x);
+  }
+  for (const [pci, ports] of cards) groups.push({ title: ports[0].model ?? t('Network card'), note: pci, list: ports.sort((a, b) => (a.port ?? 0) - (b.port ?? 0)) });
+  if (board.length) groups.push({ title: t('Motherboard'), list: board });
+  if (wifi.length) groups.push({ title: 'Wi-Fi', list: wifi });
+  const shown = virt.filter((x) => x.ipv4.length > 0 || rolesOf(cfg, x.name).length > 0);
+  if (shown.length) groups.push({ title: t('Virtual'), list: shown });
+  const hidden = virt.length - shown.length;
   return (
-    <details className="core-fold" open={roles.length > 0 || undefined}>
-      <summary>
-        {tn(nics.length, '{n} other interface', '{n} other interfaces')} <span className="st-muted">{t('motherboard, virtual')}</span>
-      </summary>
-      <div className="core-fold-body">{list}</div>
-    </details>
-  );
-}
-
-function NicRow({ n, cfg, sel, onClick }: { n: Nic; cfg: HwConfig; sel?: boolean; onClick?: () => void }) {
-  return (
-    <div className={`core-hw-port nic ${sel ? 'sel' : ''}`} onClick={onClick}>
-      <span className={`st-dot ${n.up ? 'ok' : n.up === false ? 'bad' : ''}`} />
-      <span className="core-hw-port-name">
-        <strong className="st-mono">{n.name}</strong>
-        <span className="st-muted st-mono">{n.ipv4.join(', ') || t('no address')}</span>
-      </span>
-      <span className="st-muted">{speed(n.speed)}</span>
-      <span className="core-chips">
-        {rolesOf(cfg, n.name).map((r) => (
-          <span key={r.label} className="core-hw-role" style={{ ['--c' as string]: r.color }}>
-            {r.label}
-          </span>
-        ))}
-      </span>
-    </div>
+    <Card icon={<NetIcon size={16} />} title={t('Interfaces')}>
+      <table className="st-table">
+        <thead>
+          <tr>
+            <th>{t('Interface')}</th>
+            <th>{t('Address')}</th>
+            <th>{t('Link')}</th>
+            <th>MTU</th>
+            <th>{t('Roles')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {groups.map((g) => [
+            <tr key={`g-${g.title}-${g.note ?? ''}`} className="core-table-group">
+              <td colSpan={5}>
+                {g.title} {g.note && <span className="st-mono">{g.note}</span>}
+              </td>
+            </tr>,
+            ...g.list.map((x) => (
+              <tr key={x.name}>
+                <td>
+                  <strong className="st-mono">{x.name}</strong>
+                  {x.connector === 'sfp' && <span className="st-muted"> · SFP</span>}
+                </td>
+                <td className="st-mono">{x.ipv4.join(', ') || <span className="st-muted">—</span>}</td>
+                <td>
+                  <span className="core-nic-state">
+                    <span className={`st-dot ${x.up ? 'ok' : x.up === false ? 'bad' : ''}`} />
+                    {x.up === false ? t('No link') : speed(x.speed)}
+                  </span>
+                </td>
+                <td className="st-mono st-muted">{x.mtu ?? '—'}</td>
+                <td>
+                  <span className="core-chips">
+                    {rolesOf(cfg, x.name).map((r) => (
+                      <span key={r.label} className="core-hw-role" style={{ ['--c' as string]: r.color }}>
+                        {r.label}
+                      </span>
+                    ))}
+                  </span>
+                </td>
+              </tr>
+            )),
+          ])}
+        </tbody>
+      </table>
+      {hidden > 0 && <p className="st-muted core-note">{tn(hidden, '{n} virtual interface without address is not shown', '{n} virtual interfaces without address are not shown')}</p>}
+    </Card>
   );
 }
 
@@ -599,27 +651,13 @@ export function NetworkPage() {
   const hw = useHardware();
   if (!hw) return null;
   const [snap, draft] = hw;
-  // Les cartes ajoutées, par carte PCI ; le reste (carte mère, virtuelles) à part.
-  const cards = new Map<string, Nic[]>();
-  const rest: Nic[] = [];
-  for (const n of snap.nics) {
-    if (n.pci && !n.onboard && n.kind === 'ethernet') cards.set(n.pci, [...(cards.get(n.pci) ?? []), n]);
-    else rest.push(n);
-  }
-  const unset = roleChoices(draft).filter((r) => !(draft.network as Record<RoleKey, string>)[r.k]);
   return (
     <>
       <PageHead title={t('Network')} sub={tn(snap.nics.length, '{n} interface', '{n} interfaces')}>
         <Rescan />
       </PageHead>
-      <p className="st-muted core-note">
-        {t('Click a port to give it its roles.')}
-        {unset.length > 0 && <> {t('Not given yet: {roles}.', { roles: unset.map((r) => r.label).join(', ') })}</>}
-      </p>
-      {[...cards.values()].map((ports) => (
-        <NicCard key={ports[0].pci} ports={ports.sort((a, b) => (a.port ?? 0) - (b.port ?? 0))} cfg={draft} />
-      ))}
-      {rest.length > 0 && <OtherNics nics={rest} cfg={draft} folded={cards.size > 0} />}
+      <RolesCard nics={snap.nics} cfg={draft} />
+      <InterfacesCard nics={snap.nics} cfg={draft} />
       <HwSaveBar />
     </>
   );

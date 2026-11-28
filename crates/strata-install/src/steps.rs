@@ -306,6 +306,9 @@ fn core_unit() -> String {
          User={user}\n\
          Group={user}\n\
          SupplementaryGroups=video render\n\
+         # Le dossier partagé des images (MXL) au compte du service, même créé par root (sudo).\n\
+         ExecStartPre=+/usr/bin/install -d -o {user} -g {user} -m 0755 /dev/shm/mxl\n\
+         ExecStartPre=+/usr/bin/chown -R {user}:{user} /dev/shm/mxl\n\
          ExecStart={bin} run --bind 0.0.0.0:{port} --data-dir {data}\n\
          Restart=always\n\
          RestartSec=2\n\

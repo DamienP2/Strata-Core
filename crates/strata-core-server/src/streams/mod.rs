@@ -225,8 +225,9 @@ pub fn house_video(hw: &crate::hardware::HardwareConfig) -> strata_mxl::Video {
 pub fn reconcile(s: &crate::state::AppState) {
     let cfg = StreamsConfig::load(&s.data_dir);
     let mxl = match s.mxl.get() {
-        Some(Ok(m)) => Some(m.clone()),
-        _ => None,
+        Some(Ok(m)) => Ok(m.clone()),
+        Some(Err(e)) => Err(e.clone()),
+        None => Err("not opened yet".to_string()),
     };
     // Le GPU (cherché une fois) : il décode les entrées et encode les sorties.
     let needs_gpu = cfg.inputs.iter().any(|i| i.enabled) || cfg.outputs.iter().any(|o| o.enabled && matches!(o.encoder.as_str(), "auto" | "vaapi"));

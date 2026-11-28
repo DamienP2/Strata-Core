@@ -182,19 +182,24 @@ impl Engine {
     }
 
     /// Tient les flux en accord avec les réglages (bloquant).
-    pub fn reconcile(&self, cfg: &StreamsConfig, env: Option<Env>) {
+    pub fn reconcile(&self, cfg: &StreamsConfig, env: Result<Env, String>) {
         let any = cfg.inputs.iter().any(|i| i.enabled) || cfg.outputs.iter().any(|o| o.enabled);
         let problem = if !any {
             None
         } else if let Err(e) = self.ffmpeg() {
             Some(format!("ffmpeg is missing ({e}): run the installer again and choose Repair, or sudo apt install ffmpeg"))
-        } else if env.is_none() {
-            Some("the network streams need MXL (the pictures are shared with the apps through it)".to_string())
+        } else if let Err(e) = &env {
+            // Ce qui bloque, et quoi faire : le dossier partagé (droits) ou la bibliothèque absente.
+            Some(if e.contains("MXL domain") {
+                format!("MXL cannot open its folder ({e}): run the installer again and choose Repair, then restart the Core")
+            } else {
+                format!("MXL does not load ({e}): run the installer again and choose Update")
+            })
         } else {
             None
         };
         let env = match (env, &problem) {
-            (Some(e), None) => Some(e),
+            (Ok(e), None) => Some(e),
             _ => None,
         };
         *self.problem.lock().unwrap() = problem;
@@ -257,7 +262,7 @@ impl Engine {
     }
 
     pub fn stop_all(&self) {
-        self.reconcile(&StreamsConfig::default(), None);
+        self.reconcile(&StreamsConfig::default(), Err("stopping".into()));
     }
 
     pub fn input_status(&self, id: &str) -> Option<InputStatus> {

@@ -44,6 +44,8 @@ const SHAPED: [RegExp, string, string[]][] = [
   [/^(.+): the media port is 1 or 2$/, '{flow}: the media port is 1 or 2', ['flow']],
   // Flux réseau
   [/^ffmpeg is missing \((.+)\): run the installer again and choose Repair, or sudo apt install ffmpeg$/, 'ffmpeg is missing ({why}): run the installer again and choose Repair, or sudo apt install ffmpeg', ['why']],
+  [/^MXL cannot open its folder \((.+)\): run the installer again and choose Repair, then restart the Core$/, 'MXL cannot open its folder ({why}): run the installer again and choose Repair, then restart the Core', ['why']],
+  [/^MXL does not load \((.+)\): run the installer again and choose Update$/, 'MXL does not load ({why}): run the installer again and choose Update', ['why']],
   // Mises à jour
   [/^(.+) has no release of the Core$/, '{repo} has no release of the Core', ['repo']],
   [/^this Core is already the latest \((.+)\)$/, 'This Core is already the latest ({version})', ['version']],

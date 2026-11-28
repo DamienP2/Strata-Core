@@ -180,13 +180,3 @@ export function DeckLink3D({ model, jack, order, reference, functions, genlock, 
   if (reference) jacks.push({ k: -1, etched: 'REF', label: 'REF', color: genlock ? SDI_COLOR.ref : '', reference: true });
   return <Pcie3D look={look} kind={jack} jacks={jacks} sel={sel} onPick={onPick} title={model} />;
 }
-
-// ---------- Cartes réseau ----------
-
-/** L'allure d'une carte réseau, d'après sa famille. */
-export function nicLook(model: string | null | undefined, ports: number, sfp: boolean): Look {
-  const m = (model ?? '').toLowerCase();
-  if (m.includes('connectx') || m.includes('e810')) return { length: 168, finned: true, fans: 0, lanes: 16, sticker: true, vents: true, silk: model ?? '' };
-  if (sfp) return { length: 150, finned: true, fans: 0, lanes: 8, sticker: true, vents: true, silk: model ?? '' };
-  return { length: ports > 2 ? 150 : 120, low: ports <= 2, fans: 0, sink: true, lanes: 4, vents: true, silk: model ?? '' };
-}
