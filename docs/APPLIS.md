@@ -191,6 +191,14 @@ Linux Foundation) : des flux en mémoire partagée, sur le serveur, sans passer 
   Core l'envoie (SDI en 10 bits, calé sur la référence de la carte ; du noir quand rien n'arrive)
   et l'aperçu des réglages le montre. **Avec MXL, une appli n'ouvre jamais une sortie DeckLink
   elle-même.** Exemple : `crates/strata-mxl/examples/send.rs`.
+  Le son de la sortie SDI : l'appli écrit `audioFlow` du connecteur (float32 48 kHz, autant de
+  canaux qu'elle veut) ; le Core l'embarque avec l'image, rangé dans les canaux de la carte (16,
+  8 ou 2 : en trop, ignorés ; en moins, silence), du silence quand rien n'arrive. Pour un son
+  calé à l'image près, l'écrire à l'instant de son image, juste après elle :
+  `audio.write_at(video.last_frame_audio_index().unwrap(), &pcm)` (1920 échantillons par image
+  en 25 i/s ; 1601 ou 1602 en 29,97). Un son écrit au fil du temps (`write_interleaved`) passe
+  aussi, une image et demie plus tard. `audio` de `playout` dans `/api/hardware/outputs` dit si
+  le son arrive. Exemple : `crates/strata-mxl/examples/tone.rs`.
 - **ST 2110** : quand *Réglages › Matériel › Réseau* confie les flux au Core (noyau, AF_XDP ou
   DPDK, avec Intel Media Transport Library), le Core reçoit les flux entrants (2022-7 compris) et
   envoie les sortants : l'appli ne touche jamais le réseau, elle lit et écrit `mxlFlow` du flux
@@ -299,7 +307,7 @@ loop {
   le fichier, toutes les secondes, jusqu'à ce qu'il revienne.
 - Le format : une carte qui détecte le format suit le signal d'elle-même ; les autres sont ouvertes
   en 1080i50.
-- Pas encore d'audio : le pont DeckLink du Core ne capte que la vidéo et le timecode.
+- Pas de son par `strata-share` : le son des entrées passe par MXL (`audioFlow`).
 
 ## Montrer ce qu'on envoie sans MXL (sorties SDI, flux ST 2110)
 

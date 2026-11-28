@@ -984,6 +984,8 @@ async fn shared(State(s): State<Shared>, ConnectInfo(peer): ConnectInfo<SocketAd
                         // Le son embarqué d'une entrée (float32 48 kHz, les canaux de la carte).
                         "audioFlow": match k.function {
                             Function::Input if mxl.is_some() => Some(out_flow(&format!("sdi/{}/{}/audio", c.id, i + 1)).to_string()),
+                            // Ce que l'appli écrit pour la sortie (float32 48 kHz) : embarqué.
+                            Function::Output if mxl.is_some() => Some(out_flow(&format!("sdi-out/{}/{}/audio", c.id, i + 1)).to_string()),
                             _ => None,
                         },
                     })).collect::<Vec<_>>(),

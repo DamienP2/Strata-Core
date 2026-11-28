@@ -346,6 +346,9 @@ class Output final : public IDeckLinkVideoOutputCallback {
     int line = 0;
     BMDTimeValue duration = 0;
     BMDTimeScale scale = 0;
+    // Embedded audio (48 kHz, 32-bit, timestamped on the frames): its
+    // channels, 0 when the card takes none.
+    int audio_channels = 0;
 
     std::mutex m;
     std::condition_variable cv;
@@ -471,7 +474,8 @@ class Output final : public IDeckLinkVideoOutputCallback {
     }
 
     // 0 scheduled, 1 dropped (too far ahead / no free frame), -1 error.
-    int schedule(IDeckLinkMutableVideoFrame *f, bool resync_allowed) {
+    // `when`: the stream time the frame goes out at (in `scale`).
+    int schedule(IDeckLinkMutableVideoFrame *f, bool resync_allowed, BMDTimeValue *when = NULL) {
         int64_t cur = 0;
         bool have_cur = on_air(&cur);
         BMDTimeValue at;
@@ -501,6 +505,9 @@ class Output final : public IDeckLinkVideoOutputCallback {
             free_frames.push_back(f);
             return -1;
         }
+        if (when) {
+            *when = at;
+        }
         return 0;
     }
 
@@ -516,6 +523,9 @@ class Output final : public IDeckLinkVideoOutputCallback {
             out->StopScheduledPlayback(0, &stopped, 0);
             out->SetScheduledFrameCompletionCallback(NULL);
             out->DisableVideoOutput();
+            if (audio_channels) {
+                out->DisableAudioOutput();
+            }
         }
         if (keyer) {
             keyer->Disable();
@@ -987,6 +997,24 @@ void *dl_output_open(int index, uint32_t mode, int width, int height, int keyer,
         set_err(err, errlen, "cannot enable the video output (device in use by another application?)");
         goto fail;
     }
+    // Embedded audio, on as many channels as the card takes (16, 8 or 2): the
+    // samples of each picture go out with it (timestamped on its stream time).
+    if (ten_bit) {
+        int64_t most = 2;
+        IDeckLinkProfileAttributes *attrs = NULL;
+        if (dev->QueryInterface(IID_IDeckLinkProfileAttributes, (void **)&attrs) == S_OK && attrs) {
+            int64_t v = 0;
+            if (attrs->GetInt(BMDDeckLinkMaximumAudioChannels, &v) == S_OK && v > 0) {
+                most = v;
+            }
+            release(attrs);
+        }
+        uint32_t ch = most >= 16 ? 16 : most >= 8 ? 8 : 2;
+        if (o->out->EnableAudioOutput(bmdAudioSampleRate48kHz, bmdAudioSampleType32bitInteger, ch,
+                                      bmdAudioOutputStreamTimestamped) == S_OK) {
+            o->audio_channels = (int)ch;
+        }
+    }
     if (keyer) {
         if (dev->QueryInterface(IID_IDeckLinkKeyer, (void **)&o->keyer) != S_OK) {
             set_err(err, errlen, "this DeckLink device has no keyer");
@@ -1073,6 +1101,45 @@ int dl_output_push(void *h, const uint8_t *bgra, int stride) {
         std::memcpy((uint8_t *)bytes + (size_t)y * row, bgra + (size_t)y * (size_t)stride, line);
     }
     return o->schedule(f, true);
+}
+
+// The channels of the embedded audio (0: none).
+int dl_output_audio_channels(void *h) {
+    return ((Output *)h)->audio_channels;
+}
+
+// Queues a picture (as dl_output_push) and the audio that goes with it:
+// `frames` sample frames of `dl_output_audio_channels` interleaved 32-bit
+// samples, timestamped on the picture. 0 queued, 1 dropped (both), -1 error.
+int dl_output_push_av(void *h, const uint8_t *pic, int stride, const int32_t *pcm, int frames) {
+    com_init();
+    Output *o = (Output *)h;
+    IDeckLinkMutableVideoFrame *f = o->take_free();
+    if (!f) {
+        return 1;
+    }
+    void *bytes = NULL;
+    if (f->GetBytes(&bytes) != S_OK || !bytes) {
+        o->give_back(f);
+        return -1;
+    }
+    size_t row = (size_t)f->GetRowBytes();
+    size_t line = (size_t)o->line;
+    if (line > row || (size_t)stride < line) {
+        o->give_back(f);
+        return -1;
+    }
+    for (int y = 0; y < o->height; y++) {
+        std::memcpy((uint8_t *)bytes + (size_t)y * row, pic + (size_t)y * (size_t)stride, line);
+    }
+    BMDTimeValue at = 0;
+    int r = o->schedule(f, true, &at);
+    if (r == 0 && o->audio_channels && pcm && frames > 0) {
+        uint32_t written = 0;
+        // The time of the picture, in samples' time scale: they go out together.
+        o->out->ScheduleAudioSamples((void *)pcm, (uint32_t)frames, at, o->scale, &written);
+    }
+    return r;
 }
 
 // Waits for the next frame boundary of the card (a completed frame; locked

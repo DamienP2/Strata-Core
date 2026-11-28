@@ -211,6 +211,8 @@ mod ffi {
             errlen: c_int,
         ) -> *mut c_void;
         pub fn dl_output_push(h: *mut c_void, bgra: *const u8, stride: c_int) -> c_int;
+        pub fn dl_output_audio_channels(h: *mut c_void) -> c_int;
+        pub fn dl_output_push_av(h: *mut c_void, pic: *const u8, stride: c_int, pcm: *const i32, frames: c_int) -> c_int;
         pub fn dl_output_wait(h: *mut c_void, timeout_ms: c_int, frames: *mut u64) -> c_int;
         pub fn dl_reference_locked(h: *mut c_void) -> c_int;
         pub fn dl_output_close(h: *mut c_void);
@@ -533,6 +535,41 @@ impl OutputHandle {
         }
         #[cfg(not(decklink_shim))]
         Pushed::Failed
+    }
+
+    /// The channels of the embedded audio the output takes (16, 8 or 2; 0: none).
+    pub fn audio_channels(&self) -> usize {
+        #[cfg(decklink_shim)]
+        {
+            // SAFETY: open handle.
+            unsafe { ffi::dl_output_audio_channels(self.raw) }.max(0) as usize
+        }
+        #[cfg(not(decklink_shim))]
+        0
+    }
+
+    /// Queues a picture (as `push`) with its audio: `pcm` holds whole sample frames of
+    /// `audio_channels()` interleaved 32-bit samples, timestamped on the picture.
+    pub fn push_av(&self, pic: &[u8], stride: usize, pcm: &[i32]) -> Pushed {
+        if stride < self.line || pic.len() < stride * self.height as usize {
+            return Pushed::Failed;
+        }
+        #[cfg(decklink_shim)]
+        {
+            let ch = self.audio_channels().max(1);
+            let frames = (pcm.len() / ch) as std::ffi::c_int;
+            // SAFETY: `pic` holds `height` rows of `stride` bytes (checked); `pcm` `frames` × `ch` samples.
+            match unsafe { ffi::dl_output_push_av(self.raw, pic.as_ptr(), stride as _, pcm.as_ptr(), frames) } {
+                0 => Pushed::Queued,
+                1 => Pushed::Dropped,
+                _ => Pushed::Failed,
+            }
+        }
+        #[cfg(not(decklink_shim))]
+        {
+            let _ = pcm;
+            Pushed::Failed
+        }
     }
 
     /// Waits for the card's next frame boundary; false on timeout.

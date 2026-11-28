@@ -114,7 +114,7 @@ impl Mxl {
         let r = self.inst.create_flow_reader(&id.to_string()).map_err(|e| format!("cannot read the MXL flow {id}: {e}"))?;
         let grains = r.to_grain_reader().map_err(|e| e.to_string())?;
         let rate = grains.get_config_info().map_err(|e| e.to_string())?.common().grain_rate().map_err(|e| e.to_string())?;
-        Ok(VideoReader { inst: self.inst.clone(), grains, rate, video })
+        Ok(VideoReader { inst: self.inst.clone(), grains, rate, video, read_at: std::sync::atomic::AtomicU64::new(u64::MAX) })
     }
 
     /// Crée (ou reprend) le flux audio `id` (float32, 48 kHz, `channels` canaux).
@@ -369,6 +369,8 @@ pub struct VideoReader {
     grains: mxl::GrainReader,
     rate: mxl::Rational,
     pub video: Video,
+    /// Le début de la dernière image lue, en échantillons à 48 kHz (`u64::MAX` : aucune).
+    read_at: std::sync::atomic::AtomicU64,
 }
 
 impl VideoReader {
@@ -389,12 +391,26 @@ impl VideoReader {
         let grain = |i: u64| self.grains.get_grain_non_blocking(i).ok().filter(|g| g.index == i && g.payload.len() >= size);
         if !self.video.interlaced {
             let g = grain(head)?;
+            self.note_read(head);
             return Some(f(&g.payload[..size], None));
         }
         // Les deux trames d'une même image : la paire (paire, impaire) la plus récente.
         let first = if head % 2 == 1 { head - 1 } else { head.saturating_sub(2) };
         let (a, b) = (grain(first)?, grain(first + 1)?);
+        self.note_read(first);
         Some(f(&a.payload[..size], Some(&b.payload[..size])))
+    }
+
+    fn note_read(&self, first_grain: u64) {
+        let (num, den) = (self.rate.numerator.max(1) as u128, self.rate.denominator.max(1) as u128);
+        let at = (first_grain as u128 * AUDIO_RATE as u128 * den / num) as u64;
+        self.read_at.store(at, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Le début de la dernière image lue (`with_latest`, `latest_into`), en échantillons à 48 kHz :
+    /// là où l'appli a posé son son (`VideoWriter::last_frame_audio_index`).
+    pub fn last_frame_audio_index(&self) -> Option<u64> {
+        Some(self.read_at.load(std::sync::atomic::Ordering::Relaxed)).filter(|v| *v != u64::MAX)
     }
 
     /// L'image la plus récente copiée dans `out` (réutilisé : pas d'allocation à chaque image),
@@ -529,9 +545,33 @@ impl AudioReader {
         self.samples.get_runtime_info().ok().map(|r| r.headIndex)
     }
 
-    /// Les `n` échantillons suivants, entrelacés. Le lecteur suit l'écrivain, 40 ms derrière ce
-    /// qu'il a écrit (MXL ne garde que 200 ms : plus loin, c'est perdu) ; recalé s'il s'en écarte
-    /// de plus de 100 ms. None si ces échantillons ne sont pas (encore) là.
+    /// Les `n` échantillons qui commencent à `start` (en échantillons à 48 kHz), entrelacés, dans
+    /// `out` (réutilisé). Faux s'ils ne sont pas (encore, ou plus) dans le flux.
+    pub fn read_at(&self, start: u64, n: usize, out: &mut Vec<f32>) -> bool {
+        let Some(written) = self.samples.get_runtime_info().ok().map(|i| i.headIndex) else { return false };
+        // MXL garde 400 ms de son ; au-delà, c'est perdu.
+        if n == 0 || start + n as u64 - 1 > written || written - start > AUDIO_RATE as u64 * 2 / 5 {
+            return false;
+        }
+        let Ok(data) = self.samples.get_samples_non_blocking(start + n as u64 - 1, n) else { return false };
+        out.clear();
+        out.resize(n * self.channels, 0.0);
+        for c in 0..self.channels.min(data.num_of_channels()) {
+            let Ok((a, b)) = data.channel_data(c) else { return false };
+            let mut k = 0;
+            for chunk in [a, b] {
+                for src in chunk.as_chunks::<4>().0 {
+                    if k >= n {
+                        break;
+                    }
+                    out[k * self.channels + c] = f32::from_le_bytes(*src);
+                    k += 1;
+                }
+            }
+        }
+        true
+    }
+
     pub fn next_interleaved(&mut self, n: usize) -> Option<Vec<f32>> {
         let written = self.samples.get_runtime_info().ok()?.headIndex;
         let margin = AUDIO_RATE as u64 / 25;

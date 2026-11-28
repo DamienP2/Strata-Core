@@ -86,6 +86,8 @@ pub struct OutStatus {
     pub error: Option<String>,
     /// Images envoyées depuis l'ouverture.
     pub frames: u64,
+    /// Le son de l'appli arrive (sinon : du silence embarqué).
+    pub audio: bool,
 }
 
 struct Running {
@@ -198,6 +200,9 @@ fn start(w: WantedOut, mxl: Arc<Mxl>) -> Running {
 fn run(w: &WantedOut, mxl: &Mxl, stop: &AtomicBool, status: &Mutex<OutStatus>) {
     let id = strata_mxl::flow_id(&format!("sdi-out/{}/{}", w.card, w.connector));
     let mut follow = strata_mxl::Follow::new(id);
+    // Son son (float32 48 kHz) : embarqué dans la sortie, image par image, calé sur elle.
+    let aid = strata_mxl::flow_id(&format!("sdi-out/{}/{}/audio", w.card, w.connector));
+    let mut sound = Sound::default();
     let mut out: Option<(decklink_out::Out, Video)> = None;
     let mut last_new = Instant::now() - Duration::from_secs(10);
     let mut black_frame: Option<(Video, Vec<u8>)> = None;
@@ -236,34 +241,124 @@ fn run(w: &WantedOut, mxl: &Mxl, stop: &AtomicBool, status: &Mutex<OutStatus>) {
         let stride = strata_mxl::v210_stride(v.width);
         // Progressif : poussé à la carte droit depuis MXL ; entrelacé : les deux trames remises
         // ensemble dans un tampon réutilisé (pas d'allocation à chaque image).
-        let got = follow.reader(mxl).is_some_and(|r| {
+        // L'image d'abord (son instant dit où prendre le son), puis les deux ensemble à la carte.
+        let r = follow.reader(mxl);
+        let got = r.is_some_and(|r| {
             if r.video.interlaced {
-                r.latest_into(period * 3, &mut woven) && {
-                    o.push(&woven, stride);
-                    true
-                }
+                r.latest_into(period * 3, &mut woven)
             } else {
-                r.with_latest(period * 3, |a, _| o.push(a, stride)).is_some()
+                r.with_latest(period * 3, |a, _| {
+                    woven.resize(a.len(), 0);
+                    woven.copy_from_slice(a);
+                })
+                .is_some()
             }
         });
+        let at = if got { follow.reader(mxl).and_then(|r| r.last_frame_audio_index()) } else { None };
+        let heard = sound.frame(mxl, aid, v, at, o.audio_channels());
         match got {
             true => {
                 last_new = Instant::now();
+                o.push_av(&woven, stride, &sound.pcm);
                 set(&|s| {
                     s.state = OutState::Playing;
                     s.frames += 1;
+                    s.audio = heard;
                 });
             }
             false if last_new.elapsed() > Duration::from_secs(1) => {
                 if black_frame.as_ref().is_none_or(|(bv, _)| bv != v) {
                     black_frame = Some((*v, black(v)));
                 }
-                o.push(&black_frame.as_ref().unwrap().1, stride);
-                set(&|s| s.state = OutState::Black);
+                o.push_av(&black_frame.as_ref().unwrap().1, stride, &sound.pcm);
+                set(&|s| {
+                    s.state = OutState::Black;
+                    s.audio = heard;
+                });
             }
             // Un raté : la carte répète l'image d'avant.
             false => {}
         }
+    }
+}
+
+/// Le son d'une sortie : continu (un nombre fixe d'échantillons par image de la carte), recalé
+/// sur l'instant de l'image quand il s'en écarte de plus d'une image et demie (une image répétée
+/// ne fait pas répéter le son).
+#[derive(Default)]
+struct Sound {
+    reader: Option<strata_mxl::AudioReader>,
+    checked: Option<Instant>,
+    /// Le prochain échantillon à lire (48 kHz).
+    cursor: Option<u64>,
+    /// Le reste de la division échantillons / images (29,97 : 1601 ou 1602 par image).
+    acc: u64,
+    read: Vec<f32>,
+    /// Ce qui part avec l'image : `channels` canaux entrelacés, 32 bits.
+    pcm: Vec<i32>,
+}
+
+impl Sound {
+    /// Prépare le son de la prochaine image (`at` : son instant, s'il y a une image de l'appli) ;
+    /// vrai si c'est celui de l'appli (sinon du silence).
+    fn frame(&mut self, mxl: &Mxl, id: strata_mxl::Uuid, v: &Video, at: Option<u64>, channels: usize) -> bool {
+        // Combien d'échantillons pour cette image (48 000 × durée).
+        self.acc += strata_mxl::AUDIO_RATE as u64 * v.rate.1.max(1) as u64;
+        let n = (self.acc / v.rate.0.max(1) as u64) as usize;
+        self.acc %= v.rate.0.max(1) as u64;
+        self.pcm.clear();
+        self.pcm.resize(n * channels, 0);
+        if channels == 0 {
+            return false;
+        }
+        // L'écrivain de l'appli, revu deux fois par seconde.
+        if self.checked.is_none_or(|t| t.elapsed() >= Duration::from_millis(500)) {
+            self.checked = Some(Instant::now());
+            if mxl.is_active(id) {
+                if self.reader.is_none() {
+                    self.reader = mxl.audio_reader(id).ok();
+                }
+            } else {
+                self.reader = None;
+            }
+        }
+        let Some(r) = self.reader.as_ref() else {
+            self.cursor = None;
+            return false;
+        };
+        // Où lire : à l'instant de l'image si l'appli a écrit le son avec elle (en avance) ; sinon
+        // (son écrit au fil du temps réel), ce qui vient d'être écrit, une demi-image de marge.
+        // (L'appli écrit le son avec, ou juste après, l'image : quelques millisecondes de grâce.)
+        let t0 = Instant::now();
+        while let Some(a) = at {
+            if r.written().is_some_and(|w| w + 1 >= a + n as u64) || t0.elapsed() >= Duration::from_millis(5) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let target = at.map(|a| match r.written() {
+            Some(w) if a + n as u64 > w + 1 => (w + 1).saturating_sub(n as u64 * 3 / 2),
+            _ => a,
+        });
+        match (self.cursor, target) {
+            (Some(c), Some(t)) if c.abs_diff(t) > n as u64 * 3 / 2 => self.cursor = Some(t),
+            (None, Some(t)) => self.cursor = Some(t),
+            _ => {}
+        }
+        let Some(c) = self.cursor else { return false };
+        self.cursor = Some(c + n as u64);
+        if !r.read_at(c, n, &mut self.read) {
+            return false;
+        }
+        // Les canaux de l'appli rangés dans ceux de la carte (en trop : ignorés ; en moins : silence).
+        let rc = r.channels.max(1);
+        for k in 0..n {
+            for ch in 0..channels.min(rc) {
+                let x = self.read[k * rc + ch].clamp(-1.0, 1.0);
+                self.pcm[k * channels + ch] = (x as f64 * i32::MAX as f64) as i32;
+            }
+        }
+        true
     }
 }
 
@@ -311,9 +406,18 @@ mod decklink_out {
             }
         }
 
-        pub fn push(&self, frame: &[u8], stride: usize) {
+        /// Les canaux de son embarqué (simulée : 16).
+        pub fn audio_channels(&self) -> usize {
+            match self {
+                Out::Card(o) => o.audio_channels(),
+                Out::Simulated { .. } => 16,
+            }
+        }
+
+        /// Une image et son son (`channels` canaux entrelacés).
+        pub fn push_av(&self, frame: &[u8], stride: usize, pcm: &[i32]) {
             if let Out::Card(o) = self {
-                let _ = o.push(frame, stride);
+                let _ = if o.audio_channels() > 0 { o.push_av(frame, stride, pcm) } else { o.push(frame, stride) };
             }
         }
     }
