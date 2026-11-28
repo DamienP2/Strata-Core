@@ -19,6 +19,7 @@ pub mod install;
 pub mod logs;
 pub mod nmos;
 pub mod prefs;
+pub mod recette;
 pub mod relay;
 pub mod resources;
 pub mod server;

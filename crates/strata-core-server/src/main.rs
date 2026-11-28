@@ -27,6 +27,9 @@ enum Cmd {
     Https(cli::HttpsCmd),
     /// Le nom du serveur, son nom DNS, son fuseau.
     Config(cli::ConfigArgs),
+    /// Essais de recette sans appli : mire et bip sur une sortie, niveau du son d'une entrée.
+    #[command(subcommand)]
+    Test(strata_core_server::recette::TestCmd),
     /// Le service ptp4l de Strata (posé par l'installateur).
     Ptp4lUnit,
     /// Le service strata-media (posé par l'installateur).
@@ -59,6 +62,7 @@ fn main() -> anyhow::Result<()> {
         Some(Cmd::App(c)) => cli::app(c),
         Some(Cmd::Https(c)) => cli::https(c),
         Some(Cmd::Config(c)) => cli::config(c),
+        Some(Cmd::Test(c)) => strata_core_server::recette::run(c),
         Some(Cmd::Ptp4lUnit) => {
             print!("{}", strata_core_server::hardware::clock::PTP4L_UNIT);
             Ok(())

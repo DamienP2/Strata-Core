@@ -91,6 +91,11 @@ répond sur le port 3212 (IS-04 Node API v1.2/v1.3, IS-05 Connection API v1.1). 
 - L'API n'a pas de mot de passe (comme NMOS le prévoit) : elle ne doit être joignable que depuis
   le réseau de la régie. L'installateur ouvre 3212/tcp et 5353/udp si ufw est actif.
 
+## Recette
+
+La check-list des essais sur le vrai matériel : [RECETTE.md](RECETTE.md). Les essais sans appli
+(mire et bip sur une sortie, niveau du son d'une entrée) : `sudo -u strata strata-core test --help`.
+
 ## Relancé sur un serveur installé
 
 Il propose : mettre à jour le Core, ajouter des applis, installer DeckLink / NDI, réparer (fichiers
