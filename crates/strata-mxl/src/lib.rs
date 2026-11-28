@@ -622,10 +622,18 @@ pub fn v210_stride(width: u32) -> usize {
 
 /// Une ligne UYVY 8 bits (Cb Y Cr Y…) en v210 (10 bits, valeurs × 4).
 pub fn uyvy_to_v210(src: &[u8], dst: &mut [u8], width: usize) {
-    let px = |i: usize| -> u32 { u32::from(*src.get(i).unwrap_or(&0)) << 2 };
-    // Les 12 valeurs (Cb Y Cr Y Cb Y Cr Y Cb Y Cr Y) de 6 pixels, dans l'ordre d'UYVY.
     let blocks = width.div_ceil(6);
-    for b in 0..blocks {
+    // Les blocs entiers (6 pixels, 12 octets → 16), sans vérification à chaque valeur.
+    let full = (width / 6).min(src.len() / 12).min(dst.len() / 16);
+    for (i, o) in src.chunks_exact(12).zip(dst.chunks_exact_mut(16)).take(full) {
+        for k in 0..4 {
+            let w = (u32::from(i[3 * k]) << 2) | (u32::from(i[3 * k + 1]) << 12) | (u32::from(i[3 * k + 2]) << 22);
+            o[4 * k..4 * k + 4].copy_from_slice(&w.to_le_bytes());
+        }
+    }
+    // Le dernier bloc entamé : les valeurs au-delà de la ligne à 0.
+    let px = |i: usize| -> u32 { u32::from(*src.get(i).unwrap_or(&0)) << 2 };
+    for b in full..blocks {
         let base = b * 12;
         let v: [u32; 12] = std::array::from_fn(|k| if (b * 6 + k / 2) < width { px(base + k) } else { 0 });
         let words =
@@ -639,10 +647,32 @@ pub fn uyvy_to_v210(src: &[u8], dst: &mut [u8], width: usize) {
     }
 }
 
-/// Une ligne v210 en UYVY 8 bits (pour l'aperçu).
+/// Une ligne v210 en UYVY 8 bits (aperçus, entrées partagées sans MXL) : en AVX2 quand le
+/// processeur l'a, sinon en code ordinaire (même résultat, octet pour octet).
 pub fn v210_to_uyvy(src: &[u8], dst: &mut [u8], width: usize) {
+    let mut done = 0;
+    #[cfg(target_arch = "x86_64")]
+    if std::arch::is_x86_feature_detected!("avx2") {
+        // SAFETY : AVX2 est là (vérifié juste avant).
+        done = unsafe { v210_to_uyvy_avx2(src, dst, width) };
+    }
+    v210_to_uyvy_from(src, dst, width, done);
+}
+
+/// Le code ordinaire, à partir du bloc `from`.
+fn v210_to_uyvy_from(src: &[u8], dst: &mut [u8], width: usize, from: usize) {
     let blocks = width.div_ceil(6);
-    for b in 0..blocks {
+    let full = (width / 6).min(src.len() / 16).min(dst.len() / 12);
+    let start = from.min(full);
+    for (i, o) in src.chunks_exact(16).zip(dst.chunks_exact_mut(12)).take(full).skip(start) {
+        for k in 0..4 {
+            let w = u32::from_le_bytes([i[4 * k], i[4 * k + 1], i[4 * k + 2], i[4 * k + 3]]);
+            o[3 * k] = (w >> 2) as u8;
+            o[3 * k + 1] = (w >> 12) as u8;
+            o[3 * k + 2] = (w >> 22) as u8;
+        }
+    }
+    for b in full.max(from)..blocks {
         for k in 0..4 {
             let o = b * 16 + k * 4;
             let Some(w) = src.get(o..o + 4).map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]])) else { return };
@@ -654,6 +684,43 @@ pub fn v210_to_uyvy(src: &[u8], dst: &mut [u8], width: usize) {
             }
         }
     }
+}
+
+/// v210 → UYVY, deux blocs (12 pixels) à la fois ; rend le nombre de blocs faits (le reste : en
+/// code ordinaire).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn v210_to_uyvy_avx2(src: &[u8], dst: &mut [u8], width: usize) -> usize {
+    use std::arch::x86_64::*;
+    let full = (width / 6).min(src.len() / 16).min(dst.len() / 12);
+    let pairs = full / 2;
+    // Chaque mot de 32 bits : trois valeurs de 10 bits ; on garde leurs 8 bits du haut.
+    let ff = _mm256_set1_epi32(0xff);
+    // Les 3 octets utiles de chacun des 4 mots d'une moitié, serrés en 12 octets.
+    let pack = _mm256_setr_epi8(
+        0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14, -1, -1, -1, -1, //
+        0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14, -1, -1, -1, -1,
+    );
+    let mut out = [0u8; 32];
+    for p in 0..pairs {
+        let w = _mm256_loadu_si256(src.as_ptr().add(p * 32) as *const __m256i);
+        let a = _mm256_and_si256(_mm256_srli_epi32::<2>(w), ff);
+        let b = _mm256_slli_epi32::<8>(_mm256_and_si256(_mm256_srli_epi32::<12>(w), ff));
+        let c = _mm256_slli_epi32::<16>(_mm256_and_si256(_mm256_srli_epi32::<22>(w), ff));
+        let x = _mm256_shuffle_epi8(_mm256_or_si256(a, _mm256_or_si256(b, c)), pack);
+        let o = p * 24;
+        if o + 28 <= dst.len() {
+            // Deux écritures de 16 octets : les 4 de trop de chacune sont réécrites juste après
+            // (par la seconde, puis par le tour suivant).
+            _mm_storeu_si128(dst.as_mut_ptr().add(o) as *mut __m128i, _mm256_castsi256_si128(x));
+            _mm_storeu_si128(dst.as_mut_ptr().add(o + 12) as *mut __m128i, _mm256_extracti128_si256::<1>(x));
+        } else {
+            _mm256_storeu_si256(out.as_mut_ptr() as *mut __m256i, x);
+            dst[o..o + 12].copy_from_slice(&out[..12]);
+            dst[o + 12..o + 24].copy_from_slice(&out[16..28]);
+        }
+    }
+    pairs * 2
 }
 
 /// Un flux de données annexes (ANC) : un grain `video/smpte291` (RFC 8331) par image, ou par trame
@@ -783,6 +850,40 @@ impl DataReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn v210_fast_paths_match() {
+        // Les chemins rapides (blocs entiers, AVX2) donnent le même résultat que le calcul pas à pas.
+        let reference = |src: &[u8], width: usize| -> Vec<u8> {
+            let mut out = vec![0u8; width * 2];
+            for (i, o) in out.iter_mut().enumerate() {
+                let (b, r) = (i / 12, i % 12);
+                let at = b * 16 + (r / 3) * 4;
+                let w = u32::from_le_bytes([src[at], src[at + 1], src[at + 2], src[at + 3]]);
+                *o = ((w >> (10 * (r % 3) + 2)) & 0xff) as u8;
+            }
+            out
+        };
+        for width in [1920usize, 1280, 720, 7, 13] {
+            let uyvy: Vec<u8> = (0..width * 2).map(|i| (i * 37 % 251) as u8).collect();
+            let mut v210 = vec![0u8; v210_stride(width as u32)];
+            uyvy_to_v210(&uyvy, &mut v210, width);
+            assert_eq!(reference(&v210, width), uyvy, "reference, width {width}");
+            let mut plain = vec![0u8; width * 2];
+            v210_to_uyvy_from(&v210, &mut plain, width, 0);
+            assert_eq!(plain, uyvy, "plain, width {width}");
+            let mut fast = vec![0u8; width * 2];
+            v210_to_uyvy(&v210, &mut fast, width);
+            assert_eq!(fast, uyvy, "dispatched, width {width}");
+            // Des mots v210 quelconques (bits du bas, 2 bits du haut non nuls).
+            let noisy: Vec<u8> = (0..v210.len()).map(|i| (i * 89 % 256) as u8).collect();
+            let (mut a, mut b) = (vec![0u8; width * 2], vec![0u8; width * 2]);
+            v210_to_uyvy_from(&noisy, &mut a, width, 0);
+            v210_to_uyvy(&noisy, &mut b, width);
+            assert_eq!(a, reference(&noisy, width), "noisy plain, width {width}");
+            assert_eq!(b, reference(&noisy, width), "noisy dispatched, width {width}");
+        }
+    }
 
     #[test]
     fn v210_round_trip() {
