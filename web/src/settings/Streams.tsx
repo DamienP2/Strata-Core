@@ -29,6 +29,7 @@ interface Input {
   format: string;
   relay: boolean;
   relayPort: number;
+  opts?: ProtoOpts;
   mxlFlow?: string;
   relayUrl?: string | null;
   status?: InputStatus | null;
@@ -40,6 +41,29 @@ interface Destination {
   url: string;
   key: string;
   enabled: boolean;
+  opts?: ProtoOpts;
+}
+
+/** Les réglages propres au protocole (vide ou 0 : par défaut). */
+interface ProtoOpts {
+  srtMode?: string;
+  srtLatencyMs?: number;
+  srtPassphrase?: string;
+  srtKeyLen?: number;
+  srtStreamId?: string;
+  rtspTransport?: string;
+  rtmpListen?: boolean;
+  localAddress?: string;
+  sources?: string;
+  ttl?: number;
+  bufferKb?: number;
+  ristProfile?: string;
+  ristBufferMs?: number;
+  ristSecret?: string;
+  ristEncryption?: number;
+  hlsSegmentS?: number;
+  hlsListSize?: number;
+  timeoutS?: number;
 }
 
 interface DestStatus {
@@ -86,6 +110,156 @@ interface StreamsView {
 }
 
 const MASK = '••••••••';
+
+type Kind = 'srt' | 'rtmp' | 'rtmps' | 'rtsp' | 'https' | 'udp' | 'rtp' | 'rist';
+const KIND_LABEL: Record<Kind, string> = { srt: 'SRT', rtmp: 'RTMP', rtmps: 'RTMPS', rtsp: 'RTSP', https: 'HLS', udp: 'UDP (TS)', rtp: 'RTP (TS)', rist: 'RIST' };
+const PLACEHOLDER: Record<Kind, [string, string]> = {
+  srt: ['srt://10.0.0.12:9000  ·  srt://:9000', 'srt://cdn.example:9000'],
+  rtmp: ['rtmp://server/live/stream  ·  rtmp://0.0.0.0:1935/live/cam', 'rtmp://a.rtmp.youtube.com/live2'],
+  rtmps: ['rtmps://server/live/stream', 'rtmps://live-api-s.facebook.com:443/rtmp'],
+  rtsp: ['rtsp://user:password@camera/stream', ''],
+  https: ['https://example.com/live/index.m3u8', ''],
+  udp: ['udp://@239.1.1.1:5000', 'udp://239.1.1.1:5000'],
+  rtp: ['rtp://@239.1.1.1:5004', 'rtp://239.1.1.1:5004'],
+  rist: ['rist://@:8193  ·  rist://10.0.0.12:8193', 'rist://10.0.0.12:8193'],
+};
+
+function kindOf(url: string): Kind | null {
+  const s = url.split('://')[0]?.toLowerCase();
+  if (s === 'http') return 'https';
+  return (Object.keys(KIND_LABEL) as Kind[]).includes(s as Kind) ? (s as Kind) : null;
+}
+
+/** Change le protocole d'une adresse (garde le reste). */
+function withKind(url: string, k: Kind): string {
+  const rest = url.includes('://') ? url.slice(url.indexOf('://') + 3) : '';
+  return `${k}://${rest}`;
+}
+
+/** Le type de flux, puis l'adresse et les réglages de ce type. */
+function ProtoFields({ url, opts, output, kinds, onUrl, onOpts, extra }: {
+  url: string;
+  opts: ProtoOpts;
+  output: boolean;
+  kinds: Kind[];
+  onUrl: (u: string) => void;
+  onOpts: (o: ProtoOpts) => void;
+  extra?: React.ReactNode;
+}) {
+  const kind = kindOf(url);
+  const set = <K extends keyof ProtoOpts>(k: K, x: ProtoOpts[K]) => onOpts({ ...opts, [k]: x });
+  const num = (k: keyof ProtoOpts, label: string, suffix: string, max: number, placeholder: string) => (
+    <Field label={suffix ? `${label} (${suffix})` : label}>
+      <input
+        className="st-mono"
+        inputMode="numeric"
+        value={opts[k] ? String(opts[k]) : ''}
+        placeholder={placeholder}
+        onChange={(e) => set(k, Math.min(max, Number(e.target.value.replace(/[^0-9]/g, '')) || 0) as never)}
+      />
+    </Field>
+  );
+  const text = (k: keyof ProtoOpts, label: string, placeholder = '', secret = false) => (
+    <Field label={label}>
+      <input
+        className="st-mono"
+        type={secret ? 'password' : 'text'}
+        autoComplete="off"
+        value={(opts[k] as string | undefined) ?? ''}
+        placeholder={placeholder}
+        onFocus={(e) => secret && opts[k] === MASK && e.target.select()}
+        onChange={(e) => set(k, e.target.value as never)}
+      />
+    </Field>
+  );
+  return (
+    <>
+      <FieldGrid two>
+        <Field label={t('Type')} group>
+          <Dropdown value={kind ?? ''} options={kinds.map((k) => ({ value: k, label: KIND_LABEL[k] }))} onChange={(k) => onUrl(withKind(url, k as Kind))} />
+        </Field>
+        <Field label={t('Address')}>
+          <input className="st-mono" value={url} placeholder={kind ? PLACEHOLDER[kind][output ? 1 : 0] : 'srt://…'} onChange={(e) => onUrl(e.target.value)} />
+        </Field>
+      </FieldGrid>
+      {kind === 'srt' && (
+        <>
+          <FieldGrid two>
+            <Field label={t('SRT mode')} group>
+              <Dropdown
+                value={opts.srtMode ?? ''}
+                options={[
+                  { value: '', label: t('Auto (listener without a host)') },
+                  { value: 'caller', label: t('Caller') },
+                  { value: 'listener', label: t('Listener') },
+                  { value: 'rendezvous', label: t('Rendezvous') },
+                ]}
+                onChange={(x) => set('srtMode', x)}
+              />
+            </Field>
+            {num('srtLatencyMs', t('Latency'), 'ms', 10000, '120')}
+          </FieldGrid>
+          <FieldGrid two>
+            {text('srtPassphrase', t('Passphrase (encryption)'), t('none'), true)}
+            <Field label={t('Key length')} group>
+              <Dropdown
+                value={String(opts.srtKeyLen ?? 0)}
+                options={[{ value: '0', label: t('Default') }, { value: '16', label: 'AES-128' }, { value: '24', label: 'AES-192' }, { value: '32', label: 'AES-256' }]}
+                onChange={(x) => set('srtKeyLen', Number(x))}
+              />
+            </Field>
+          </FieldGrid>
+          {text('srtStreamId', t('Stream ID'), output ? t('the stream key, if empty') : '')}
+        </>
+      )}
+      {kind === 'rtsp' && (
+        <FieldGrid two>
+          <Field label={t('Transport')} group>
+            <Segmented value={opts.rtspTransport || 'tcp'} onChange={(x) => set('rtspTransport', x)} options={[{ value: 'tcp', label: 'TCP' }, { value: 'udp', label: 'UDP' }, { value: 'http', label: 'HTTP' }]} />
+          </Field>
+          {num('timeoutS', t('Give up after'), 's', 600, '10')}
+        </FieldGrid>
+      )}
+      {(kind === 'rtmp' || kind === 'rtmps') && !output && (
+        <FieldGrid two>
+          <Field label={t('Connection')} group>
+            <Switch checked={!!opts.rtmpListen} onChange={(x) => set('rtmpListen', x)} label={t('The stream is pushed to the server')} />
+          </Field>
+          {num('timeoutS', t('Give up after'), 's', 600, '10')}
+        </FieldGrid>
+      )}
+      {kind === 'https' && !output && <FieldGrid two>{num('timeoutS', t('Give up after'), 's', 600, '10')}</FieldGrid>}
+      {(kind === 'udp' || kind === 'rtp') && (
+        <FieldGrid two>
+          {text('localAddress', t('Local address (interface)'), t('automatic'))}
+          {output ? num('ttl', 'TTL', '', 255, '1') : text('sources', t('Accepted sources (SSM)'), '10.0.0.12')}
+          {!output && num('bufferKb', t('Receive buffer'), 'KB', 524288, '8192')}
+        </FieldGrid>
+      )}
+      {kind === 'rist' && (
+        <>
+          <FieldGrid two>
+            <Field label={t('RIST profile')} group>
+              <Segmented value={opts.ristProfile || 'main'} onChange={(x) => set('ristProfile', x)} options={[{ value: 'simple', label: 'Simple' }, { value: 'main', label: 'Main' }, { value: 'advanced', label: 'Advanced' }]} />
+            </Field>
+            {num('ristBufferMs', t('Recovery buffer'), 'ms', 30000, '1000')}
+          </FieldGrid>
+          <FieldGrid two>
+            {text('ristSecret', t('Secret (encryption)'), t('none'), true)}
+            <Field label={t('Encryption')} group>
+              <Dropdown value={String(opts.ristEncryption || 128)} options={[{ value: '128', label: 'AES-128' }, { value: '256', label: 'AES-256' }]} onChange={(x) => set('ristEncryption', Number(x))} />
+            </Field>
+          </FieldGrid>
+          {text('localAddress', t('Local address (interface)'), t('automatic'))}
+        </>
+      )}
+      {extra}
+    </>
+  );
+}
+
+const IN_KINDS: Kind[] = ['srt', 'rtmp', 'rtmps', 'rtsp', 'https', 'udp', 'rtp', 'rist'];
+const OUT_KINDS: Kind[] = ['srt', 'rtmp', 'rtmps', 'udp', 'rtp', 'rist'];
 const enc = encodeURIComponent;
 const FORMATS = ['1080i50', '1080i59.94', '1080p25', '1080p50', '1080p59.94', '720p50', '720p59.94', '2160p25', '2160p50'];
 const OUT_FORMATS = ['1080p25', '1080p50', '1080p59.94', '720p50', '720p59.94', '2160p25', '2160p50'];
@@ -351,10 +525,7 @@ function InputEditor({ value, busy, onClose, onSave }: { value: Input; busy: boo
       <Field label={t('Name')}>
         <input value={v.name} placeholder={t('Studio camera')} onChange={(e) => set('name', e.target.value)} />
       </Field>
-      <Field label={t('Address')}>
-        <input className="st-mono" value={v.url} placeholder="srt://10.0.0.12:9000?latency=200" onChange={(e) => set('url', e.target.value)} />
-      </Field>
-      <p className="st-muted core-note">{t('SRT, RTMP, RTSP, HLS (https://…/index.m3u8), UDP or RTP in TS, RIST. To have a stream pushed to the server: rtmp://0.0.0.0:1935/live/<name> or srt://:9000?mode=listener.')}</p>
+      <ProtoFields url={v.url} opts={v.opts ?? {}} output={false} kinds={IN_KINDS} onUrl={(u) => set('url', u)} onOpts={(o) => set('opts', o)} />
       <FieldGrid two>
         <Field label={t('Video written in MXL')} group>
           <Dropdown
@@ -376,7 +547,7 @@ function OutputEditor({ value, sources, busy, onClose, onSave }: { value: Output
   const [v, setV] = useState<Output>(value);
   const set = <K extends keyof Output>(k: K, x: Output[K]) => setV({ ...v, [k]: x });
   const setDest = (i: number, d: Partial<Destination>) => set('destinations', v.destinations.map((x, k) => (k === i ? { ...x, ...d } : x)));
-  const addDest = () => set('destinations', [...v.destinations, { id: `d${Date.now().toString(36)}`, name: '', url: '', key: '', enabled: true }]);
+  const addDest = () => set('destinations', [...v.destinations, { id: `d${Date.now().toString(36)}`, name: '', url: 'rtmp://', key: '', enabled: true }]);
   const valid = v.name.trim() && v.destinations.length > 0 && v.destinations.every((d) => d.url.trim());
   return (
     <Modal
@@ -433,22 +604,49 @@ function OutputEditor({ value, sources, busy, onClose, onSave }: { value: Output
       <h4 className="core-subhead">{t('Destinations')}</h4>
       {v.destinations.map((d, i) => (
         <div key={d.id} className="core-dest-row">
-          <FieldGrid two>
-            <Field label={t('Address')}>
-              <input className="st-mono" value={d.url} placeholder="rtmp://a.rtmp.youtube.com/live2" onChange={(e) => setDest(i, { url: e.target.value })} />
-            </Field>
-            <Field label={t('Stream key')}>
-              <input
-                className="st-mono"
-                type="password"
-                autoComplete="off"
-                value={d.key}
-                placeholder={d.url === 'hls' || d.url.startsWith('udp') ? '—' : ''}
-                onFocus={(e) => d.key === MASK && e.target.select()}
-                onChange={(e) => setDest(i, { key: e.target.value })}
-              />
-            </Field>
-          </FieldGrid>
+          {d.url === 'hls' ? (
+            <FieldGrid two>
+              <Field label={`${t('Segment length')} (s)`}>
+                <input
+                  className="st-mono"
+                  value={d.opts?.hlsSegmentS ? String(d.opts.hlsSegmentS) : ''}
+                  placeholder="2"
+                  onChange={(e) => setDest(i, { opts: { ...d.opts, hlsSegmentS: Math.min(30, Number(e.target.value.replace(/[^0-9]/g, '')) || 0) } })}
+                />
+              </Field>
+              <Field label={t('Segments in the playlist')}>
+                <input
+                  className="st-mono"
+                  value={d.opts?.hlsListSize ? String(d.opts.hlsListSize) : ''}
+                  placeholder="6"
+                  onChange={(e) => setDest(i, { opts: { ...d.opts, hlsListSize: Math.min(60, Number(e.target.value.replace(/[^0-9]/g, '')) || 0) } })}
+                />
+              </Field>
+            </FieldGrid>
+          ) : (
+            <ProtoFields
+              url={d.url}
+              opts={d.opts ?? {}}
+              output
+              kinds={OUT_KINDS}
+              onUrl={(u) => setDest(i, { url: u })}
+              onOpts={(o) => setDest(i, { opts: o })}
+              extra={
+                (d.url.startsWith('rtmp') || d.key) && (
+                  <Field label={t('Stream key')}>
+                    <input
+                      className="st-mono"
+                      type="password"
+                      autoComplete="off"
+                      value={d.key}
+                      onFocus={(e) => d.key === MASK && e.target.select()}
+                      onChange={(e) => setDest(i, { key: e.target.value })}
+                    />
+                  </Field>
+                )
+              }
+            />
+          )}
           <div className="core-dest-tools">
             <input value={d.name} placeholder={t('Name (YouTube, CDN…)')} onChange={(e) => setDest(i, { name: e.target.value })} />
             <Switch checked={d.enabled} onChange={(x) => setDest(i, { enabled: x })} label={t('On')} />
@@ -471,7 +669,6 @@ function OutputEditor({ value, sources, busy, onClose, onSave }: { value: Output
           <Plus size={14} /> {t('HLS served by the Core')}
         </button>
       </div>
-      <p className="st-muted core-note">{t('RTMP(S): the key is added to the address. SRT: the key is sent as streamid. UDP, RTP and RIST: an MPEG-TS stream.')}</p>
     </Modal>
   );
 }

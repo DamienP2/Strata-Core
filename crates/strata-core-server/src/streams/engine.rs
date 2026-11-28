@@ -345,20 +345,108 @@ fn hw_decode(env: &Env) -> Option<HwDecode> {
     }
 }
 
+/// Les options de protocole (avant l'adresse), entrée ou sortie.
+pub fn proto_args(url: &str, o: &crate::streams::ProtoOpts, output: bool) -> Vec<String> {
+    let mut a: Vec<String> = Vec::new();
+    // Une option et sa valeur (sans valeur : un drapeau, comme -re).
+    let mut opt = |k: &str, v: String| {
+        a.push(format!("-{k}"));
+        if !v.is_empty() {
+            a.push(v);
+        }
+    };
+    let timeout_us = (if o.timeout_s == 0 { 10 } else { o.timeout_s } as u64 * 1_000_000).to_string();
+    match scheme(url).unwrap_or("") {
+        "srt" => {
+            let mode = if o.srt_mode.is_empty() {
+                // Sans hôte (`srt://:9000`) : on attend l'appelant.
+                if url.trim_start_matches("srt://").starts_with(':') {
+                    "listener"
+                } else {
+                    "caller"
+                }
+            } else {
+                o.srt_mode.as_str()
+            };
+            if !url.contains("mode=") {
+                opt("mode", mode.to_string());
+            }
+            if o.srt_latency_ms > 0 {
+                opt("latency", (o.srt_latency_ms as u64 * 1000).to_string());
+            }
+            if !o.srt_passphrase.is_empty() {
+                opt("passphrase", o.srt_passphrase.clone());
+                if o.srt_key_len > 0 {
+                    opt("pbkeylen", o.srt_key_len.to_string());
+                }
+            }
+            if !o.srt_stream_id.is_empty() {
+                opt("streamid", o.srt_stream_id.clone());
+            }
+            if output {
+                opt("pkt_size", "1316".into());
+            }
+        }
+        "rtsp" | "rtsps" if !output => {
+            opt("rtsp_transport", if o.rtsp_transport.is_empty() { "tcp".into() } else { o.rtsp_transport.clone() });
+            opt("timeout", timeout_us);
+        }
+        "rtmp" | "rtmps" if !output => {
+            let listen = o.rtmp_listen || url.split("://").nth(1).is_some_and(|h| h.starts_with("0.0.0.0") || h.starts_with('@'));
+            if listen {
+                opt("listen", "1".into());
+            } else {
+                opt("rw_timeout", timeout_us);
+            }
+        }
+        // HLS ou fichier : lu à son rythme, pas plus vite.
+        "http" | "https" if !output => {
+            opt("re", String::new());
+            opt("rw_timeout", timeout_us);
+        }
+        "udp" | "rtp" => {
+            if !o.local_address.is_empty() {
+                opt("localaddr", o.local_address.clone());
+            }
+            if output {
+                if o.ttl > 0 {
+                    opt("ttl", o.ttl.to_string());
+                }
+                opt("pkt_size", "1316".into());
+            } else {
+                if !o.sources.is_empty() {
+                    opt("sources", o.sources.replace(' ', ""));
+                }
+                let kb = if o.buffer_kb == 0 { 8192 } else { o.buffer_kb } as u64;
+                opt("buffer_size", (kb * 1024).to_string());
+                opt("fifo_size", (kb * 1024 / 188).to_string());
+                opt("overrun_nonfatal", "1".into());
+            }
+        }
+        "rist" => {
+            if !o.rist_profile.is_empty() {
+                opt("rist_profile", o.rist_profile.clone());
+            }
+            if o.rist_buffer_ms > 0 {
+                opt("buffer_size", o.rist_buffer_ms.to_string());
+            }
+            if !o.rist_secret.is_empty() {
+                opt("secret", o.rist_secret.clone());
+                opt("encryption", if o.rist_encryption == 0 { 128 } else { o.rist_encryption }.to_string());
+            }
+            if !o.local_address.is_empty() {
+                opt("localaddr", o.local_address.clone());
+            }
+        }
+        _ => {}
+    }
+    a
+}
+
 pub fn input_args(c: &InputCfg, v: &Video, audio: bool, hw: Option<&HwDecode>) -> Vec<String> {
     let mut a: Vec<String> = Vec::new();
     let sch = scheme(&c.url).unwrap_or("");
-    match sch {
-        "rtsp" | "rtsps" => a.extend(["-rtsp_transport", "tcp"].map(String::from)),
-        // Sur 0.0.0.0 : le Core attend qu'on lui pousse le flux.
-        "rtmp" | "rtmps" if c.url.split("://").nth(1).is_some_and(|h| h.starts_with("0.0.0.0") || h.starts_with('@')) => {
-            a.extend(["-listen", "1"].map(String::from));
-        }
-        "rtmp" | "rtmps" => a.extend(["-rw_timeout", "10000000"].map(String::from)),
-        // HLS ou fichier : lu à son rythme, pas plus vite.
-        "http" | "https" => a.extend(["-re", "-rw_timeout", "10000000"].map(String::from)),
-        _ => {}
-    }
+    a.extend(proto_args(&c.url, &c.opts, false));
     let url = if sch == "rtmp" { c.url.replacen("rtmp://@", "rtmp://0.0.0.0", 1) } else { c.url.clone() };
     // Décodé par le GPU quand il y en a un (les images reviennent en mémoire pour la suite).
     match hw {
@@ -701,27 +789,11 @@ pub fn encoder_args(c: &OutputCfg, feed: &Video, target: &Video, encoder: &str, 
     a
 }
 
-/// L'adresse d'une destination, sa clé comprise.
+/// L'adresse d'une destination, la clé RTMP comprise (les autres réglages passent en options).
 pub fn destination_url(d: &Destination) -> String {
     let key = d.key.trim();
     match scheme(&d.url) {
         Some("rtmp" | "rtmps") if !key.is_empty() => format!("{}/{}", d.url.trim_end_matches('/'), key),
-        Some("srt") => {
-            let mut u = d.url.clone();
-            let mut add = |k: &str, v: &str| {
-                if !u.contains(&format!("{k}=")) {
-                    u.push(if u.contains('?') { '&' } else { '?' });
-                    u.push_str(&format!("{k}={v}"));
-                }
-            };
-            add("mode", "caller");
-            add("pkt_size", "1316");
-            if !key.is_empty() {
-                add("streamid", key);
-            }
-            u
-        }
-        Some("udp") if !d.url.contains("pkt_size") => format!("{}{}pkt_size=1316", d.url, if d.url.contains('?') { '&' } else { '?' }),
         _ => d.url.clone(),
     }
 }
@@ -737,15 +809,24 @@ pub fn destination_args(d: &Destination, hls_dir: &Path) -> Vec<String> {
                     "-f",
                     "hls",
                     "-hls_time",
-                    "2",
+                    "{hls_time}",
                     "-hls_list_size",
-                    "6",
+                    "{hls_list}",
                     "-hls_flags",
                     "delete_segments+independent_segments+omit_endlist",
                     "-hls_segment_filename",
                 ]
                 .map(String::from),
             );
+            let t = if d.opts.hls_segment_s == 0 { 2 } else { d.opts.hls_segment_s }.to_string();
+            let l = if d.opts.hls_list_size == 0 { 6 } else { d.opts.hls_list_size }.to_string();
+            for x in a.iter_mut() {
+                if x == "{hls_time}" {
+                    *x = t.clone();
+                } else if x == "{hls_list}" {
+                    *x = l.clone();
+                }
+            }
             a.push(hls_dir.join("seg%05d.ts").display().to_string());
             a.push(hls_dir.join("index.m3u8").display().to_string());
             return a;
@@ -754,6 +835,12 @@ pub fn destination_args(d: &Destination, hls_dir: &Path) -> Vec<String> {
         (_, Some("rtp")) => a.extend(["-f", "rtp_mpegts"].map(String::from)),
         _ => a.extend(["-f", "mpegts"].map(String::from)),
     }
+    // SRT : la clé de la destination sert d'identifiant de flux, si aucun n'est réglé.
+    let mut opts = d.opts.clone();
+    if scheme(&d.url) == Some("srt") && opts.srt_stream_id.is_empty() {
+        opts.srt_stream_id = d.key.trim().to_string();
+    }
+    a.extend(proto_args(&d.url, &opts, true));
     a.push(destination_url(d));
     a
 }
@@ -1159,11 +1246,30 @@ mod tests {
         assert!(a.ends_with("udp://127.0.0.1:20000?pkt_size=1316"));
         let c = InputCfg { url: "srt://10.0.0.1:9000".into(), ..Default::default() };
         let a = input_args(&c, &Video { interlaced: false, rate: (50, 1), ..v }, false, None).join(" ");
-        assert!(a.starts_with("-fflags"));
+        assert!(a.starts_with("-mode caller -fflags"));
         assert!(a.contains("yadif=mode=send_frame:deint=interlaced,fps=50/1"));
         assert!(!a.contains("pipe:3") && !a.contains("udp://"));
         let cuda = ("cuda".to_string(), None);
-        assert!(input_args(&c, &v, false, Some(&cuda)).join(" ").starts_with("-hwaccel cuda -fflags"));
+        assert!(input_args(&c, &v, false, Some(&cuda)).join(" ").starts_with("-mode caller -hwaccel cuda -fflags"));
+        // Les réglages de chaque protocole, en options (jamais dans l'adresse).
+        let o = crate::streams::ProtoOpts { srt_latency_ms: 200, srt_passphrase: "0123456789ab".into(), srt_key_len: 32, ..Default::default() };
+        let c = InputCfg { url: "srt://:9000".into(), opts: o, ..Default::default() };
+        let a = input_args(&c, &v, false, None).join(" ");
+        assert!(a.starts_with("-mode listener -latency 200000 -passphrase 0123456789ab -pbkeylen 32 -fflags"), "{a}");
+        let o = crate::streams::ProtoOpts { local_address: "10.1.0.2".into(), sources: "10.1.0.9".into(), ..Default::default() };
+        let c = InputCfg { url: "udp://@239.1.1.1:5000".into(), opts: o, ..Default::default() };
+        let a = input_args(&c, &v, false, None).join(" ");
+        assert!(a.starts_with("-localaddr 10.1.0.2 -sources 10.1.0.9 -buffer_size 8388608 -fifo_size 44620 -overrun_nonfatal 1"), "{a}");
+        let c = InputCfg {
+            url: "rtsp://cam/stream".into(),
+            opts: crate::streams::ProtoOpts { rtsp_transport: "udp".into(), ..Default::default() },
+            ..Default::default()
+        };
+        assert!(input_args(&c, &v, false, None).join(" ").starts_with("-rtsp_transport udp -timeout 10000000"));
+        let c = InputCfg { url: "https://x/index.m3u8".into(), ..Default::default() };
+        assert!(input_args(&c, &v, false, None).join(" ").starts_with("-re -rw_timeout 10000000"));
+        let mut bad = crate::streams::ProtoOpts { srt_passphrase: "short".into(), ..Default::default() };
+        assert!(bad.check("x").is_err());
     }
 
     #[test]
@@ -1195,7 +1301,11 @@ mod tests {
         let yt = Destination { url: "rtmp://a.rtmp.youtube.com/live2/".into(), key: "abcd-efgh".into(), ..Default::default() };
         assert_eq!(destination_url(&yt), "rtmp://a.rtmp.youtube.com/live2/abcd-efgh");
         let srt = Destination { url: "srt://cdn.example:9000".into(), key: "live/prog".into(), ..Default::default() };
-        assert_eq!(destination_url(&srt), "srt://cdn.example:9000?mode=caller&pkt_size=1316&streamid=live/prog");
+        assert_eq!(destination_url(&srt), "srt://cdn.example:9000");
+        let a = destination_args(&srt, Path::new("/x")).join(" ");
+        assert!(a.ends_with("-f mpegts -mode caller -streamid live/prog -pkt_size 1316 srt://cdn.example:9000"), "{a}");
+        let udp = Destination { url: "udp://239.1.1.1:5000".into(), opts: crate::streams::ProtoOpts { ttl: 8, ..Default::default() }, ..Default::default() };
+        assert!(destination_args(&udp, Path::new("/x")).join(" ").ends_with("-f mpegts -ttl 8 -pkt_size 1316 udp://239.1.1.1:5000"));
         let a = destination_args(&yt, Path::new("/x")).join(" ");
         assert!(a.contains("-c copy -f flv -flvflags no_duration_filesize rtmp://"));
         let hls = Destination { url: "hls".into(), ..Default::default() };

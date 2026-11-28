@@ -35,6 +35,136 @@ pub struct InputCfg {
     pub relay: bool,
     /// Son port (donné par le Core quand il manque).
     pub relay_port: u16,
+    /// Les réglages propres au protocole.
+    pub opts: ProtoOpts,
+}
+
+/// Les réglages propres à chaque protocole (passés à ffmpeg en options, jamais dans l'adresse).
+/// Vide ou 0 : la valeur par défaut.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ProtoOpts {
+    /// SRT : caller, listener, rendezvous.
+    pub srt_mode: String,
+    /// SRT : latence (ms ; 120 par défaut).
+    pub srt_latency_ms: u32,
+    /// SRT : phrase de chiffrement (10 à 79 caractères).
+    pub srt_passphrase: String,
+    /// SRT : longueur de la clé (16, 24, 32 octets).
+    pub srt_key_len: u8,
+    /// SRT : identifiant de flux (en sortie : la clé de la destination s'il est vide).
+    pub srt_stream_id: String,
+    /// RTSP : tcp, udp, http.
+    pub rtsp_transport: String,
+    /// RTMP : écoute (on pousse le flux vers le Core) ; sinon d'après l'adresse (0.0.0.0).
+    pub rtmp_listen: bool,
+    /// UDP, RTP, RIST : l'adresse locale (interface) pour le multicast.
+    pub local_address: String,
+    /// UDP, RTP : les sources acceptées (multicast SSM), séparées par des virgules.
+    pub sources: String,
+    /// UDP, RTP (sortie) : TTL du multicast.
+    pub ttl: u8,
+    /// UDP, RTP : tampon de réception (Ko).
+    pub buffer_kb: u32,
+    /// RIST : simple, main, advanced.
+    pub rist_profile: String,
+    /// RIST : tampon de reprise (ms).
+    pub rist_buffer_ms: u32,
+    /// RIST : secret (profil main), et chiffrement (128 ou 256).
+    pub rist_secret: String,
+    pub rist_encryption: u16,
+    /// HLS (sortie) : durée d'un segment (s) et segments dans la liste.
+    pub hls_segment_s: u8,
+    pub hls_list_size: u8,
+    /// Délai sans données avant d'abandonner et de réessayer (s ; 10 par défaut).
+    pub timeout_s: u32,
+}
+
+impl ProtoOpts {
+    /// Vérifie les valeurs (le nom du flux pour les messages).
+    pub fn check(&mut self, name: &str) -> Result<(), String> {
+        let clean = |s: &mut String| *s = s.trim().to_string();
+        for s in [
+            &mut self.srt_mode,
+            &mut self.srt_passphrase,
+            &mut self.srt_stream_id,
+            &mut self.rtsp_transport,
+            &mut self.local_address,
+            &mut self.sources,
+            &mut self.rist_profile,
+            &mut self.rist_secret,
+        ] {
+            clean(s);
+        }
+        let bad = |what: &str| Err(format!("{name}: {what}"));
+        if !["", "caller", "listener", "rendezvous"].contains(&self.srt_mode.as_str()) {
+            return bad("the SRT mode is caller, listener or rendezvous");
+        }
+        if !self.srt_passphrase.is_empty() && !(10..=79).contains(&self.srt_passphrase.chars().count()) {
+            return bad("the SRT passphrase has 10 to 79 characters");
+        }
+        if ![0, 16, 24, 32].contains(&self.srt_key_len) {
+            return bad("the SRT key length is 16, 24 or 32");
+        }
+        if !["", "tcp", "udp", "http"].contains(&self.rtsp_transport.as_str()) {
+            return bad("the RTSP transport is tcp, udp or http");
+        }
+        if !self.local_address.is_empty() && self.local_address.parse::<std::net::Ipv4Addr>().is_err() {
+            return bad("the local address is an IPv4 address of this server");
+        }
+        if self.sources.split(',').map(str::trim).filter(|x| !x.is_empty()).any(|x| x.parse::<std::net::Ipv4Addr>().is_err()) {
+            return bad("the sources are IPv4 addresses separated by commas");
+        }
+        if !["", "simple", "main", "advanced"].contains(&self.rist_profile.as_str()) {
+            return bad("the RIST profile is simple, main or advanced");
+        }
+        if ![0, 128, 256].contains(&self.rist_encryption) {
+            return bad("the RIST encryption is 128 or 256");
+        }
+        if self.text().any(|s| s.chars().any(char::is_control)) {
+            return bad("no control characters");
+        }
+        self.srt_latency_ms = self.srt_latency_ms.min(10_000);
+        self.rist_buffer_ms = self.rist_buffer_ms.min(30_000);
+        self.buffer_kb = self.buffer_kb.min(512 * 1024);
+        self.timeout_s = self.timeout_s.min(600);
+        self.hls_segment_s = self.hls_segment_s.min(30);
+        self.hls_list_size = self.hls_list_size.min(60);
+        Ok(())
+    }
+
+    fn text(&self) -> impl Iterator<Item = &String> {
+        [
+            &self.srt_mode,
+            &self.srt_passphrase,
+            &self.srt_stream_id,
+            &self.rtsp_transport,
+            &self.local_address,
+            &self.sources,
+            &self.rist_profile,
+            &self.rist_secret,
+        ]
+        .into_iter()
+    }
+
+    /// Les secrets, à masquer quand on les montre.
+    pub fn mask(&mut self, mask: &str) {
+        for s in [&mut self.srt_passphrase, &mut self.rist_secret] {
+            if !s.is_empty() {
+                *s = mask.into();
+            }
+        }
+    }
+
+    /// Les secrets masqués reprennent leur valeur gardée.
+    pub fn keep(&mut self, old: Option<&ProtoOpts>, mask: &str) {
+        if self.srt_passphrase == mask {
+            self.srt_passphrase = old.map(|o| o.srt_passphrase.clone()).unwrap_or_default();
+        }
+        if self.rist_secret == mask {
+            self.rist_secret = old.map(|o| o.rist_secret.clone()).unwrap_or_default();
+        }
+    }
 }
 
 /// Une destination d'une sortie.
@@ -48,6 +178,8 @@ pub struct Destination {
     /// La clé de diffusion (ajoutée à l'URL RTMP, `streamid` en SRT).
     pub key: String,
     pub enabled: bool,
+    /// Les réglages propres au protocole.
+    pub opts: ProtoOpts,
 }
 
 /// Une sortie réseau.
@@ -148,6 +280,8 @@ impl StreamsConfig {
             if !matches!(i.format.trim(), "" | "house") && crate::hardware::parse_format(&i.format).is_none() {
                 return Err(format!("{}: unknown format {}", i.name, i.format));
             }
+            let label = i.name.clone();
+            i.opts.check(&label)?;
             if i.relay_port != 0 && !ports.insert(i.relay_port) {
                 return Err(format!("{}: relay port {} is already used", i.name, i.relay_port));
             }
@@ -182,6 +316,8 @@ impl StreamsConfig {
                 if d.url != "hls" && !matches!(scheme(&d.url), Some("rtmp" | "rtmps" | "srt" | "udp" | "rtp" | "rist")) {
                     return Err(format!("{}: {} is not a destination (rtmp://, rtmps://, srt://, udp://, rtp://, rist://, or hls)", o.name, d.url));
                 }
+                let label = format!("{} › {}", o.name, if d.name.is_empty() { &d.url } else { &d.name });
+                d.opts.check(&label)?;
             }
         }
         // Les relais sans port : les suivants libres.

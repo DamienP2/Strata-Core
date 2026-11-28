@@ -48,7 +48,9 @@ fn view(s: &Shared, cfg: &StreamsConfig) -> Value {
         .inputs
         .iter()
         .map(|i| {
-            let mut v = serde_json::to_value(i).unwrap_or_default();
+            let mut shown = i.clone();
+            shown.opts.mask(MASK);
+            let mut v = serde_json::to_value(&shown).unwrap_or_default();
             v["mxlFlow"] = json!(mxl_id(&input_flow(&i.id)));
             v["audioFlow"] = json!(mxl_id(&audio_of(&input_flow(&i.id))));
             v["relayUrl"] = if i.relay && i.relay_port != 0 { json!(format!("udp://127.0.0.1:{}", i.relay_port)) } else { Value::Null };
@@ -65,6 +67,7 @@ fn view(s: &Shared, cfg: &StreamsConfig) -> Value {
                 if !d.key.is_empty() {
                     d.key = MASK.into();
                 }
+                d.opts.mask(MASK);
             }
             let mut v = serde_json::to_value(&o).unwrap_or_default();
             let src = if o.source.trim().is_empty() { output_flow(&o.id) } else { o.source.clone() };
@@ -158,10 +161,16 @@ fn keep_keys(new: &mut StreamsConfig, old: &StreamsConfig) {
     for o in &mut new.outputs {
         let before = old.outputs.iter().find(|x| x.id == o.id);
         for d in &mut o.destinations {
+            let old_d = before.and_then(|b| b.destinations.iter().find(|x| x.id == d.id));
             if d.key == MASK {
-                d.key = before.and_then(|b| b.destinations.iter().find(|x| x.id == d.id)).map(|x| x.key.clone()).unwrap_or_default();
+                d.key = old_d.map(|x| x.key.clone()).unwrap_or_default();
             }
+            d.opts.keep(old_d.map(|x| &x.opts), MASK);
         }
+    }
+    for i in &mut new.inputs {
+        let old_i = old.inputs.iter().find(|x| x.id == i.id);
+        i.opts.keep(old_i.map(|x| &x.opts), MASK);
     }
 }
 
