@@ -282,8 +282,10 @@ POST $STRATA_CORE_URL/api/streams/app/outputs/programme
   erreur, débit) ; `DELETE …/api/streams/app/outputs/programme?app=livecut` la retire.
 - `"enabled": false` arrête l'envoi sans oublier la sortie.
 - Destinations : `rtmp://` et `rtmps://` (la clé s'ajoute à l'adresse), `srt://` (la clé part en
-  `streamid`), `udp://`, `rtp://`, `rist://` (MPEG-TS), et `hls` : servi par le Core sur
-  `/hls/<sortie>/index.m3u8`.
+  `streamid`), `udp://`, `rtp://`, `rist://` (MPEG-TS), `hls` : servi par le Core sur
+  `/hls/<sortie>/index.m3u8`, et `html5` : un lecteur web servi par le Core sur `/live/<sortie>/`
+  (MP4 fragmenté à moins d'une seconde du direct, à la cadence de la sortie ; le flux seul :
+  `/live/<sortie>/stream.mp4`). La page peut être mise dans celle d'un autre site (iframe).
 - Les administrateurs voient et changent ces sorties dans les réglages, comme les autres.
 
 ## Lire une entrée SDI sans MXL

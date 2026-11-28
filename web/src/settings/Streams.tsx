@@ -1,9 +1,9 @@
-// Réglages › Matériel › Flux réseau : les entrées (SRT, RTMP, RTSP, HLS, UDP…) que le Core reçoit et
-// met en MXL pour les applis, et les sorties qu'il encode et envoie à leurs destinations (YouTube,
-// un CDN SRT, du HLS servi par le Core…). Chaque flux a son aperçu et son état en direct.
+// Réglages › Matériel › Flux réseau, en deux onglets : les sources (SRT, RTMP, RTSP, HLS, UDP…) que
+// le Core reçoit et met en MXL pour les applis, et les destinations qu'il encode et envoie (YouTube,
+// un CDN SRT, du HLS ou un lecteur HTML5 servis par le Core…). Chaque flux a son aperçu et son état.
 import { useRef, useState } from 'react';
-import { ArrowDownToLine, ArrowUpFromLine, Cast, Pencil, Plus, Trash2 } from 'lucide-react';
-import { Badge, Card, Dropdown, Empty, Field, FieldGrid, Modal, NumberField, PageHead, Segmented, Switch, confirmDialog, t, tn, toast } from '@strata/ui';
+import { ArrowDownToLine, ArrowUpFromLine, Cast, ExternalLink, Pencil, Plus, Trash2 } from 'lucide-react';
+import { Badge, Dropdown, Empty, Field, FieldGrid, Modal, NumberField, PageHead, Segmented, SubTabs, Switch, confirmDialog, t, toast } from '@strata/ui';
 import { api } from '../api';
 import { friendly } from '../errors';
 import { Preview, Tile } from './hardware/Inputs';
@@ -99,6 +99,7 @@ interface Output {
   app?: string | null;
   mxlFlow?: string;
   hlsUrl?: string | null;
+  liveUrl?: string | null;
   status?: OutputStatus | null;
 }
 
@@ -112,9 +113,13 @@ interface StreamsView {
 
 const MASK = '••••••••';
 
-type Kind = 'srt' | 'rtmp' | 'rtmps' | 'rtsp' | 'https' | 'udp' | 'rtp' | 'rist';
-const KIND_LABEL: Record<Kind, string> = { srt: 'SRT', rtmp: 'RTMP', rtmps: 'RTMPS', rtsp: 'RTSP', https: 'HLS', udp: 'UDP (TS)', rtp: 'RTP (TS)', rist: 'RIST' };
-const PLACEHOLDER: Record<Kind, [string, string]> = {
+type Net = 'srt' | 'rtmp' | 'rtmps' | 'rtsp' | 'https' | 'udp' | 'rtp' | 'rist';
+/** `hls` et `html5` : servis par le Core (pas d'adresse). */
+type Kind = Net | 'hls' | 'html5';
+const SERVED: Kind[] = ['hls', 'html5'];
+const NET_LABEL: Record<Net, string> = { srt: 'SRT', rtmp: 'RTMP', rtmps: 'RTMPS', rtsp: 'RTSP', https: 'HLS', udp: 'UDP (TS)', rtp: 'RTP (TS)', rist: 'RIST' };
+const kindLabel = (k: Kind) => (k === 'hls' ? t('HLS served by the Core') : k === 'html5' ? t('HTML5 (web player)') : NET_LABEL[k]);
+const PLACEHOLDER: Record<Net, [string, string]> = {
   srt: ['srt://10.0.0.12:9000  ·  srt://:9000', 'srt://cdn.example:9000'],
   rtmp: ['rtmp://server/live/stream  ·  rtmp://0.0.0.0:1935/live/cam', 'rtmp://a.rtmp.youtube.com/live2'],
   rtmps: ['rtmps://server/live/stream', 'rtmps://live-api-s.facebook.com:443/rtmp'],
@@ -126,23 +131,32 @@ const PLACEHOLDER: Record<Kind, [string, string]> = {
 };
 
 function kindOf(url: string): Kind | null {
+  if (url === 'hls' || url === 'html5') return url;
   const s = url.split('://')[0]?.toLowerCase();
   if (s === 'http') return 'https';
-  return (Object.keys(KIND_LABEL) as Kind[]).includes(s as Kind) ? (s as Kind) : null;
+  return (Object.keys(NET_LABEL) as Net[]).includes(s as Net) ? (s as Net) : null;
 }
 
 /** Change le protocole d'une adresse (garde le reste). */
 function withKind(url: string, k: Kind): string {
+  if (SERVED.includes(k)) return k;
   const rest = url.includes('://') ? url.slice(url.indexOf('://') + 3) : '';
   return `${k}://${rest}`;
 }
 
+/** L'adresse complète d'un flux servi par le Core. */
+const full = (path: string) => `${location.origin}${path}`;
+
 /** Le type de flux, puis l'adresse et les réglages de ce type. */
-function ProtoFields({ url, opts, output, kinds, onUrl, onOpts, extra }: {
+function ProtoFields({ url, opts, output, kinds, taken = [], served, onUrl, onOpts, extra }: {
   url: string;
   opts: ProtoOpts;
   output: boolean;
   kinds: Kind[];
+  /** Les types déjà pris (un seul HLS et un seul HTML5 par sortie). */
+  taken?: Kind[];
+  /** L'adresse d'un flux servi par le Core (connue une fois la sortie enregistrée). */
+  served?: string | null;
   onUrl: (u: string) => void;
   onOpts: (o: ProtoOpts) => void;
   extra?: React.ReactNode;
@@ -177,12 +191,34 @@ function ProtoFields({ url, opts, output, kinds, onUrl, onOpts, extra }: {
     <>
       <FieldGrid two>
         <Field label={t('Type')} group>
-          <Dropdown value={kind ?? ''} options={kinds.map((k) => ({ value: k, label: KIND_LABEL[k] }))} onChange={(k) => onUrl(withKind(url, k as Kind))} />
+          <Dropdown
+            value={kind ?? ''}
+            options={kinds.map((k) => ({ value: k, label: kindLabel(k), disabled: k !== kind && taken.includes(k) }))}
+            onChange={(k) => onUrl(withKind(url, k as Kind))}
+          />
         </Field>
-        <Field label={t('Address')}>
-          <input className="st-mono" value={url} placeholder={kind ? PLACEHOLDER[kind][output ? 1 : 0] : 'srt://…'} onChange={(e) => onUrl(e.target.value)} />
-        </Field>
+        {kind && SERVED.includes(kind) ? (
+          <Field label={t('Address')}>
+            {served ? (
+              <a className="st-mono core-served" href={served} target="_blank" rel="noreferrer">
+                {full(served)} <ExternalLink size={12} />
+              </a>
+            ) : (
+              <input className="st-mono" value={t('given once saved')} readOnly disabled />
+            )}
+          </Field>
+        ) : (
+          <Field label={t('Address')}>
+            <input className="st-mono" value={url} placeholder={kind ? PLACEHOLDER[kind as Net][output ? 1 : 0] : 'srt://…'} onChange={(e) => onUrl(e.target.value)} />
+          </Field>
+        )}
       </FieldGrid>
+      {kind === 'hls' && (
+        <FieldGrid two>
+          {num('hlsSegmentS', t('Segment length'), 's', 30, '2')}
+          {num('hlsListSize', t('Segments in the playlist'), '', 60, '6')}
+        </FieldGrid>
+      )}
       {kind === 'srt' && (
         <>
           <FieldGrid two>
@@ -260,7 +296,7 @@ function ProtoFields({ url, opts, output, kinds, onUrl, onOpts, extra }: {
 }
 
 const IN_KINDS: Kind[] = ['srt', 'rtmp', 'rtmps', 'rtsp', 'https', 'udp', 'rtp', 'rist'];
-const OUT_KINDS: Kind[] = ['srt', 'rtmp', 'rtmps', 'udp', 'rtp', 'rist'];
+const OUT_KINDS: Kind[] = ['srt', 'rtmp', 'rtmps', 'udp', 'rtp', 'rist', 'hls', 'html5'];
 const enc = encodeURIComponent;
 const FORMATS = ['1080i50', '1080i59.94', '1080p25', '1080p50', '1080p59.94', '720p50', '720p59.94', '2160p25', '2160p50'];
 const OUT_FORMATS = ['1080p25', '1080p50', '1080p59.94', '720p50', '720p59.94', '2160p25', '2160p50'];
@@ -314,6 +350,7 @@ function codec(desc: string): string {
 /** Le protocole d'une adresse, pour la montrer en clair. */
 function proto(url: string): string {
   if (url === 'hls') return 'HLS';
+  if (url === 'html5') return 'HTML5';
   const s = url.split('://')[0]?.toUpperCase() ?? '';
   return s === 'HTTPS' || s === 'HTTP' ? 'HLS / HTTP' : s;
 }
@@ -325,6 +362,7 @@ export function StreamsPage() {
   const [editIn, setEditIn] = useState<Input | null>(null);
   const [editOut, setEditOut] = useState<Output | null>(null);
   const [saving, setSaving] = useState(false);
+  const [tab, setTab] = useState<'sources' | 'destinations'>('sources');
   // La dernière lecture : ce qu'on enregistre après un dialogue (pas celle d'avant le dialogue).
   const latest = useRef(data);
   latest.current = data;
@@ -349,18 +387,30 @@ export function StreamsPage() {
 
   return (
     <>
-      <PageHead title={t('Network streams')} sub={`${tn(data.inputs.length, '{n} input', '{n} inputs')} · ${tn(data.outputs.length, '{n} output', '{n} outputs')}${data.ffmpeg ? ` · ffmpeg ${data.ffmpeg}` : ''}`}>
-        <button type="button" className="st-btn" onClick={() => setEditIn(newInput)}>
-          <Plus size={14} /> {t('New input')}
-        </button>
-        <button type="button" className="st-btn primary" onClick={() => setEditOut(newOutput)}>
-          <Plus size={14} /> {t('New output')}
-        </button>
-      </PageHead>
+      <PageHead title={t('Network streams')} sub={data.ffmpeg ? `ffmpeg ${data.ffmpeg}` : undefined} />
       {data.problem && <p className="core-warn">{friendly(data.problem)}</p>}
 
-      <Card icon={<ArrowDownToLine size={16} />} title={t('Inputs')}>
-        {data.inputs.length === 0 ? (
+      <SubTabs<'sources' | 'destinations'>
+        items={[
+          { id: 'sources', label: t('Sources · received'), count: data.inputs.length },
+          { id: 'destinations', label: t('Destinations · sent'), count: data.outputs.length },
+        ]}
+        value={tab}
+        onChange={setTab}
+      >
+        {tab === 'sources' ? (
+          <button type="button" className="st-btn primary" onClick={() => setEditIn(newInput)}>
+            <Plus size={14} /> {t('New source')}
+          </button>
+        ) : (
+          <button type="button" className="st-btn primary" onClick={() => setEditOut(newOutput)}>
+            <Plus size={14} /> {t('New destination')}
+          </button>
+        )}
+      </SubTabs>
+
+      {tab === 'sources' &&
+        (data.inputs.length === 0 ? (
           <Empty icon={Cast} text={t('No network input')} />
         ) : (
           <div className="core-inputs">
@@ -414,11 +464,10 @@ export function StreamsPage() {
               );
             })}
           </div>
-        )}
-      </Card>
+        ))}
 
-      <Card icon={<ArrowUpFromLine size={16} />} title={t('Outputs')}>
-        {data.outputs.length === 0 ? (
+      {tab === 'destinations' &&
+        (data.outputs.length === 0 ? (
           <Empty icon={Cast} text={t('No network output')} />
         ) : (
           <div className="core-inputs">
@@ -446,7 +495,15 @@ export function StreamsPage() {
                           <span key={d.id} className="core-stream-dest" title={ds?.error ? friendly(ds.error) : d.url}>
                             {!d.enabled ? <Badge>{t('Off')}</Badge> : ds ? stateBadge(ds.state, ds.kbps > 0 ? `${Math.round(ds.kbps)} kb/s` : t('Sending')) : <Badge>—</Badge>}
                             <span>{d.name || proto(d.url)}</span>
-                            <span className="st-mono st-muted">{d.url === 'hls' ? o.hlsUrl : d.url}</span>
+                            {d.url === 'hls' || d.url === 'html5' ? (
+                              (d.url === 'hls' ? o.hlsUrl : o.liveUrl) && (
+                                <a className="st-mono core-served" href={(d.url === 'hls' ? o.hlsUrl : o.liveUrl)!} target="_blank" rel="noreferrer">
+                                  {full((d.url === 'hls' ? o.hlsUrl : o.liveUrl)!)} <ExternalLink size={12} />
+                                </a>
+                              )
+                            ) : (
+                              <span className="st-mono st-muted">{d.url}</span>
+                            )}
                           </span>
                         );
                       })}
@@ -474,8 +531,7 @@ export function StreamsPage() {
               );
             })}
           </div>
-        )}
-      </Card>
+        ))}
 
       {editIn && (
         <InputEditor
@@ -616,31 +672,13 @@ function OutputEditor({ value, sources, busy, onClose, onSave }: { value: Output
       <h4 className="core-subhead">{t('Destinations')}</h4>
       {v.destinations.map((d, i) => (
         <div key={d.id} className="core-dest-row">
-          {d.url === 'hls' ? (
-            <FieldGrid two>
-              <Field label={`${t('Segment length')} (s)`}>
-                <input
-                  className="st-mono"
-                  value={d.opts?.hlsSegmentS ? String(d.opts.hlsSegmentS) : ''}
-                  placeholder="2"
-                  onChange={(e) => setDest(i, { opts: { ...d.opts, hlsSegmentS: Math.min(30, Number(e.target.value.replace(/[^0-9]/g, '')) || 0) } })}
-                />
-              </Field>
-              <Field label={t('Segments in the playlist')}>
-                <input
-                  className="st-mono"
-                  value={d.opts?.hlsListSize ? String(d.opts.hlsListSize) : ''}
-                  placeholder="6"
-                  onChange={(e) => setDest(i, { opts: { ...d.opts, hlsListSize: Math.min(60, Number(e.target.value.replace(/[^0-9]/g, '')) || 0) } })}
-                />
-              </Field>
-            </FieldGrid>
-          ) : (
             <ProtoFields
               url={d.url}
               opts={d.opts ?? {}}
               output
               kinds={OUT_KINDS}
+              taken={v.destinations.filter((_, k) => k !== i).map((x) => kindOf(x.url)).filter((k): k is Kind => !!k && SERVED.includes(k))}
+              served={d.url === 'hls' ? value.hlsUrl : d.url === 'html5' ? value.liveUrl : null}
               onUrl={(u) => setDest(i, { url: u })}
               onOpts={(o) => setDest(i, { opts: o })}
               extra={
@@ -658,7 +696,6 @@ function OutputEditor({ value, sources, busy, onClose, onSave }: { value: Output
                 )
               }
             />
-          )}
           <div className="core-dest-tools">
             <input value={d.name} placeholder={t('Name (YouTube, CDN…)')} onChange={(e) => setDest(i, { name: e.target.value })} />
             <Switch checked={d.enabled} onChange={(x) => setDest(i, { enabled: x })} label={t('On')} />
@@ -671,14 +708,6 @@ function OutputEditor({ value, sources, busy, onClose, onSave }: { value: Output
       <div className="core-dest-add">
         <button type="button" className="st-btn" onClick={addDest}>
           <Plus size={14} /> {t('Add a destination')}
-        </button>
-        <button
-          type="button"
-          className="st-btn"
-          disabled={v.destinations.some((d) => d.url === 'hls')}
-          onClick={() => set('destinations', [...v.destinations, { id: 'hls', name: 'HLS', url: 'hls', key: '', enabled: true }])}
-        >
-          <Plus size={14} /> {t('HLS served by the Core')}
         </button>
       </div>
     </Modal>

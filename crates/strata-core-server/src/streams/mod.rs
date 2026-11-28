@@ -6,13 +6,14 @@
 //!   (TS sur `udp://127.0.0.1:<port>`) pour une appli qui enregistre ou relaie sans décoder.
 //! - **Sorties** : le Core lit un flux MXL (celui qu'une appli écrit, `stream-out/<id>`, ou une
 //!   entrée du serveur), l'encode une fois (GPU si possible) et l'envoie à chaque destination
-//!   (RTMP(S), SRT, UDP, RIST, HLS servi par le Core). Du noir et du silence quand rien n'arrive.
+//!   (RTMP(S), SRT, UDP, RIST, HLS servi par le Core, lecteur HTML5 servi par le Core). Du noir et du silence quand rien n'arrive.
 //!   Une destination qui tombe est relancée seule, sans couper les autres.
 //!
 //! Les réglages sont dans `streams.json` (droits 0600 : les clés de diffusion).
 pub mod api;
 pub mod engine;
 pub mod ffmpeg;
+pub mod live;
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -304,6 +305,7 @@ impl StreamsConfig {
             o.video_kbps = o.video_kbps.clamp(300, 100_000);
             o.audio_kbps = o.audio_kbps.clamp(32, 512);
             let mut dids = std::collections::HashSet::new();
+            let mut served = std::collections::HashSet::new();
             for (n, d) in o.destinations.iter_mut().enumerate() {
                 d.url = d.url.trim().to_string();
                 d.key = d.key.trim().to_string();
@@ -313,8 +315,11 @@ impl StreamsConfig {
                 if !dids.insert(d.id.clone()) {
                     return Err(format!("{}: two destinations are named {}", o.name, d.id));
                 }
-                if d.url != "hls" && !matches!(scheme(&d.url), Some("rtmp" | "rtmps" | "srt" | "udp" | "rtp" | "rist")) {
-                    return Err(format!("{}: {} is not a destination (rtmp://, rtmps://, srt://, udp://, rtp://, rist://, or hls)", o.name, d.url));
+                if !matches!(d.url.as_str(), "hls" | "html5") && !matches!(scheme(&d.url), Some("rtmp" | "rtmps" | "srt" | "udp" | "rtp" | "rist")) {
+                    return Err(format!("{}: {} is not a destination (rtmp://, rtmps://, srt://, udp://, rtp://, rist://, hls or html5)", o.name, d.url));
+                }
+                if matches!(d.url.as_str(), "hls" | "html5") && !served.insert(d.url.clone()) {
+                    return Err(format!("{}: only one {} destination per output", o.name, d.url.to_uppercase()));
                 }
                 let label = format!("{} › {}", o.name, if d.name.is_empty() { &d.url } else { &d.name });
                 d.opts.check(&label)?;
@@ -371,6 +376,7 @@ pub fn reconcile(s: &crate::state::AppState) {
         mxl,
         house: house_video(&crate::hardware::HardwareConfig::load(&s.data_dir)),
         hls_dir: s.data_dir.join("streams").join("hls"),
+        live: s.streams.live.clone(),
         gpu: if needs_gpu { gpu_encoder() } else { None },
     });
     s.streams.reconcile(&cfg, env);

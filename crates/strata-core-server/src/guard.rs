@@ -130,10 +130,11 @@ pub async fn every_answer(req: Request, next: Next) -> Response {
     let h = res.headers_mut();
     h.insert("x-content-type-options", axum::http::HeaderValue::from_static("nosniff"));
     h.insert("referrer-policy", axum::http::HeaderValue::from_static("same-origin"));
-    // Never shown inside another site's frame; only its own scripts (an answer with its own
-    // policy, an uploaded logo, keeps it).
-    h.insert("x-frame-options", axum::http::HeaderValue::from_static("DENY"));
+    // Never shown inside another site's frame; only its own scripts. An answer with its own
+    // policy keeps it, frames included (an uploaded logo; the HTML5 player, which other pages
+    // may show).
     if !h.contains_key("content-security-policy") {
+        h.insert("x-frame-options", axum::http::HeaderValue::from_static("DENY"));
         h.insert("content-security-policy", axum::http::HeaderValue::from_static(CSP));
     }
     res

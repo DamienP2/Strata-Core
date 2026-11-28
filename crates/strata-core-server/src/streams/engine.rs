@@ -119,6 +119,8 @@ pub struct Env {
     pub mxl: Arc<Mxl>,
     pub house: Video,
     pub hls_dir: PathBuf,
+    /// Les flux HTML5 servis par le Core.
+    pub live: Arc<super::live::Hubs>,
     /// L'encodeur matériel possible : `nvenc`, ou `vaapi` avec son nœud de rendu.
     pub gpu: Option<(String, Option<String>)>,
 }
@@ -161,6 +163,8 @@ pub struct Engine {
     outputs: Mutex<HashMap<String, Running<(OutputCfg, Video)>>>,
     in_status: Arc<Mutex<HashMap<String, InputStatus>>>,
     out_status: Arc<Mutex<HashMap<String, OutputStatus>>>,
+    /// Les flux des destinations HTML5, lus par l'API.
+    pub live: Arc<super::live::Hubs>,
     /// Pourquoi rien ne tourne (ffmpeg ou MXL absent).
     problem: Mutex<Option<String>>,
     /// La version de ffmpeg, gardée ; son absence revue toutes les 30 s (installé entre-temps).
@@ -831,6 +835,15 @@ pub fn destination_args(d: &Destination, hls_dir: &Path) -> Vec<String> {
             a.push(hls_dir.join("index.m3u8").display().to_string());
             return a;
         }
+        ("html5", _) => {
+            // L'image telle quelle ; le son refait en AAC propre au MP4 (celui du TS, même passé
+            // par aac_adtstoasc, est refusé par les navigateurs).
+            let n = a.len();
+            a.truncate(n - 2);
+            a.extend(["-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"].map(String::from));
+            a.extend(super::live::ffmpeg_args());
+            return a;
+        }
         (_, Some("rtmp" | "rtmps")) => a.extend(["-f", "flv", "-flvflags", "no_duration_filesize"].map(String::from)),
         (_, Some("rtp")) => a.extend(["-f", "rtp_mpegts"].map(String::from)),
         _ => a.extend(["-f", "mpegts"].map(String::from)),
@@ -959,8 +972,9 @@ fn feed_encoder(
     let mut dests: Vec<DestRun> = Vec::new();
     for (i, d) in c.destinations.iter().filter(|d| d.enabled).enumerate() {
         let (tx, rx) = mpsc::sync_channel::<Arc<Vec<u8>>>(512);
+        let live = (d.url == "html5").then(|| env.live.channel(&c.id));
         let (d, dstop, dstatus, dir) = (d.clone(), dstop.clone(), dstatus.clone(), hls_dir.to_path_buf());
-        let thread = std::thread::Builder::new().name(format!("dest-{}", d.id)).spawn(move || run_destination(&d, &dir, rx, &dstop, &dstatus, i)).ok();
+        let thread = std::thread::Builder::new().name(format!("dest-{}", d.id)).spawn(move || run_destination(&d, &dir, live, rx, &dstop, &dstatus, i)).ok();
         dests.push(DestRun { tx, thread });
     }
     // Le TS de l'encodeur, recopié à chaque destination ; une destination en retard perd ses
@@ -1130,7 +1144,16 @@ fn gone<T>(r: Result<(), mpsc::TrySendError<T>>) -> bool {
     matches!(r, Err(mpsc::TrySendError::Disconnected(_)))
 }
 
-fn run_destination(d: &Destination, hls_dir: &Path, rx: mpsc::Receiver<Arc<Vec<u8>>>, stop: &AtomicBool, status: &Mutex<Vec<DestStatus>>, i: usize) {
+#[allow(clippy::too_many_arguments)]
+fn run_destination(
+    d: &Destination,
+    hls_dir: &Path,
+    live: Option<Arc<super::live::Channel>>,
+    rx: mpsc::Receiver<Arc<Vec<u8>>>,
+    stop: &AtomicBool,
+    status: &Mutex<Vec<DestStatus>>,
+    i: usize,
+) {
     let set = |f: &dyn Fn(&mut DestStatus)| {
         if let Some(s) = status.lock().unwrap().get_mut(i) {
             f(s)
@@ -1139,7 +1162,7 @@ fn run_destination(d: &Destination, hls_dir: &Path, rx: mpsc::Receiver<Arc<Vec<u
     let mut failures = 0u32;
     'outer: while !stop.load(Ordering::Relaxed) {
         set(&|s| set_state(s, State::Starting, |s| (&mut s.state, &mut s.since)));
-        let mut p = match ffmpeg::spawn(&destination_args(d, hls_dir), true, false, ffmpeg::Fd3::None) {
+        let mut p = match ffmpeg::spawn(&destination_args(d, hls_dir), true, live.is_some(), ffmpeg::Fd3::None) {
             Ok(p) => p,
             Err(e) => {
                 set(&|s| {
@@ -1150,6 +1173,14 @@ fn run_destination(d: &Destination, hls_dir: &Path, rx: mpsc::Receiver<Arc<Vec<u
             }
         };
         let mut stdin = p.child.stdin.take();
+        // HTML5 : le MP4 fragmenté de ffmpeg, découpé et diffusé aux spectateurs.
+        let feeder = match (&live, p.child.stdout.take()) {
+            (Some(ch), Some(out)) => {
+                let ch = ch.clone();
+                std::thread::Builder::new().name(format!("live-{}", d.id)).spawn(move || ch.feed(out)).ok()
+            }
+            _ => None,
+        };
         // Jamais bloqué sur une destination qui ne lit plus (réseau coupé, serveur muet) : l'arrêt
         // et les changements de réglages passent quand même. Ce qui n'a pas pu partir attend
         // (8 Mo au plus), le reste est jeté par paquets entiers.
@@ -1218,6 +1249,9 @@ fn run_destination(d: &Destination, hls_dir: &Path, rx: mpsc::Receiver<Arc<Vec<u
         }
         drop(stdin);
         p.stop();
+        if let Some(f) = feeder {
+            let _ = f.join();
+        }
         let why = p.log.lock().unwrap().last_error().unwrap_or_else(|| "the destination closed the connection".into());
         failures += 1;
         set(&|s| {

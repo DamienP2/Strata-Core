@@ -303,3 +303,6 @@ button.core-hw-role.on { border-style: solid; background: color-mix(in srgb, var
 .core-adv > summary { padding: 10px 12px; cursor: pointer; font-weight: 600; color: var(--text-2); }
 .core-adv-body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 10px; }
 @media (max-width: 700px) { .core-ess-row, .core-ess-row.one { grid-template-columns: 1fr; } }
+.core-served { display: inline-flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent); text-decoration: none; }
+.core-served:hover { text-decoration: underline; }
+.core-stream-dest .core-served { flex: 1; }

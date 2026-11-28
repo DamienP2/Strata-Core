@@ -5,6 +5,8 @@
 //!   (`/api/streams/app/outputs/:id`) ; l'appli écrit ensuite son flux MXL.
 //! - HLS : `GET /hls/<sortie>/index.m3u8`, servi tel que la sortie l'écrit (sans session : un
 //!   lecteur vidéo le lit).
+//! - HTML5 : `GET /live/<sortie>` (la page du lecteur) et `GET /live/<sortie>/stream.mp4` (le flux
+//!   en MP4 fragmenté), sans session non plus.
 use axum::{
     extract::{ConnectInfo, Path as UrlPath, Query, State},
     http::{header, HeaderMap, StatusCode},
@@ -36,6 +38,10 @@ pub fn routes() -> Router<Shared> {
         .route("/api/streams/app/outputs", get(app_list))
         .route("/api/streams/app/outputs/{id}", post(app_put).delete(app_delete))
         .route("/hls/{id}/{file}", get(hls))
+        .route("/live/{id}", get(live_page))
+        .route("/live/{id}/", get(live_page))
+        .route("/live/{id}/stream.mp4", get(live_stream))
+        .route("/live/{id}/player.js", get(live_player))
 }
 
 fn mxl_id(name: &str) -> String {
@@ -74,6 +80,7 @@ fn view(s: &Shared, cfg: &StreamsConfig) -> Value {
             v["mxlFlow"] = json!(mxl_id(&src));
             v["audioFlow"] = json!(mxl_id(&audio_of(&src)));
             v["hlsUrl"] = if o.destinations.iter().any(|d| d.url == "hls") { json!(format!("/hls/{}/index.m3u8", o.id)) } else { Value::Null };
+            v["liveUrl"] = if o.destinations.iter().any(|d| d.url == "html5") { json!(format!("/live/{}/", o.id)) } else { Value::Null };
             v["status"] = json!(s.streams.output_status(&o.id));
             v
         })
@@ -406,6 +413,76 @@ async fn hls(State(s): State<Shared>, UrlPath((id, file)): UrlPath<(String, Stri
     Ok((
         [(header::CONTENT_TYPE, kind), (header::CACHE_CONTROL, if segment { "max-age=60" } else { "no-cache" }), (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")],
         body,
+    ))
+}
+
+// ---------- HTML5 ----------
+
+/// La sortie a-t-elle une destination HTML5 en marche ? (son nom, pour la page)
+fn live_output(s: &Shared, id: &str) -> Option<String> {
+    let cfg = StreamsConfig::load(&s.data_dir);
+    cfg.outputs.into_iter().find(|o| o.id == id && o.enabled && o.destinations.iter().any(|d| d.enabled && d.url == "html5")).map(|o| o.name)
+}
+
+async fn live_page(State(s): State<Shared>, UrlPath(id): UrlPath<String>, uri: axum::http::Uri) -> ApiResult<axum::response::Response> {
+    let Some(name) = live_output(&s, &id) else { return Err((StatusCode::NOT_FOUND, "not found".into())) };
+    // `stream.mp4` est relatif : la page doit finir par « / ».
+    if !uri.path().ends_with('/') {
+        return Ok(axum::response::Redirect::to(&format!("/live/{id}/")).into_response());
+    }
+    let codecs = s.streams.live.get(&id).and_then(|c| c.codecs());
+    let page = super::live::player_page(&name, codecs.as_deref());
+    Ok((
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8"), (header::CACHE_CONTROL, "no-cache"), (header::CONTENT_SECURITY_POLICY, super::live::PLAYER_CSP)],
+        page,
+    )
+        .into_response())
+}
+
+async fn live_player() -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], super::live::PLAYER_JS)
+}
+
+/// Le flux d'un spectateur : l'en-tête, puis les fragments à partir d'une image clé.
+async fn live_stream(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<impl IntoResponse> {
+    use tokio::sync::broadcast::error::RecvError;
+    if live_output(&s, &id).is_none() {
+        return Err((StatusCode::NOT_FOUND, "not found".into()));
+    }
+    let Some((init, _, gen, rx)) = s.streams.live.get(&id).and_then(|c| c.join()) else {
+        return Err((StatusCode::SERVICE_UNAVAILABLE, "the stream is not there yet".into()));
+    };
+    struct St {
+        rx: tokio::sync::broadcast::Receiver<super::live::Frag>,
+        init: Option<axum::body::Bytes>,
+        gen: u64,
+        synced: bool,
+    }
+    let start = St { rx, init: Some(init), gen, synced: false };
+    let body = futures_util::stream::unfold(start, |mut st| async move {
+        if let Some(i) = st.init.take() {
+            return Some((Ok::<_, std::io::Error>(i), st));
+        }
+        loop {
+            // Rien pendant 5 s : le flux est arrêté ; le lecteur se reconnecte.
+            match tokio::time::timeout(std::time::Duration::from_secs(5), st.rx.recv()).await {
+                Ok(Ok(f)) if f.gen != st.gen => return None,
+                Ok(Ok(f)) => {
+                    if !st.synced && !f.key {
+                        continue;
+                    }
+                    st.synced = true;
+                    return Some((Ok(f.data), st));
+                }
+                // En retard : on saute jusqu'à la prochaine image clé.
+                Ok(Err(RecvError::Lagged(_))) => st.synced = false,
+                Ok(Err(RecvError::Closed)) | Err(_) => return None,
+            }
+        }
+    });
+    Ok((
+        [(header::CONTENT_TYPE, "video/mp4"), (header::CACHE_CONTROL, "no-store"), (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")],
+        axum::body::Body::from_stream(body),
     ))
 }
 
