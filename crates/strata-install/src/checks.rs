@@ -83,6 +83,11 @@ pub fn system(offline: bool) -> Vec<Check> {
         out.last_mut().unwrap().level = Level::Warn;
         out.last_mut().unwrap().detail = format!("{} cœurs : 4 au moins conseillés", cores());
     }
+    out.push(cpu_features(&std::fs::read_to_string("/proc/cpuinfo").unwrap_or_default(), virt().as_deref()));
+    out.push(match Command::new("systemctl").args(["is-active", "--quiet", "systemd-networkd"]).status() {
+        Ok(s) if s.success() => check("Réseau", Level::Ok, "systemd-networkd (adresses réglables depuis le cockpit)"),
+        _ => check("Réseau", Level::Warn, "systemd-networkd inactif : les adresses IP ne se règlent pas depuis le cockpit"),
+    });
     let mem = mem_gb(&std::fs::read_to_string("/proc/meminfo").unwrap_or_default());
     out.push(match mem {
         m if m >= 7.5 => check("Mémoire", Level::Ok, format!("{m:.0} Go")),
@@ -108,6 +113,33 @@ pub fn system(offline: bool) -> Vec<Check> {
     // SAFETY: geteuid n'a aucune précondition.
     out.push(if unsafe { libc::geteuid() } == 0 { check("Droits", Level::Ok, "root") } else { check("Droits", Level::Bad, "lancez l'installateur avec sudo") });
     out
+}
+
+/// La machine virtuelle, s'il y en a une (`systemd-detect-virt` : kvm, vmware, microsoft…).
+fn virt() -> Option<String> {
+    let o = Command::new("systemd-detect-virt").arg("--vm").output().ok()?;
+    let v = String::from_utf8_lossy(&o.stdout).trim().to_string();
+    (o.status.success() && !v.is_empty() && v != "none").then_some(v)
+}
+
+/// Les jeux d'instructions : AVX2 (MXL, MTL, conversions d'images) ; dans une machine virtuelle,
+/// le type de processeur « host » les donne.
+pub fn cpu_features(cpuinfo: &str, virt: Option<&str>) -> Check {
+    let flags: Vec<&str> =
+        cpuinfo.lines().find_map(|l| l.strip_prefix("flags")).map(|l| l.trim_start_matches([' ', '\t', ':']).split_whitespace().collect()).unwrap_or_default();
+    let has = |f: &str| flags.contains(&f);
+    let model = cpuinfo.lines().find_map(|l| l.strip_prefix("model name")).map(|l| l.trim_start_matches([' ', '\t', ':']).to_string()).unwrap_or_default();
+    let vm = virt.map(|v| format!(" (machine virtuelle {v})")).unwrap_or_default();
+    match (has("avx2"), has("avx512f")) {
+        (true, true) => check("Instructions", Level::Ok, format!("AVX2, AVX-512{vm}")),
+        (true, false) => check("Instructions", Level::Ok, format!("AVX2{vm}")),
+        _ if virt.is_some() => check(
+            "Instructions",
+            Level::Warn,
+            format!("pas d'AVX2 ({model}) : réglez le type de processeur de la machine virtuelle sur « host » (ou x86-64-v3), sinon le ST 2110 et les images sont lents"),
+        ),
+        _ => check("Instructions", Level::Warn, format!("pas d'AVX2 ({model}) : le ST 2110 et les conversions d'images seront lents")),
+    }
 }
 
 pub fn cores() -> usize {
@@ -330,6 +362,17 @@ pub fn private_tmp(prefix: &str) -> Result<PathBuf, String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn cpu_features_in_a_vm() {
+        let qemu = "model name\t: QEMU Virtual CPU version 2.5+\nflags\t\t: fpu sse sse2 sse4_1 sse4_2\n";
+        let c = super::cpu_features(qemu, Some("kvm"));
+        assert_eq!(c.level, super::Level::Warn);
+        assert!(c.detail.contains("host"), "{}", c.detail);
+        let host = "model name\t: Intel(R) Core(TM) i9-9900X\nflags\t\t: sse4_2 avx2 avx512f avx512bw\n";
+        assert_eq!(super::cpu_features(host, Some("kvm")).level, super::Level::Ok);
+    }
+
     use super::*;
 
     #[test]

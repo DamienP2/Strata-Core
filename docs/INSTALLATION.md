@@ -32,6 +32,28 @@ empreinte et le lance. Un écran plein terminal, au clavier :
 
 Journal complet : `/var/log/strata-install.log`.
 
+## Dans une machine virtuelle (Proxmox, VMware…)
+
+Le Core tourne dans une machine virtuelle, à ces conditions :
+
+| | Requis | Pourquoi |
+| --- | --- | --- |
+| **Processeur** | Type **`host`** (Proxmox : *Hardware › Processors › Type*, ou `qm set <id> --cpu host`), à défaut `x86-64-v3` ; puis arrêt complet de la VM et démarrage (pas un simple redémarrage depuis l'intérieur) | Le type par défaut (« kvm64 », « QEMU Virtual CPU ») cache AVX2 et AVX-512 : MXL, MTL et les conversions d'images en ont besoin pour aller vite. `grep -o -w 'avx2\|avx512f' /proc/cpuinfo` doit les montrer. `host` empêche la migration à chaud vers un hôte d'un autre processeur ; `x86-64-v3` la garde |
+| **Cœurs** | 8 vCPU au moins (4 au strict minimum) ; pour du ST 2110, des cœurs réservés (Proxmox : *CPU affinity*) | MTL garde des cœurs occupés en continu pour cadencer les paquets |
+| **Mémoire** | 16 Go au moins pour du ST 2110 (8 Go sinon), **sans ballooning** (Proxmox : *Ballooning Device* décoché) | Les hugepages réservées par le Core ne doivent pas être reprises par l'hôte |
+| **Disque** | 40 Go, VirtIO SCSI | Le Core, les applis, les journaux, les sauvegardes |
+| **Réseau de gestion** | Une carte VirtIO, ponts de l'hôte | Le cockpit, SSH, les mises à jour |
+| **ST 2110 (Intel E810)** | La carte passée à la VM en **PCI passthrough** (Proxmox : *Hardware › Add › PCI Device*, « All Functions », « PCI-Express »), IOMMU actif sur l'hôte (`intel_iommu=on iommu=pt`) **et** dans la VM pour DPDK ; machine `q35` | Une carte réseau virtuelle (VirtIO) ne tient pas le débit ni le cadencement ST 2110 ; DPDK et AF_XDP veulent la vraie carte |
+| **PTP** | Le port PTP passé en passthrough comme la E810 (horloge matérielle) | Une carte virtuelle n'a pas d'horloge PTP matérielle : l'heure serait trop imprécise pour le ST 2110 |
+| **Cartes DeckLink** | Passées en **PCI passthrough** (PCI-Express, « All Functions ») ; le pilote Desktop Video s'installe dans la VM | Le pilote Blackmagic parle directement à la carte |
+| **GPU** | En passthrough s'il encode ou décode (NVENC, VA-API) | Un GPU virtuel n'a pas les encodeurs matériels |
+| **Secure Boot** | Désactivé dans l'UEFI de la VM, ou les modules (Blackmagic, NVIDIA) signés avec MOK | Sinon les pilotes ne se chargent pas |
+| **Horloge** | L'agent QEMU installé ; la VM ne règle pas son heure sur l'hôte quand le PTP est utilisé | C'est le Core (chrony, ptp4l) qui tient l'heure |
+
+L'installateur le vérifie (ligne *Instructions* : il prévient s'il manque AVX2 dans une VM). Si
+une bibliothèque plante malgré tout (instruction absente), le Core démarre sans elle et un bandeau
+dit quelles fonctions manquent.
+
 ## Ce qui est posé
 
 | | |
