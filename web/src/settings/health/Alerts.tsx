@@ -168,7 +168,7 @@ export function AlertsPage({ onCount }: { onCount?: (n: number) => void }) {
           <div className="core-channel">
             <Switch checked={draft.webhookEnabled} onChange={(v) => edit({ webhookEnabled: v })} label="Webhook" />
             {draft.webhookEnabled && (
-              <Field label={t('Address')} hint="Slack, Teams, Discord, Mattermost, JSON">
+              <Field label={t('Address')} hint={t('Slack, Discord, Mattermost, JSON. Teams: in the channel, Workflows › “Send webhook alerts to a channel”, then paste its address.')}>
                 <input value={draft.webhook} placeholder="https://hooks.slack.com/services/…" onChange={(e) => edit({ webhook: e.target.value })} />
               </Field>
             )}

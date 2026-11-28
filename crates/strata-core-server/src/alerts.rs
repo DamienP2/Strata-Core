@@ -601,13 +601,43 @@ fn webhook(a: &AlertSettings, server: &str, level: &str, text: &str) -> Result<(
         _ => "ℹ️",
     };
     let line = format!("{mark} [{server}] {text}");
-    let body = json!({ "text": line, "content": line, "level": level, "server": server, "message": text, "at": jiff::Timestamp::now().to_string() });
+    let body = if is_teams(&a.webhook) {
+        teams_card(&line)
+    } else {
+        json!({ "text": line, "content": line, "level": level, "server": server, "message": text, "at": jiff::Timestamp::now().to_string() })
+    };
     let r = crate::install::agent().post(&a.webhook).header("Content-Type", "application/json").send(body.to_string()).map_err(|e| e.to_string())?;
     if r.status().is_success() {
         Ok(())
     } else {
         Err(format!("the webhook answered HTTP {}", r.status().as_u16()))
     }
+}
+
+/// Une adresse de Microsoft Teams : un workflow Power Automate (« Envoyer des alertes webhook à un
+/// canal »), ou un ancien connecteur Office 365 (« Incoming Webhook », retiré par Microsoft).
+fn is_teams(url: &str) -> bool {
+    let host = url.split("://").nth(1).unwrap_or("").split(['/', '?', ':']).next().unwrap_or("").to_ascii_lowercase();
+    host.ends_with(".webhook.office.com") || host.ends_with(".logic.azure.com") || host.ends_with(".powerplatform.com") || host.ends_with(".powerautomate.com")
+}
+
+/// Le message pour Teams : une carte adaptative (Adaptive Card) dans `attachments`, ce que lisent
+/// les workflows de Teams (un simple `text` y est accepté puis ignoré : rien ne s'affiche) et les
+/// anciens connecteurs.
+fn teams_card(line: &str) -> serde_json::Value {
+    json!({
+        "type": "message",
+        "attachments": [{
+            "contentType": "application/vnd.microsoft.card.adaptive",
+            "contentUrl": null,
+            "content": {
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "type": "AdaptiveCard",
+                "version": "1.4",
+                "body": [{ "type": "TextBlock", "text": line, "wrap": true }],
+            },
+        }],
+    })
 }
 
 // Un petit client SMTP (STARTTLS ou TLS, AUTH PLAIN), sur le rustls du Core. Repris de Cut.
@@ -892,5 +922,22 @@ mod tests {
         assert!(a.check().is_err());
         assert_eq!(encoded("plain"), "plain");
         assert!(encoded("Entrée coupée").starts_with("=?UTF-8?B?"));
+    }
+
+    #[test]
+    fn teams_gets_an_adaptive_card() {
+        for url in [
+            "https://prod-12.westeurope.logic.azure.com:443/workflows/abc/triggers/manual/paths/invoke?api-version=2016-06-01",
+            "https://default123.0a.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/abc/triggers/manual/paths/invoke",
+            "https://contoso.webhook.office.com/webhookb2/abc/IncomingWebhook/def/ghi",
+        ] {
+            assert!(is_teams(url), "{url}");
+        }
+        for url in ["https://hooks.slack.com/services/T/B/X", "https://discord.com/api/webhooks/1/x", "https://evil.example.com/logic.azure.com"] {
+            assert!(!is_teams(url), "{url}");
+        }
+        let c = teams_card("⚠️ [regie] Entrée SDI 1 : plus de signal");
+        assert_eq!(c["attachments"][0]["contentType"], "application/vnd.microsoft.card.adaptive");
+        assert_eq!(c["attachments"][0]["content"]["body"][0]["text"], "⚠️ [regie] Entrée SDI 1 : plus de signal");
     }
 }

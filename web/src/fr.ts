@@ -1179,4 +1179,5 @@ export const fr: Record<string, string> = {
   'each NDI destination needs a name': 'Chaque destination NDI a besoin d’un nom',
   'this NDI library cannot send': 'Cette bibliothèque NDI ne sait pas envoyer',
   'NDI cannot create this source (name already used?)': 'NDI ne peut pas créer cette source (nom déjà pris ?)',
+  'Slack, Discord, Mattermost, JSON. Teams: in the channel, Workflows › “Send webhook alerts to a channel”, then paste its address.': 'Slack, Discord, Mattermost, JSON. Teams : dans le canal, Workflows › « Envoyer des alertes webhook à un canal », puis collez son adresse.',
 };
