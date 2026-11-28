@@ -138,8 +138,34 @@ demande (avec les applis et leurs données si on le veut), et une juste avant ch
   redémarre sur les réglages de la sauvegarde, et chacun se reconnecte.
 - L'identité du serveur (sa clé, son rattachement au cockpit) n'est restaurée que si on le
   demande : seulement pour le même serveur, réinstallé.
-- Les archives contiennent des secrets (empreintes des mots de passe, clés, mots de passe du SSO
-  et de l'e-mail) : à garder en lieu sûr.
+- Les archives contiennent des secrets (empreintes des mots de passe, clés, mots de passe du SSO,
+  de l'e-mail et des serveurs de stockage) : à garder en lieu sûr.
+- **Copie vers un serveur de stockage** : chaque sauvegarde (la quotidienne et celles faites à la
+  main) est copiée sur le serveur choisi, dans un dossier au nom du serveur (ou celui qu'on
+  donne) ; seules les N dernières y sont gardées (30 par défaut). Une copie ratée est retentée
+  toutes les heures ; la dernière copie (réussie ou non, et pourquoi) est montrée sur la page.
+
+## Serveurs de stockage
+
+*Ce serveur › Stockage* : les serveurs où le Core range des fichiers (aujourd'hui ses
+sauvegardes) :
+
+| Type | Outil | Notes |
+|---|---|---|
+| Partage NAS (SMB 2/3) | `smbclient` | partage + dossier ; Windows, Synology, QNAP… |
+| SFTP | `curl` | la clé du serveur est apprise au premier test (« Tester » la réapprend) |
+| FTP / FTPS | `curl` | FTPS explicite (par défaut), implicite, ou sans chiffrement |
+| WebDAV | `curl` | HTTPS ou HTTP ; Nextcloud : `remote.php/dav/files/<compte>` |
+| Dossier du serveur | — | un NAS monté sur le serveur (`/mnt/…`), accessible au compte `strata` |
+
+- **Tester** écrit un petit fichier dans le dossier, puis l'efface ; **Parcourir** liste les
+  dossiers pour en choisir un.
+- Les mots de passe ne sont jamais montrés ni passés en ligne de commande (fichier lisible du
+  seul compte `strata`, le temps d'un envoi) ; un mot de passe gardé ne repart que vers le même
+  serveur et le même compte.
+- `smbclient`, `curl` et `openssh-client` sont installés par l'installateur (*Réparer* les
+  ajoute sur un serveur déjà installé). S'il en manque un, seul ce type de serveur ne marche pas,
+  et le test le dit.
 
 ## Recette
 

@@ -32,6 +32,10 @@ const SHAPED: [RegExp, string, string[]][] = [
   [/^port (\d+) is already the HTTP one$/, 'Port {port} is already the HTTP one', ['port']],
   [/^the certificate does not cover (.+)$/, 'The certificate does not cover {names}', ['names']],
   [/^the certificate expired on (.+)$/, 'The certificate expired on {date}', ['date']],
+  // Stockage
+  [/^cannot make the folder there: (.+)$/, 'cannot make the folder there: {why}', ['why']],
+  [/^cannot write there: (.+)$/, 'Cannot write there: {why}', ['why']],
+  [/^cannot read this folder: (.+)$/, 'Cannot read this folder: {why}', ['why']],
   // Matériel
   [/^SDI (\d+) of (.+) cannot be an input$/, 'SDI {n} of {model} cannot be an input', ['n', 'model']],
   [/^SDI (\d+) of (.+) cannot be an output$/, 'SDI {n} of {model} cannot be an output', ['n', 'model']],

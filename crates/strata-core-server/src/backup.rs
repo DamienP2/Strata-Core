@@ -32,8 +32,21 @@ use crate::{
 };
 
 /// Les réglages : toujours sauvegardés et restaurés.
-const SETTINGS: &[&str] =
-    &["config.json", "users.json", "groups.json", "hardware.json", "streams.json", "alerts.json", "snmp.json", "nmos.json", "tls", "clock", "ndi"];
+const SETTINGS: &[&str] = &[
+    "config.json",
+    "users.json",
+    "groups.json",
+    "hardware.json",
+    "streams.json",
+    "alerts.json",
+    "snmp.json",
+    "nmos.json",
+    "tls",
+    "clock",
+    "ndi",
+    "storage.json",
+    "backup-copy.json",
+];
 /// Les applis installées, leurs sources et leurs données (au choix : elles peuvent peser lourd).
 const APPS: &[&str] = &["apps.json", "sources.json", "apps", "app-data"];
 /// L'identité du serveur (sa clé, son rattachement au cockpit) : restaurée seulement si on le
@@ -280,16 +293,148 @@ pub fn daily(data_dir: &Path, config: &crate::config::ServerConfig) {
     }
 }
 
-/// La sauvegarde quotidienne, revue toutes les heures.
+/// La sauvegarde quotidienne, revue toutes les heures, puis sa copie vers le serveur de stockage.
 pub fn start(s: &Shared) {
     let s = s.clone();
     tokio::spawn(async move {
         loop {
             let s2 = s.clone();
             let _ = tokio::task::spawn_blocking(move || daily(&s2.data_dir, &s2.config.load())).await;
+            // La plus récente pas encore copiée (une copie ratée est donc retentée chaque heure).
+            if let Err(e) = copy_newest(&s, false).await {
+                tracing::debug!("backup copy: {e}");
+            }
             tokio::time::sleep(Duration::from_secs(3600)).await;
         }
     });
+}
+
+// ---------- La copie vers un serveur de stockage ----------
+
+/// Où copier les sauvegardes (Ce serveur › Sauvegardes).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CopySettings {
+    /// Le serveur de stockage (Ce serveur › Stockage) ; vide : pas de copie.
+    pub target: String,
+    /// Le dossier dans celui du serveur ; vide : le nom du serveur.
+    pub folder: String,
+    /// Les sauvegardes gardées là-bas (les plus anciennes effacées).
+    pub keep: usize,
+}
+
+impl Default for CopySettings {
+    fn default() -> Self {
+        CopySettings { target: String::new(), folder: String::new(), keep: 30 }
+    }
+}
+
+/// La dernière copie, et celles déjà faites.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CopyState {
+    pub at: i64,
+    pub name: String,
+    pub ok: bool,
+    pub error: String,
+    pub sent: Vec<String>,
+}
+
+fn copy_settings(data_dir: &Path) -> CopySettings {
+    strata_core::files::read_json(&data_dir.join("backup-copy.json")).unwrap_or_default()
+}
+
+fn copy_state(data_dir: &Path) -> CopyState {
+    strata_core::files::read_json(&data_dir.join("backups").join(".copy.json")).unwrap_or_default()
+}
+
+/// Le dossier des copies quand on n'en donne pas : le nom de ce serveur.
+fn default_folder(server_name: &str) -> String {
+    let n = crate::storage::safe(server_name);
+    if n.is_empty() {
+        "Strata Core".to_string()
+    } else {
+        n
+    }
+}
+
+/// Le dossier là-bas : celui du serveur de stockage, puis le dossier choisi.
+fn remote_dir(t: &crate::storage::Target, set: &CopySettings, server_name: &str) -> String {
+    let folder = if set.folder.trim().is_empty() {
+        default_folder(server_name)
+    } else {
+        set.folder.split(['/', '\\']).map(crate::storage::safe).filter(|p| !p.is_empty()).collect::<Vec<_>>().join("/")
+    };
+    let base = crate::storage::Transfer::new(t, Path::new("")).base();
+    [base, folder].into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join("/")
+}
+
+static COPYING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Copie la sauvegarde la plus récente (si elle ne l'est pas déjà, ou toujours si `again`) ;
+/// rend son nom, ou rien si la copie n'est pas réglée.
+pub async fn copy_newest(s: &Shared, again: bool) -> Result<Option<String>, String> {
+    let set = copy_settings(&s.data_dir);
+    if set.target.is_empty() {
+        return Ok(None);
+    }
+    let d = s.data_dir.clone();
+    let newest = tokio::task::spawn_blocking(move || list(&d)).await.map_err(|e| e.to_string())?.into_iter().next();
+    let Some(name) = newest.and_then(|v| v["name"].as_str().map(String::from)) else {
+        return Ok(None);
+    };
+    if !again && copy_state(&s.data_dir).sent.contains(&name) {
+        return Ok(None);
+    }
+    copy(s, &name).await.map(Some)
+}
+
+/// Copie une sauvegarde vers le serveur de stockage, puis n'y garde que les plus récentes.
+pub async fn copy(s: &Shared, name: &str) -> Result<String, String> {
+    let _one = COPYING.lock().await;
+    let set = copy_settings(&s.data_dir);
+    let mut state = copy_state(&s.data_dir);
+    let r = async {
+        let t = crate::storage::find(&s.data_dir, &set.target).ok_or("the storage server of the backups no longer exists")?;
+        let name = checked(name)?.to_string();
+        let file = dir(&s.data_dir).join(&name);
+        if !file.is_file() {
+            return Err("unknown backup".to_string());
+        }
+        let tr = crate::storage::Transfer::new(&t, &s.data_dir);
+        let to = remote_dir(&t, &set, &s.config.load().name);
+        tr.put(&file, &to, &name).await?;
+        // Les plus anciennes, effacées là-bas (seulement les sauvegardes du Core).
+        if set.keep > 0 {
+            if let Ok(Some(mut there)) = tr.entries(&to).await {
+                there.retain(|(n, is_dir)| !is_dir && n.starts_with("strata-") && checked(n).is_ok());
+                there.sort();
+                let extra = there.len().saturating_sub(set.keep);
+                for (n, _) in &there[..extra] {
+                    if let Err(e) = tr.remove(&to, n).await {
+                        tracing::warn!("backup copy: cannot remove the old {n}: {e}");
+                    }
+                }
+            }
+        }
+        Ok(name)
+    }
+    .await;
+    state.at = now_ms();
+    state.name = name.to_string();
+    state.ok = r.is_ok();
+    state.error = r.as_ref().err().cloned().unwrap_or_default();
+    if r.is_ok() && !state.sent.iter().any(|n| n == name) {
+        state.sent.push(name.to_string());
+        let extra = state.sent.len().saturating_sub(200);
+        state.sent.drain(..extra);
+    }
+    let _ = strata_core::files::write_json(&dir(&s.data_dir).join(".copy.json"), &state, true);
+    match &r {
+        Ok(n) => tracing::info!("backup {n} copied to the storage server"),
+        Err(e) => tracing::warn!("backup copy of {name}: {e}"),
+    }
+    r
 }
 
 // ---------- API (administrateurs) ----------
@@ -319,7 +464,52 @@ fn list(data_dir: &Path) -> Vec<Value> {
 async fn index(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
     require(me.admin)?;
     let d = s.data_dir.clone();
-    Ok(Json(json!({ "backups": blocking(move || list(&d)).await?, "keepDaily": KEEP_DAILY })))
+    let d2 = s.data_dir.clone();
+    let mut state = serde_json::to_value(copy_state(&s.data_dir)).unwrap_or_default();
+    state.as_object_mut().map(|o| o.remove("sent"));
+    Ok(Json(json!({
+        "backups": blocking(move || list(&d)).await?,
+        "keepDaily": KEEP_DAILY,
+        "copy": blocking(move || copy_settings(&d2)).await?,
+        "lastCopy": state,
+        "defaultFolder": default_folder(&s.config.load().name),
+    })))
+}
+
+async fn set_copy(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(mut set): Json<CopySettings>) -> ApiResult<Json<CopySettings>> {
+    require(me.admin)?;
+    set.folder = set.folder.trim().to_string();
+    if set.folder.split(['/', '\\']).any(|p| p.trim() == "..") {
+        return Err(bad("no « .. » in the folders"));
+    }
+    if !set.target.is_empty() && crate::storage::find(&s.data_dir, &set.target).is_none() {
+        return Err(bad("unknown storage server"));
+    }
+    set.keep = set.keep.min(1000);
+    strata_core::files::write_json(&s.data_dir.join("backup-copy.json"), &set, true).map_err(internal)?;
+    tracing::info!("backup copy set by {} (storage server: {})", me.username, if set.target.is_empty() { "none" } else { &set.target });
+    Ok(Json(set))
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct CopyBody {
+    /// Une sauvegarde ; sinon la plus récente.
+    name: String,
+}
+
+/// Copie maintenant (la plus récente, ou celle donnée).
+async fn copy_now(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(b): Json<CopyBody>) -> ApiResult<Json<Value>> {
+    require(me.admin)?;
+    if copy_settings(&s.data_dir).target.is_empty() {
+        return Err(bad("choose a storage server first"));
+    }
+    let name = if b.name.is_empty() {
+        copy_newest(&s, true).await.map_err(bad)?.ok_or_else(|| bad("no backup to copy"))?
+    } else {
+        copy(&s, &b.name).await.map_err(bad)?
+    };
+    Ok(Json(json!({ "name": name })))
 }
 
 #[derive(Deserialize, Default)]
@@ -333,6 +523,13 @@ async fn make(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(b): Js
     let s2 = s.clone();
     let name = blocking(move || create(&s2.data_dir, &s2.config.load(), "manual", b.apps)).await?.map_err(internal)?;
     tracing::info!("backup {name} made by {}", me.username);
+    // Copiée vers le serveur de stockage, si c'est réglé, sans faire attendre la page.
+    let (s2, n) = (s.clone(), name.clone());
+    tokio::spawn(async move {
+        if !copy_settings(&s2.data_dir).target.is_empty() {
+            let _ = copy(&s2, &n).await;
+        }
+    });
     Ok(Json(json!({ "name": name })))
 }
 
@@ -441,6 +638,7 @@ async fn restore(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(
 pub fn routes() -> Router<Shared> {
     Router::new()
         .route("/api/backups", get(index).post(make))
+        .route("/api/backups/copy", axum::routing::put(set_copy).post(copy_now))
         .route("/api/backups/upload", post(upload).layer(DefaultBodyLimit::disable()))
         .route("/api/backups/{name}", get(download).delete(remove))
         .route("/api/backups/{name}/restore", post(restore))
@@ -449,6 +647,24 @@ pub fn routes() -> Router<Shared> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copies_go_in_a_folder_of_the_server() {
+        let t = crate::storage::Target {
+            name: "NAS".into(),
+            kind: "smb".into(),
+            host: "nas".into(),
+            share: "S".into(),
+            path: "/Strata/".into(),
+            ..Default::default()
+        };
+        let set = CopySettings { target: "x".into(), folder: String::new(), keep: 3 };
+        assert_eq!(remote_dir(&t, &set, "Régie A"), "Strata/Régie A");
+        let set = CopySettings { folder: "a/../b:c/".into(), ..set };
+        assert_eq!(remote_dir(&t, &set, "Régie A"), "Strata/a/b-c");
+        let d = crate::storage::Target { kind: "dir".into(), path: "/mnt/nas".into(), ..t };
+        assert_eq!(remote_dir(&d, &CopySettings::default(), ""), "Strata Core");
+    }
 
     fn tmp() -> PathBuf {
         let d = std::env::temp_dir().join(format!("strata-backup-test-{}", strata_core::new_id()));

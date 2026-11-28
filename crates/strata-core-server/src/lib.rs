@@ -27,6 +27,7 @@ pub mod server;
 pub mod snmp;
 pub mod sso;
 pub mod state;
+pub mod storage;
 pub mod streams;
 pub mod supervisor;
 pub mod tls;

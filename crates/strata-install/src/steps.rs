@@ -358,7 +358,8 @@ const MTL_PKGS: [&str; 5] = ["libnuma1", "libjson-c5", "libxdp1", "libbpf1", "li
 /// Les paquets du système dont le Core a besoin : l'heure (chrony, ptp4l), ethtool, polkit,
 /// ffmpeg (les flux réseau) et ce qu'il faut à MTL (ST 2110).
 fn system_pkgs(ndi: bool) -> Vec<String> {
-    let mut pkgs = vec!["chrony", "linuxptp", "ethtool", "polkitd", "ffmpeg"];
+    // smbclient, curl et ssh-keyscan : les serveurs de stockage (SMB, FTP, WebDAV, SFTP).
+    let mut pkgs = vec!["chrony", "linuxptp", "ethtool", "polkitd", "ffmpeg", "smbclient", "curl", "openssh-client"];
     pkgs.extend(MTL_PKGS);
     if ndi {
         pkgs.push("avahi-daemon");

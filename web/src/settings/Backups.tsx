@@ -2,8 +2,10 @@
 // alertes…) dans une archive. Faite à la main, chaque jour, et avant chaque restauration ; à
 // télécharger, ou à envoyer depuis un autre serveur. Une restauration redémarre le Core.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Archive, Download, FileArchive, History, Plus, Trash2 } from 'lucide-react';
-import { Badge, Card, Empty, InfoTip, Modal, PageHead, Switch, confirmDialog, t, timeAgo, tn, toast } from '@strata/ui';
+import { AlertTriangle, Archive, Check, Download, FileArchive, History, HardDrive, Plus, Trash2, Upload } from 'lucide-react';
+import { Badge, Card, Dropdown, Empty, Field, FieldGrid, InfoTip, Modal, PageHead, SaveBar, Switch, confirmDialog, t, timeAgo, tn, toast } from '@strata/ui';
+import { navigate } from '../router';
+import { KIND_TAG, useStorage } from './Storage';
 import { api, expectRestart, upload } from '../api';
 import { friendly } from '../errors';
 
@@ -14,6 +16,17 @@ interface Manifest {
   createdAt: number;
   kind: 'manual' | 'daily' | 'before-restore' | 'uploaded' | string;
   apps: boolean;
+}
+interface CopySettings {
+  target: string;
+  folder: string;
+  keep: number;
+}
+interface LastCopy {
+  at: number;
+  name: string;
+  ok: boolean;
+  error: string;
 }
 interface Backup {
   name: string;
@@ -33,6 +46,9 @@ function kindLabel(k: string) {
 
 export function Backups() {
   const [list, setList] = useState<Backup[] | null>(null);
+  const [copy, setCopy] = useState<CopySettings | null>(null);
+  const [last, setLast] = useState<LastCopy | null>(null);
+  const [defaultFolder, setDefaultFolder] = useState('');
   const [making, setMaking] = useState(false);
   const [withApps, setWithApps] = useState(false);
   const [sent, setSent] = useState<number | null>(null);
@@ -42,7 +58,11 @@ export function Backups() {
 
   const reload = useCallback(async () => {
     try {
-      setList((await api<{ backups: Backup[] }>('GET', '/api/backups')).backups);
+      const r = await api<{ backups: Backup[]; copy: CopySettings; lastCopy: LastCopy; defaultFolder: string }>('GET', '/api/backups');
+      setDefaultFolder(r.defaultFolder);
+      setList(r.backups);
+      setCopy(r.copy);
+      setLast(r.lastCopy.at ? r.lastCopy : null);
     } catch (e) {
       toast(friendly(e), 'error');
     }
@@ -57,6 +77,8 @@ export function Backups() {
       await api('POST', '/api/backups', { apps: withApps });
       toast(t('Backup made'));
       await reload();
+      // Sa copie vers le serveur de stockage se fait derrière : son résultat, relu un peu après.
+      if (copy?.target) window.setTimeout(() => void reload(), 4000);
     } catch (e) {
       toast(friendly(e), 'error');
     }
@@ -103,6 +125,7 @@ export function Backups() {
           <span style={{ width: `${Math.round(sent * 100)}%` }} />
         </div>
       )}
+      {copy && <CopyCard saved={copy} last={last} defaultFolder={defaultFolder} onSaved={(c) => setCopy(c)} reload={reload} />}
       <Card
         icon={<Archive size={16} />}
         title={t('Backups of this server')}
@@ -220,5 +243,95 @@ function RestoreModal({ backup, onClose, onDone }: { backup: Backup; onClose: ()
       <Switch checked={identity} onChange={setIdentity} label={t('The identity of the server too (the same server, reinstalled)')} />
       {identity && <p className="st-muted core-note">{t('Only if this backup comes from this very server: two servers with the same identity confuse the cockpit.')}</p>}
     </Modal>
+  );
+}
+
+/** La copie des sauvegardes vers un serveur de stockage (Ce serveur › Stockage). */
+function CopyCard({ saved, last, defaultFolder, onSaved, reload }: { saved: CopySettings; last: LastCopy | null; defaultFolder: string; onSaved: (c: CopySettings) => void; reload: () => Promise<void> }) {
+  const [storage] = useStorage();
+  const [c, setC] = useState<CopySettings>(saved);
+  const [busy, setBusy] = useState(false);
+  const [copying, setCopying] = useState(false);
+  useEffect(() => setC(saved), [saved]);
+  const dirty = JSON.stringify(c) !== JSON.stringify(saved);
+  const save = async () => {
+    setBusy(true);
+    try {
+      onSaved(await api<CopySettings>('PUT', '/api/backups/copy', c));
+      toast(t('Saved'));
+    } catch (e) {
+      toast(friendly(e), 'error');
+    }
+    setBusy(false);
+  };
+  const now = async () => {
+    setCopying(true);
+    try {
+      const r = await api<{ name: string }>('POST', '/api/backups/copy', {});
+      toast(t('{name} copied to the storage server', { name: r.name }));
+    } catch (e) {
+      toast(friendly(e), 'error');
+    }
+    setCopying(false);
+    await reload();
+  };
+  const target = storage?.find((s) => s.id === saved.target);
+  return (
+    <Card
+      icon={<HardDrive size={16} />}
+      title={t('Copy to a storage server')}
+      actions={
+        saved.target ? (
+          <button type="button" className="st-btn small" disabled={copying || dirty} onClick={() => void now()}>
+            <Upload size={13} /> {copying ? t('Copying…') : t('Copy the latest now')}
+          </button>
+        ) : undefined
+      }
+    >
+      <p className="st-muted core-note">
+        {t('Each backup (the daily one, and those made by hand) is copied there, in a folder of this server; only the latest are kept there. A copy that failed is tried again every hour.')}
+      </p>
+      {storage && storage.length === 0 ? (
+        <p className="core-note">
+          {t('No storage server yet.')}{' '}
+          <button type="button" className="st-btn small" onClick={() => navigate('/reglages/stockage')}>
+            <Plus size={13} /> {t('Add one')}
+          </button>
+        </p>
+      ) : (
+        <FieldGrid>
+          <Field label={t('Storage server')} group>
+            <Dropdown
+              value={c.target}
+              options={[{ value: '', label: t('No copy') }, ...(storage ?? []).map((s) => ({ value: s.id, label: `${s.name} · ${t(KIND_TAG[s.kind])}` }))]}
+              onChange={(target) => setC({ ...c, target })}
+            />
+          </Field>
+          <Field label={t('Folder there')} hint={c.target ? `→ ${(storage?.find((s) => s.id === c.target)?.address ?? '').replace(/\/$/, '')}/${c.folder.trim() || defaultFolder}/` : undefined}>
+            <input className="st-mono" value={c.folder} disabled={!c.target} placeholder={defaultFolder} onChange={(e) => setC({ ...c, folder: e.target.value })} />
+          </Field>
+          <Field label={t('Kept there')}>
+            <input
+              className="st-mono"
+              inputMode="numeric"
+              disabled={!c.target}
+              value={c.keep ? String(c.keep) : ''}
+              placeholder={t('all')}
+              onChange={(e) => setC({ ...c, keep: Math.min(1000, Number(e.target.value.replace(/[^0-9]/g, '')) || 0) })}
+            />
+          </Field>
+        </FieldGrid>
+      )}
+      {last && saved.target && (
+        <div className={`core-check ${last.ok ? 'ok' : 'bad'}`}>
+          {last.ok ? <Check size={14} /> : <AlertTriangle size={14} />}
+          <span>
+            {last.ok ? t('Last copy: {name}, {when}', { name: last.name, when: timeAgo(last.at) }) : t('Last copy failed ({when}): {why}', { when: timeAgo(last.at), why: friendly(new Error(last.error)) })}
+            {target && <span className="st-muted"> · {target.name}</span>}
+          </span>
+        </div>
+      )}
+      <SaveBar dirty={dirty} saving={busy} onSave={() => void save()} onDiscard={() => setC(saved)} />
+    </Card>
   );
 }
