@@ -19,6 +19,8 @@ pub const HELPER_DIR: &str = "/usr/lib/strata";
 pub const MEDIA_HELPER: &str = "/usr/lib/strata/strata-media-setup";
 /// Hugepages et ports DPDK pour le ST 2110 (en root, relancé par le Core).
 pub const MEDIA_UNIT: &str = "/etc/systemd/system/strata-media.service";
+/// Les adresses IP des interfaces (en root, relancé par le Core).
+pub const NET_UNIT: &str = "/etc/systemd/system/strata-net.service";
 /// Le compte du service relance chrony et ptp4l (Matériel › Horloge).
 pub const POLKIT: &str = "/etc/polkit-1/rules.d/50-strata-core.rules";
 /// Les réglages que le Core écrit pour le système.

@@ -901,4 +901,10 @@ export const fr: Record<string, string> = {
   'Trying again every 2 seconds. This page reloads by itself as soon as the server answers.': 'Nouvelle tentative toutes les 2 secondes. La page se recharge d’elle-même dès que le serveur répond.',
   'Please wait: the Core restarts. This page reloads by itself as soon as it answers.': 'Patientez : le Core redémarre. La page se recharge d’elle-même dès qu’il répond.',
   'For {time}': 'Depuis {time}',
+  'MXL does not load: the pictures are not shared with the apps, and the network streams and the SDI outputs written by the apps are not available.': 'MXL ne se charge pas : les images ne sont pas partagées avec les applis, et les flux réseau et les sorties SDI écrites par les applis ne sont pas disponibles.',
+  'MTL does not load: the ST 2110 flows are neither received nor sent by the Core.': 'MTL ne se charge pas : les flux ST 2110 ne sont ni reçus ni envoyés par le Core.',
+  'ffmpeg is missing: the network streams (SRT, RTMP, HLS…) are not available.': 'ffmpeg manque : les flux réseau (SRT, RTMP, HLS…) ne sont pas disponibles.',
+  'Safe mode: the Core stopped several times at start, so it runs without MXL and MTL.': 'Mode sans échec : le Core s’est arrêté plusieurs fois au démarrage, il tourne donc sans MXL ni MTL.',
+  'Restart normally': 'Redémarrer normalement',
+  'not available': 'pas disponible',
 };

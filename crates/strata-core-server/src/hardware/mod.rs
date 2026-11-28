@@ -23,6 +23,7 @@ pub mod capture;
 pub mod clock;
 pub mod decklink;
 pub mod gpu;
+pub mod ip;
 pub mod media;
 pub mod ndi;
 pub mod net;
@@ -554,6 +555,10 @@ pub fn routes() -> Router<Shared> {
         .route("/api/hardware/nmos", get(nmos_status))
         .route("/api/hardware/ports", get(ports))
         .route("/api/hardware/gpus", get(gpus))
+        .route("/api/hardware/ip", get(ip_state))
+        .route("/api/hardware/ip/confirm", axum::routing::post(ip_confirm))
+        .route("/api/hardware/ip/revert", axum::routing::post(ip_revert))
+        .route("/api/hardware/ip/{name}", axum::routing::put(ip_set))
         .route("/api/hardware/flows/{id}/preview.jpg", get(flow_preview))
 }
 
@@ -831,6 +836,103 @@ async fn flow_preview(State(s): State<Shared>, CurrentUser(me): CurrentUser, Url
     .await?
     .map_err(|e| (StatusCode::NOT_FOUND, e))?;
     Ok(jpeg_response(jpeg))
+}
+
+/// Les adresses IP réglées par Strata, et un changement qui attend d'être confirmé.
+async fn ip_state(CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
+    require(me.admin)?;
+    let v = blocking(|| {
+        let w = ip::read_wanted();
+        let o = ip::read_outcome();
+        json!({
+            "interfaces": w.interfaces,
+            "pendingUntil": ip::pending(),
+            "reverted": o.as_ref().is_some_and(|o| o.reverted),
+            "error": o.and_then(|o| o.error),
+            "defaultRoute": ip::default_route_iface(),
+        })
+    })
+    .await?;
+    Ok(Json(v))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IpBody {
+    /// system (rendue à Ubuntu), dhcp, static.
+    mode: String,
+    #[serde(default)]
+    addresses: Vec<String>,
+    gateway: Option<String>,
+    #[serde(default)]
+    dns: Vec<String>,
+    mtu: Option<u32>,
+}
+
+/// Règle une interface. Quand c'est celle par laquelle on joint le serveur, le changement est
+/// appliqué une demi-seconde après la réponse, et défait au bout de 2 min sans confirmation.
+async fn ip_set(
+    State(s): State<Shared>,
+    CurrentUser(me): CurrentUser,
+    headers: HeaderMap,
+    UrlPath(name): UrlPath<String>,
+    Json(b): Json<IpBody>,
+) -> ApiResult<Json<Value>> {
+    require(me.admin)?;
+    let mut w = ip::read_wanted();
+    w.interfaces.retain(|i| i.name != name);
+    let clean = |v: Vec<String>| v.into_iter().map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect::<Vec<_>>();
+    let gateway = b.gateway.map(|g| g.trim().to_string()).filter(|g| !g.is_empty());
+    let new_ip = match b.mode.as_str() {
+        "system" => None,
+        "dhcp" | "static" => {
+            let mode = if b.mode == "dhcp" { ip::Mode::Dhcp } else { ip::Mode::Static };
+            let addresses = if mode == ip::Mode::Static { clean(b.addresses) } else { Vec::new() };
+            let first = addresses.first().and_then(|a| ip::parse_cidr(a)).map(|(a, _)| a);
+            w.interfaces.push(ip::IfaceIp { name: name.clone(), mode, addresses, gateway, dns: clean(b.dns), mtu: b.mtu });
+            first
+        }
+        _ => return Err(bad("mode is system, dhcp or static")),
+    };
+    ip::check(&w).map_err(bad)?;
+    // Joint-on le serveur par cette interface ? (route par défaut, port de gestion, ou l'adresse
+    // tapée dans le navigateur)
+    let host = headers.get(header::HOST).and_then(|h| h.to_str().ok()).map(|h| h.rsplit_once(':').map_or(h, |(a, _)| a).to_string()).unwrap_or_default();
+    let host_ip: Option<std::net::Ipv4Addr> = host.parse().ok();
+    let nic_ips: Vec<std::net::Ipv4Addr> =
+        net::nics().into_iter().filter(|n| n.name == name).flat_map(|n| n.ipv4).filter_map(|a| a.split('/').next().and_then(|x| x.parse().ok())).collect();
+    let via_host = host_ip.is_some_and(|h| nic_ips.contains(&h));
+    let cfg = HardwareConfig::load(&s.data_dir);
+    w.guard = via_host || ip::default_route_iface().as_deref() == Some(name.as_str()) || cfg.network.management == name;
+    let moved_to = if via_host { new_ip.filter(|n| Some(*n) != host_ip).map(|n| n.to_string()) } else { None };
+    tracing::info!("IP settings of {name} changed by {} ({})", me.username, b.mode);
+    if w.guard {
+        // Répondre d'abord : la page qui l'a demandé peut perdre la liaison.
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            let r = tokio::task::spawn_blocking(move || ip::apply(&w)).await;
+            if let Ok(Err(e)) = r {
+                tracing::warn!("IP settings: {e}");
+            }
+        });
+        return Ok(Json(json!({ "guard": true, "movedTo": moved_to, "seconds": ip::REVERT_SECS })));
+    }
+    blocking(move || ip::apply(&w)).await?.map_err(bad)?;
+    Ok(Json(json!({ "guard": false })))
+}
+
+async fn ip_confirm(CurrentUser(me): CurrentUser) -> ApiResult<StatusCode> {
+    require(me.admin)?;
+    blocking(ip::confirm).await?.map_err(bad)?;
+    tracing::info!("IP settings kept by {}", me.username);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn ip_revert(CurrentUser(me): CurrentUser) -> ApiResult<StatusCode> {
+    require(me.admin)?;
+    blocking(ip::revert_now).await?.map_err(bad)?;
+    tracing::info!("IP settings reverted by {}", me.username);
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Les GPU (la page GPU les relit seuls, pas tout le matériel).

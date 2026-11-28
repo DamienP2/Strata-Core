@@ -334,13 +334,14 @@ fn core_unit() -> String {
 }
 
 const POLKIT_RULE: &str = "// Strata Core : le compte du service relance chrony et ptp4l (Matériel › Horloge), et\n\
-// strata-media (hugepages et ports DPDK du ST 2110, Matériel › Réseau).\n\
+// strata-media (hugepages et ports DPDK du ST 2110), strata-net (adresses IP, Matériel › Réseau).\n\
 polkit.addRule(function (action, subject) {\n\
   if (action.id == \"org.freedesktop.systemd1.manage-units\" && subject.user == \"strata\") {\n\
     var unit = action.lookup(\"unit\");\n\
     var verb = action.lookup(\"verb\");\n\
     var ok = verb == \"start\" || verb == \"stop\" || verb == \"restart\";\n\
-    if (ok && (unit == \"chrony.service\" || unit == \"strata-ptp4l.service\" || unit == \"strata-media.service\")) return polkit.Result.YES;\n\
+    if (ok && (unit == \"chrony.service\" || unit == \"strata-ptp4l.service\" || unit == \"strata-media.service\" ||\n\
+        unit == \"strata-net.service\" || unit == \"strata-net-revert.timer\" || unit == \"strata-net-revert.service\")) return polkit.Result.YES;\n\
   }\n\
 });\n";
 
@@ -536,6 +537,11 @@ fn system_files(ctx: &Ctx) -> Result<String, String> {
             // Une installation d'avant la copie à root : la mise à jour la pose.
             ctx.log(&format!("{} is missing: run the update to set up ST 2110 (DPDK, hugepages)", paths::MEDIA_HELPER));
         }
+    }
+    // Les adresses IP des interfaces (un Core plus ancien n'a pas ce service).
+    let net = ctx.core_plain(&["net-unit"]).unwrap_or_default();
+    if !net.trim().is_empty() {
+        ctx.write(paths::NET_UNIT, &net, 0o644)?;
     }
     // Le Core réécrit ce fichier ; il doit le pouvoir.
     if !ctx.p(paths::CHRONY).exists() {
@@ -871,8 +877,17 @@ pub fn steps(plan: &Plan) -> Vec<Step> {
                 Ok("arrêté".into())
             }));
             v.push(step("Fichiers du système", false, |ctx, _| {
-                for f in [paths::UNIT, paths::PTP_UNIT, paths::MEDIA_UNIT, paths::POLKIT, paths::LINK, paths::CHRONY, paths::SYSCTL] {
+                for f in [paths::UNIT, paths::PTP_UNIT, paths::MEDIA_UNIT, paths::NET_UNIT, paths::POLKIT, paths::LINK, paths::CHRONY, paths::SYSCTL] {
                     let _ = std::fs::remove_file(ctx.p(f));
+                }
+                // Les adresses réglées par Strata : les interfaces reviennent à la configuration d'Ubuntu.
+                if let Ok(d) = std::fs::read_dir(ctx.p("/etc/systemd/network")) {
+                    for e in d.flatten() {
+                        if e.file_name().to_string_lossy().starts_with("05-strata-") {
+                            let _ = std::fs::remove_file(e.path());
+                        }
+                    }
+                    let _ = ctx.run("networkctl", &["reload"]);
                 }
                 let _ = std::fs::remove_dir_all(ctx.p(paths::ETC));
                 let _ = std::fs::remove_dir_all(ctx.p("/opt/strata"));

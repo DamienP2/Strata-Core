@@ -78,9 +78,13 @@ jobs:
           git clone -q https://github.com/dmf-mxl/mxl.git /tmp/mxl
           git -C /tmp/mxl checkout -q ce5ac2bffa5d
           cd /tmp/mxl
-          VCPKG_ROOT=/tmp/vcpkg cmake --preset Linux-Clang-Release -DBUILD_TESTS=OFF -DBUILD_TOOLS=OFF -DBUILD_UTILS=OFF -DBUILD_DOCS=OFF -B build
+          # x86-64 de base : MXL choisirait sinon x86-64-v3 (AVX2), qui plante sur un processeur
+          # sans AVX2 (machine virtuelle QEMU par exemple).
+          VCPKG_ROOT=/tmp/vcpkg cmake --preset Linux-Clang-Release -DMXL_TARGET_ARCH=x86-64 -DBUILD_TESTS=OFF -DBUILD_TOOLS=OFF -DBUILD_UTILS=OFF -DBUILD_DOCS=OFF -B build
           cmake --build build -j"$(nproc)"
           ls -l build/lib/libmxl.so*
+          # Aucune instruction AVX dans la bibliothèque livrée.
+          if objdump -d --no-show-raw-insn build/lib/libmxl.so | grep -qE '%[yz]mm'; then echo "libmxl uses AVX" >&2; exit 1; fi
 
       - name: MTL et DPDK (ST 2110, embarqués dans l'archive du Core sous lib/mtl)
         run: |

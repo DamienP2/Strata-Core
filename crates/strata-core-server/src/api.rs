@@ -63,5 +63,27 @@ async fn health(State(s): State<Shared>) -> Json<Value> {
         // L'interface bloque l'écran pendant une mise à jour ou un redémarrage.
         "updating": s.updates.busy(),
         "restarting": s.restart_asked(),
+        "safeMode": crate::safe_mode(),
+        "unavailable": unavailable(&s),
     }))
+}
+
+/// Ce qui ne marche pas faute d'une bibliothèque (absente, ou qui plante) : le Core tourne sans,
+/// et l'interface dit quelles fonctions manquent.
+fn unavailable(s: &crate::state::AppState) -> Vec<Value> {
+    let mut v = Vec::new();
+    if let Some(Err(e)) = s.mxl.get() {
+        v.push(json!({ "lib": "MXL", "features": "mxl", "why": e }));
+    }
+    // MTL n'est attendu que s'il plante ou si le Core est en mode sans échec (sans carte Intel,
+    // son absence est normale : la page ST 2110 le dit).
+    if let Some(Err(e)) = s.mtl.get() {
+        if crate::safe_mode() || e.contains("crashes") {
+            v.push(json!({ "lib": "MTL", "features": "mtl", "why": e }));
+        }
+    }
+    if let Err(e) = s.streams.ffmpeg() {
+        v.push(json!({ "lib": "ffmpeg", "features": "ffmpeg", "why": e }));
+    }
+    v
 }

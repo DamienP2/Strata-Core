@@ -34,6 +34,16 @@ enum Cmd {
     Ptp4lUnit,
     /// Le service strata-media (posé par l'installateur).
     MediaUnit,
+    /// Essaie de charger une bibliothèque native (mxl, mtl) : le Core le fait dans un processus à
+    /// part avant de la charger.
+    #[command(hide = true)]
+    LibProbe { lib: String },
+    /// Le service strata-net (posé par l'installateur).
+    NetUnit,
+    /// Les adresses IP des interfaces (lancé en root par strata-net.service).
+    NetSetup,
+    /// Remet les adresses d'avant le dernier changement (lancé en root, minuteur de 2 min).
+    NetRevert,
     /// Hugepages et ports DPDK pour le ST 2110 (lancé en root par strata-media.service).
     MediaSetup {
         /// Le compte du service, à qui donner les ports DPDK.
@@ -71,6 +81,13 @@ fn main() -> anyhow::Result<()> {
             print!("{}", strata_core_server::hardware::media::UNIT);
             Ok(())
         }
+        Some(Cmd::LibProbe { lib }) => strata_core_server::lib_probe(&lib),
+        Some(Cmd::NetUnit) => {
+            print!("{}", strata_core_server::hardware::ip::UNIT);
+            Ok(())
+        }
+        Some(Cmd::NetSetup) => strata_core_server::hardware::ip::setup().map_err(|e| anyhow::anyhow!(e)),
+        Some(Cmd::NetRevert) => strata_core_server::hardware::ip::revert().map_err(|e| anyhow::anyhow!(e)),
         Some(Cmd::MediaSetup { user }) => strata_core_server::hardware::media::setup(&user).map_err(|e| anyhow::anyhow!(e)),
         Some(Cmd::Run(r)) => run(r),
         None => run(cli.run),

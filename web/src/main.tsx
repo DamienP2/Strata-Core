@@ -9,7 +9,7 @@ import {
   addTranslations, installEscape, installTooltips, instanceKey, nameTab, openAppTab, setLang, setTheme, setTimezone, t, toast, useLang,
   type CockpitData, type CockpitInstance, type Lang, type ThemePref,
 } from '@strata/ui';
-import { api, ApiError, useApp, type AuthState, type PublicUser } from './api';
+import { api, ApiError, expectRestart, useApp, type AuthState, type PublicUser, type Unavailable } from './api';
 import { fr } from './fr';
 import { appIcon } from './icons';
 import { navigate, useRoute } from './router';
@@ -62,7 +62,8 @@ function useHeartbeat() {
         // Un serveur figé ne répond pas sans échouer : 4 s au plus.
         const res = await fetch('/api/health', { credentials: 'same-origin', signal: AbortSignal.timeout(4000) });
         if (!res.ok) throw new Error(res.statusText);
-        const h = (await res.json()) as { updating?: boolean; restarting?: boolean };
+        const h = (await res.json()) as { updating?: boolean; restarting?: boolean; safeMode?: boolean; unavailable?: Unavailable[] };
+        useApp.setState({ unavailable: h.unavailable ?? [], safeMode: !!h.safeMode });
         fails = 0;
         if (h.updating) useApp.setState({ down: 'update', connected: true });
         else if (h.restarting) useApp.setState({ down: down === 'update' ? 'update' : 'restart', connected: true });
@@ -89,13 +90,47 @@ function useHeartbeat() {
         timer = window.setTimeout(() => void beat(), 2000);
       }
     });
-    timer = window.setTimeout(() => void beat(), 5000);
+    timer = window.setTimeout(() => void beat(), 300);
     return () => {
       stop = true;
       unsub();
       window.clearTimeout(timer);
     };
   }, []);
+}
+
+/** Ce qui ne marche pas faute d'une bibliothèque : le Core tourne sans, on dit ce qui manque. */
+function Degraded() {
+  useLang((s) => s.lang);
+  const { unavailable, safeMode } = useApp();
+  if (!unavailable.length && !safeMode) return null;
+  const what: Record<string, string> = {
+    mxl: t('MXL does not load: the pictures are not shared with the apps, and the network streams and the SDI outputs written by the apps are not available.'),
+    mtl: t('MTL does not load: the ST 2110 flows are neither received nor sent by the Core.'),
+    ffmpeg: t('ffmpeg is missing: the network streams (SRT, RTMP, HLS…) are not available.'),
+  };
+  return (
+    <div className="core-degraded">
+      {safeMode && (
+        <div className="core-degraded-line">
+          <strong>{t('Safe mode: the Core stopped several times at start, so it runs without MXL and MTL.')}</strong>
+          <button
+            type="button"
+            className="st-btn small"
+            onClick={() => void api('POST', '/api/server/restart').then(() => expectRestart('restart'), (e) => toast(message(e), 'error'))}
+          >
+            {t('Restart normally')}
+          </button>
+        </div>
+      )}
+      {unavailable.map((u) => (
+        <div key={u.lib} className="core-degraded-line">
+          <span>{what[u.features] ?? `${u.lib}: ${t('not available')}`}</span>
+          <span className="st-muted st-mono">{u.why}</span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 /** L'écran bloqué : mise à jour, redémarrage, ou serveur injoignable. */
@@ -278,6 +313,7 @@ function App() {
           </>
         }
       />
+      {user.admin && <Degraded />}
       <div className="st-content">{inSettings ? <Settings path={path.slice('/reglages/'.length)} /> : data && <Cockpit data={data} onOpen={open} onServer={user.admin ? (id) => openServer(data, id) : undefined} />}</div>
       <ContextMenuHost />
       <DialogHost />

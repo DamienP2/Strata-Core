@@ -41,7 +41,19 @@ export interface AuthState {
 /** L'état de l'interface : la connexion, et la liaison avec le serveur. */
 /** `down` : l'écran est bloqué (mise à jour, redémarrage, serveur injoignable) jusqu'au retour du Core. */
 export type Down = 'update' | 'restart' | 'lost';
-export const useApp = create<{ auth: AuthState | null; connected: boolean; down: Down | null }>(() => ({ auth: null, connected: true, down: null }));
+/** Une bibliothèque qui manque ou plante : le Core tourne sans, ces fonctions ne sont pas là. */
+export interface Unavailable {
+  lib: string;
+  features: 'mxl' | 'mtl' | 'ffmpeg' | string;
+  why: string;
+}
+export const useApp = create<{ auth: AuthState | null; connected: boolean; down: Down | null; unavailable: Unavailable[]; safeMode: boolean }>(() => ({
+  auth: null,
+  connected: true,
+  down: null,
+  unavailable: [],
+  safeMode: false,
+}));
 
 /** Le Core va redémarrer (mise à jour, restauration, redémarrage) : l'écran est bloqué jusqu'à son
  *  retour, puis la page se recharge. */

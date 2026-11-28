@@ -222,4 +222,8 @@ button.core-hw-role.on { border-style: solid; background: color-mix(in srgb, var
 .core-down-icon { display: inline-grid; place-items: center; width: 52px; height: 52px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); }
 .core-down-box.lost .core-down-icon { background: var(--live-soft); color: var(--live); }
 .core-down-wait { display: inline-flex; align-items: center; gap: 6px; margin-top: 14px !important; font-size: 13px; color: var(--text-3) !important; }
+/* Bibliothèques absentes : ce qui manque, sans bloquer */
+.core-degraded { padding: 8px 16px; background: color-mix(in srgb, var(--warn) 12%, var(--panel)); border-bottom: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); font-size: 13px; }
+.core-degraded-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 3px 0; }
+.core-degraded-line .st-mono { font-size: 11px; }
 
