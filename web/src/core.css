@@ -23,6 +23,9 @@
 .core-tag button { display: grid; place-items: center; width: 16px; height: 16px; border: 0; border-radius: 50%; background: none; color: inherit; cursor: pointer; padding: 0; }
 .core-tag button:hover { background: color-mix(in srgb, currentColor 20%, transparent); }
 .core-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.core-chip { height: 28px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--panel-2); color: var(--text-2); font: inherit; font-size: var(--fs-12); cursor: pointer; }
+.core-chip:hover { color: var(--text); }
+.core-chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-2); }
 .core-switches { display: flex; flex-direction: column; gap: 8px; max-height: 220px; overflow: auto; }
 .core-copy { display: flex; gap: 6px; }
 .core-copy input { flex: 1; }

@@ -821,6 +821,8 @@ pub fn reconcile_inputs(s: &crate::state::AppState) {
     let ndi_wanted = if s.features.on(crate::features::NDI) { ndi_out::wanted(&cfg) } else { Vec::new() };
     s.ndi_outputs.reconcile(ndi_wanted, mxl_of(s));
     crate::streams::reconcile(s);
+    // Les mires suivent leurs destinations (une sortie SDI, un flux ST 2110 changés).
+    crate::testgen::reconcile(s);
 }
 
 /// Les entrées captées : signal, format, images par seconde, applis qui les lisent.

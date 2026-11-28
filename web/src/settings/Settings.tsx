@@ -2,7 +2,7 @@
 // (vue d'ensemble, nom et adresses, HTTPS), Applis (la Bibliothèque, puis une page par appli installée)
 // et Personnes (Utilisateurs, Groupes, Annuaire). Les autres sections viendront avec leurs briques
 // Matériel (Cartes SDI, NDI, ST 2110, Réseau, GPU, Horloge) ; Santé (Ressources, Journal, Alertes, SNMP).
-import { Activity, Archive, AudioLines, BellRing, Cast, Clock, Gpu as GpuIcon, Server as ServersIcon, Network as SnmpIcon, CloudDownload, ScrollText, EthernetPort as Ethernet, Globe, HardDrive, KeyRound, LayoutDashboard, LayoutGrid, Lock, MonitorPlay, Radio, ToggleRight, Users as UsersIcon, UsersRound, Waves } from 'lucide-react';
+import { Activity, Archive, AudioLines, BellRing, Cast, Clock, Gpu as GpuIcon, Server as ServersIcon, Network as SnmpIcon, CloudDownload, ScrollText, EthernetPort as Ethernet, Globe, HardDrive, KeyRound, LayoutDashboard, LayoutGrid, Lock, MonitorPlay, Radio, ToggleRight, TvMinimal, Users as UsersIcon, UsersRound, Waves } from 'lucide-react';
 import { Suspense, lazy, useEffect, useState } from 'react';
 import { NavItem, NavSection, SidePage, t } from '@strata/ui';
 import { appIcon } from '../icons';
@@ -34,6 +34,7 @@ const ResourcesPage = lazy(() => import('./health/Resources').then((m) => ({ def
 const AlertsPage = lazy(() => import('./health/Alerts').then((m) => ({ default: m.AlertsPage })));
 const SnmpPage = lazy(() => import('./health/Snmp').then((m) => ({ default: m.SnmpPage })));
 const JournalPage = lazy(() => import('./health/Journal').then((m) => ({ default: m.JournalPage })));
+const TestPatternsPage = lazy(() => import('./health/TestPatterns').then((m) => ({ default: m.TestPatternsPage })));
 import { api } from '../api';
 
 /** `path` : ce qui suit /reglages/ (« serveur », « adresses », « https », « bibliotheque », « applis/livecut », « utilisateurs »…). */
@@ -61,7 +62,7 @@ export function Settings({ path }: { path: string }) {
 
   let page: React.ReactNode = null;
   const hardware = ['sdi', 'ndi', 'dante', 'st2110', 'flux', 'reseau', 'gpu', 'horloge'];
-  const health = ['ressources', 'journal', 'alertes', 'snmp'];
+  const health = ['ressources', 'journal', 'alertes', 'snmp', 'mires'];
   const fixed = [...hardware, ...health, 'serveurs', 'fonctions', 'serveur', 'adresses', 'https', 'mises-a-jour', 'sauvegardes', 'stockage', 'utilisateurs', 'groupes', 'annuaire'].includes(path);
   if (path === 'serveur') page = <Overview apps={apps} />;
   else if (path === 'adresses') page = <Addresses />;
@@ -80,6 +81,7 @@ export function Settings({ path }: { path: string }) {
   else if (path === 'journal') page = <JournalPage />;
   else if (path === 'alertes') page = <AlertsPage onCount={setProblems} />;
   else if (path === 'snmp') page = <SnmpPage />;
+  else if (path === 'mires') page = <TestPatternsPage />;
   else if (path === 'mises-a-jour') page = <Updates apps={apps} jobs={jobs} reloadApps={reload} onCount={setPending} />;
   else if (path === 'sauvegardes') page = <Backups />;
   else if (path === 'stockage') page = <StoragePage />;
@@ -126,6 +128,7 @@ export function Settings({ path }: { path: string }) {
         <NavItem icon={ScrollText} label={t('Journal')} on={path === 'journal'} onClick={() => navigate('/reglages/journal')} />
         <NavItem icon={BellRing} label={t('Alerts')} on={path === 'alertes'} onClick={() => navigate('/reglages/alertes')} count={problems || undefined} />
         <NavItem icon={SnmpIcon} label="SNMP" on={path === 'snmp'} onClick={() => navigate('/reglages/snmp')} />
+        <NavItem icon={TvMinimal} label={t('Test patterns and analysis')} on={path === 'mires'} onClick={() => navigate('/reglages/mires')} />
       </div>
       <div>
         <NavSection title={t('People')} />

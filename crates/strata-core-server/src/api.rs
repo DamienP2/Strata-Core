@@ -42,6 +42,7 @@ pub fn router() -> Router<Shared> {
         .merge(crate::hardware::routes())
         .merge(crate::streams::api::routes())
         .merge(crate::health::routes())
+        .merge(crate::testgen::routes())
         .merge(crate::resources::routes())
         .merge(crate::alerts::routes())
         .merge(crate::snmp::routes())

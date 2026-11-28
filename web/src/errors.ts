@@ -50,6 +50,9 @@ const SHAPED: [RegExp, string, string[]][] = [
   [/^ffmpeg is missing \((.+)\): run the installer again and choose Repair, or sudo apt install ffmpeg$/, 'ffmpeg is missing ({why}): run the installer again and choose Repair, or sudo apt install ffmpeg', ['why']],
   [/^MXL cannot open its folder \((.+)\): run the installer again and choose Repair, then restart the Core$/, 'MXL cannot open its folder ({why}): run the installer again and choose Repair, then restart the Core', ['why']],
   [/^MXL does not load \((.+)\): run the installer again and choose Update$/, 'MXL does not load ({why}): run the installer again and choose Update', ['why']],
+  // Mires
+  [/^(.+): another generator already sends to this destination$/, '{name}: another generator already sends to this destination', ['name']],
+  [/^(.+): the colour is #RRGGBB$/, '{name}: the colour is #RRGGBB', ['name']],
   // Destinations NDI
   [/^(.+): bad NDI destination id$/, '{name}: bad NDI destination id', ['name']],
   [/^two NDI destinations have the id (.+)$/, 'Two NDI destinations have the id {id}', ['id']],

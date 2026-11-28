@@ -33,6 +33,7 @@ pub mod state;
 pub mod storage;
 pub mod streams;
 pub mod supervisor;
+pub mod testgen;
 pub mod tls;
 pub mod updates;
 pub mod users;
@@ -289,6 +290,7 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
         s2.st2110.stop_all();
         s2.playouts.stop_all();
         s2.ndi_outputs.stop_all();
+        s2.testgen.stop_all();
         s2.captures.stop_all();
     })
     .await;
