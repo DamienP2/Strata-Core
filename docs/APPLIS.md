@@ -379,6 +379,7 @@ POST $STRATA_CORE_URL/api/health/alerts/app
 
 - L'appli dira au Core si un utilisateur y a accès, pour que le cockpit ne montre que les applis
   permises.
-- Le son des sorties SDI (l'appli l'écrit en MXL, le Core l'embarque) ; le format de chaque entrée
-  réglable à la main.
+- Le format de chaque entrée SDI réglable à la main (aujourd'hui : détecté).
+- Les serveurs de stockage (Ce serveur › Stockage) proposés aux applis, pour y déposer leurs
+  fichiers.
 - Une liste des applis Strata dans la Bibliothèque, quand chacune publiera des releases à ce format.
