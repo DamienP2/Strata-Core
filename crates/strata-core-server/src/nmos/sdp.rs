@@ -51,6 +51,10 @@ pub struct SenderSdp<'a> {
     pub payload_type: u8,
     /// `a=ts-refclk` : `ptp=IEEE1588-2008:…` ou `localmac=…`.
     pub refclk: String,
+    /// Le cadencement de la vidéo (ST 2110-21) : `2110TPN`, `2110TPNL` ou `2110TPW`.
+    pub tp: &'static str,
+    /// IPMX (VSF TR-10-1 § 10.1) : « IPMX » dans le `a=fmtp`.
+    pub ipmx: bool,
 }
 
 /// « 25 », « 30000/1001 ».
@@ -79,13 +83,14 @@ pub fn make(s: &SenderSdp) -> String {
         out.push_str("a=group:DUP primary secondary\r\n");
     }
     let pt = s.payload_type;
+    let (tp, ipmx) = (s.tp, if s.ipmx { " IPMX;" } else { "" });
     for (i, (group, port, source)) in s.legs.iter().enumerate() {
         match &s.media {
             Media::Video((w, h, rate, interlaced)) => {
                 out.push_str(&format!("m=video {port} RTP/AVP {pt}\r\nc=IN IP4 {group}/64\r\na=source-filter: incl IN IP4 {group} {source}\r\n"));
                 out.push_str(&format!("a=rtpmap:{pt} raw/90000\r\n"));
                 out.push_str(&format!(
-                    "a=fmtp:{pt} sampling=YCbCr-4:2:2; width={w}; height={h}; exactframerate={}; depth=10; TCS=SDR; colorimetry=BT709; PM=2110GPM; SSN=ST2110-20:2017; TP=2110TPN;{}\r\n",
+                    "a=fmtp:{pt} sampling=YCbCr-4:2:2; width={w}; height={h}; exactframerate={}; depth=10; TCS=SDR; colorimetry=BT709; PM=2110GPM; SSN=ST2110-20:2017; TP={tp};{}{ipmx}\r\n",
                     rate_text(*rate),
                     if *interlaced { " interlace;" } else { "" }
                 ));
@@ -97,7 +102,7 @@ pub fn make(s: &SenderSdp) -> String {
                 ));
                 out.push_str(&format!("a=rtpmap:{pt} jxsv/90000\r\n"));
                 out.push_str(&format!(
-                    "a=fmtp:{pt} packetmode=0; profile=Main422.10; level={}; sublevel={}; depth=10; width={w}; height={h}; exactframerate={}; sampling=YCbCr-4:2:2; colorimetry=BT709; TCS=SDR; RANGE=NARROW; SSN=ST2110-22:2019; TP=2110TPN;{}\r\n",
+                    "a=fmtp:{pt} packetmode=0; profile=Main422.10; level={}; sublevel={}; depth=10; width={w}; height={h}; exactframerate={}; sampling=YCbCr-4:2:2; colorimetry=BT709; TCS=SDR; RANGE=NARROW; SSN=ST2110-22:2019; TP={tp};{}{ipmx}\r\n",
                     jxs_level(*w, *h, *rate),
                     jxs_sublevel(*bpp),
                     rate_text(*rate),
@@ -107,7 +112,7 @@ pub fn make(s: &SenderSdp) -> String {
             Media::Audio { channels, bits, ptime_us } => {
                 out.push_str(&format!("m=audio {port} RTP/AVP {pt}\r\nc=IN IP4 {group}/64\r\na=source-filter: incl IN IP4 {group} {source}\r\n"));
                 out.push_str(&format!("a=rtpmap:{pt} L{bits}/48000/{channels}\r\n"));
-                out.push_str(&format!("a=fmtp:{pt} channel-order={}\r\n", channel_order(*channels)));
+                out.push_str(&format!("a=fmtp:{pt} channel-order={};{ipmx}\r\n", channel_order(*channels)));
                 let ms = *ptime_us as f64 / 1000.0;
                 out.push_str(&format!("a=ptime:{ms}\r\na=maxptime:{ms}\r\n"));
             }
@@ -120,6 +125,9 @@ pub fn make(s: &SenderSdp) -> String {
                 }
                 if *interlaced {
                     fmtp.push("interlace".into());
+                }
+                if s.ipmx {
+                    fmtp.push("IPMX".into());
                 }
                 if !fmtp.is_empty() {
                     out.push_str(&format!("a=fmtp:{pt} {}\r\n", fmtp.join("; ")));
@@ -307,6 +315,8 @@ mod tests {
             media: Media::JpegXs((1920, 1080, (50, 1), false), 4.0),
             payload_type: 112,
             refclk: "localmac=00-11-22-33-44-55".into(),
+            tp: "2110TPN",
+            ipmx: false,
         });
         assert!(text.contains("a=rtpmap:112 jxsv/90000"));
         assert!(text.contains("b=AS:414720"));
@@ -325,6 +335,8 @@ mod tests {
             media: Media::Video((1920, 1080, (25, 1), true)),
             payload_type: 96,
             refclk: "ptp=IEEE1588-2008:AC-1F-6B-FF-FE-0A-0B-0C:127".into(),
+            tp: "2110TPN",
+            ipmx: false,
         });
         assert!(text.contains("a=group:DUP primary secondary"));
         let p = parse(&text).unwrap();
@@ -355,9 +367,11 @@ mod tests {
             media: Media::Data { rate: Some((25, 1)), interlaced: true },
             payload_type: 100,
             refclk: "ptp=IEEE1588-2008:traceable".into(),
+            tp: "2110TPN",
+            ipmx: true,
         };
         let text = make(&s);
-        assert!(text.contains("a=rtpmap:100 smpte291/90000") && text.contains("exactframerate=25; interlace"), "{text}");
+        assert!(text.contains("a=rtpmap:100 smpte291/90000") && text.contains("exactframerate=25; interlace; IPMX"), "{text}");
         let p = parse(&text).unwrap();
         assert_eq!(p.media, Media::Data { rate: Some((25, 1)), interlaced: true });
         assert_eq!((p.legs[0].group, p.legs[0].port, p.payload_type), (Ipv4Addr::new(239, 10, 40, 1), 5004, 100));

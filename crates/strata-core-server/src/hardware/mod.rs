@@ -24,6 +24,7 @@ pub mod clock;
 pub mod decklink;
 pub mod gpu;
 pub mod ip;
+pub mod ipmx;
 pub mod media;
 pub mod ndi;
 pub mod net;
@@ -352,6 +353,24 @@ impl Flow {
     /// JPEG XS (ST 2110-22) : ses bits par pixel ; None : non compressé.
     pub fn jpegxs(&self) -> Option<f32> {
         (self.essence == Essence::Video && self.codec == "jpegxs").then_some(if self.bpp > 0.0 { self.bpp } else { 4.0 })
+    }
+
+    /// Le cadencement réglé ; vide : N, et W en IPMX (VSF TR-10-1, émetteur large).
+    pub fn pacing_or(&self, ipmx: bool) -> &str {
+        match self.pacing.as_str() {
+            "" if ipmx => "W",
+            "" => "N",
+            p => p,
+        }
+    }
+
+    /// Le cadencement dans le SDP (`TP=`).
+    pub fn tp(&self, ipmx: bool) -> &'static str {
+        match self.pacing_or(ipmx) {
+            "NL" => "2110TPNL",
+            "W" => "2110TPW",
+            _ => "2110TPN",
+        }
     }
 
     /// Le cadencement pour MTL.
@@ -769,15 +788,24 @@ pub fn reconcile_inputs(s: &crate::state::AppState) {
     // ST 2110 coupé (Réglages › Fonctions) : MTL fermé, aucun flux. JPEG XS coupé : ses flux
     // arrêtés.
     let (st2110, jpegxs) = (s.features.on(crate::features::ST2110), s.features.on(crate::features::JPEGXS));
-    let st2110_cfg = if st2110 && (jpegxs || cfg.flows.iter().all(|f| f.jpegxs().is_none())) {
+    // IPMX : les émetteurs sans cadencement réglé passent en W (VSF TR-10-1).
+    let ipmx = s.features.on(crate::features::IPMX);
+    let st2110_cfg = if st2110 && (jpegxs || cfg.flows.iter().all(|f| f.jpegxs().is_none())) && !ipmx {
         std::borrow::Cow::Borrowed(&cfg)
     } else {
         let mut c = cfg.clone();
         if !st2110 {
             c.network.media_io = MediaIo::Off;
         }
-        for f in c.flows.iter_mut().filter(|f| f.jpegxs().is_some()) {
-            f.enabled = false;
+        if !jpegxs {
+            for f in c.flows.iter_mut().filter(|f| f.jpegxs().is_some()) {
+                f.enabled = false;
+            }
+        }
+        if ipmx {
+            for f in c.flows.iter_mut().filter(|f| f.direction == Direction::Output && f.pacing.is_empty()) {
+                f.pacing = "W".into();
+            }
         }
         std::borrow::Cow::Owned(c)
     };

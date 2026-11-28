@@ -333,6 +333,8 @@ fn our_sdps(s: &crate::state::AppState, cfg: &HardwareConfig) -> Vec<(String, St
                 media: sdp::Media::Audio { channels: f.channels, bits: f.bits, ptime_us: f.ptime_us },
                 payload_type: f.pt(),
                 refclk: crate::nmos::refclk(s, cfg, &iface),
+                tp: "2110TPN",
+                ipmx: false,
             });
             Some((f.name.clone(), text, src))
         })

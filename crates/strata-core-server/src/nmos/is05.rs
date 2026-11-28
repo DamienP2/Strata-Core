@@ -140,7 +140,18 @@ fn transport_file(s: &AppState, e: &End, cfg: &HardwareConfig) -> Reply {
     let session = u64::from_be_bytes(e.id.as_bytes()[..8].try_into().unwrap_or_default()) >> 1;
     let iface = e.ifaces.first().map(|i| i.0.clone()).unwrap_or_default();
     let (name, _) = cfg.nmos_names(f);
-    Reply::Sdp(sdp::make(&sdp::SenderSdp { name: &name, session, version, legs, media, payload_type: f.pt(), refclk: super::refclk(s, cfg, &iface) }))
+    let ipmx = s.features.on(crate::features::IPMX);
+    Reply::Sdp(sdp::make(&sdp::SenderSdp {
+        name: &name,
+        session,
+        version,
+        legs,
+        media,
+        payload_type: f.pt(),
+        refclk: super::refclk(s, cfg, &iface),
+        tp: f.tp(ipmx),
+        ipmx,
+    }))
 }
 
 /// Le SDP d'un flux envoyé (le même que celui donné aux contrôleurs NMOS), pour un appareil sans
