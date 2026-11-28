@@ -190,8 +190,6 @@
 .core-fold-inline > .core-fold-body { padding: 4px 0 0; }
 
 /* Le rôle d'un port réseau : choisi d'un clic. */
-.core-role-pick { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 10px 12px; border-radius: 8px; background: var(--panel-2); }
-.core-role-pick > .st-muted { margin-right: 4px; }
 button.core-hw-role { border: 1px dashed color-mix(in srgb, var(--c) 45%, transparent); background: none; cursor: pointer; opacity: 0.75; }
 button.core-hw-role:hover { opacity: 1; }
 button.core-hw-role.on { border-style: solid; background: color-mix(in srgb, var(--c) 18%, transparent); opacity: 1; }

@@ -6,7 +6,7 @@ export * from './format';
 export { useMenuKeys } from './menuKeys';
 export { Brand, FigaroF, AudioVisuel } from './components/Brand';
 export { Empty, InfoTip, Switch, Segmented, Choice, Badge, Dot, type SegOption, type Tone } from './components/basics';
-export { Card, Field, FieldGrid, SaveBar, useLeaveGuard, canLeave } from './components/settings';
+export { Card, Field, FieldGrid, SaveBar, useLeaveGuard, canLeave, type LeaveOptions } from './components/settings';
 export { NumberField, TextInput, evalExpr, installNumberWheel, type NumberFieldProps, type TextInputProps } from './components/fields';
 export { Dropdown, type DropOption, type DropdownProps } from './components/Dropdown';
 export { ContextMenu, ContextMenuHost, openContextMenu, closeContextMenu, type MenuItem, type MenuNote, type MenuEntry } from './components/ContextMenu';

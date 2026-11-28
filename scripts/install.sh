@@ -12,7 +12,11 @@ die() { printf '✗ %s\n' "$*" >&2; exit 1; }
 # /etc/os-release est lu à part : il définit VERSION, NAME… qui écraseraient les nôtres.
 os_id="$(. /etc/os-release 2>/dev/null; echo "${ID:-}")"
 os_name="$(. /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-inconnu}")"
+os_ver="$(. /etc/os-release 2>/dev/null; echo "${VERSION_ID:-0}")"
 [ "$os_id" = ubuntu ] || die "Strata s'installe sur Ubuntu 24.04 (ici : $os_name)"
+# Avant 24.04 : des paquets manquent (libelf1t64, libbpf1, polkitd) et le Core demande la glibc 2.39.
+[ "$(printf '%s\n' 24.04 "$os_ver" | sort -V | head -n 1)" = 24.04 ] \
+  || die "Strata demande Ubuntu 24.04 ou plus récent (ici : $os_name) : mettez d'abord le système à jour"
 [ "$(uname -m)" = x86_64 ] || die "Strata s'installe sur un processeur x86-64 (ici : $(uname -m))"
 command -v curl >/dev/null || die "curl est nécessaire : apt-get install curl"
 

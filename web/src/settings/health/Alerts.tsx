@@ -1,11 +1,12 @@
 // Réglages › Santé › Alertes : les problèmes en cours, où les envoyer (webhook, e-mail), quoi
 // envoyer, et les derniers messages.
-import { useEffect, useState } from 'react';
+import { useRef, useState } from 'react';
 import { BellRing, CircleAlert, Send, Settings2 } from 'lucide-react';
 import { Badge, Card, Empty, Field, FieldGrid, NumberField, PageHead, SaveBar, Segmented, SubTabs, Switch, t, timeAgo, toast } from '@strata/ui';
 import { api } from '../../api';
 import { navigate } from '../../router';
 import { friendly } from '../../errors';
+import { useJsonState, useRepeat } from '../../poll';
 
 interface Settings {
   enabled: boolean;
@@ -59,27 +60,30 @@ const KINDS: { key: 'system' | 'apps' | 'hardware' | 'clock' | 'restart'; label:
 ];
 
 export function AlertsPage({ onCount }: { onCount?: (n: number) => void }) {
-  const [st, setSt] = useState<State | null>(null);
+  const [st, setSt] = useJsonState<State | null>(null);
   const [draft, setDraft] = useState<Settings | null>(null);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [tab, setTab] = useState<'now' | 'settings'>('now');
-  const read = async (first = false) => {
+  // La première lecture réussie donne la copie à éditer ; les erreurs de la première seules sont dites.
+  const first = useRef(true);
+  // `alive` : faux une fois la page quittée ; rien ne change alors.
+  const read = async (alive: () => boolean) => {
+    const isFirst = first.current;
     try {
       const r = await api<State>('GET', '/api/health/alerts');
+      if (!alive()) return;
+      first.current = false;
       setSt(r);
       onCount?.(r.active.length);
-      if (first) setDraft(r.settings);
+      setDraft((d) => d ?? r.settings);
     } catch (e) {
-      if (first) toast(friendly(e), 'error');
+      if (!alive()) return;
+      first.current = false;
+      if (isFirst) toast(friendly(e), 'error');
     }
   };
-  useEffect(() => {
-    void read(true);
-    const id = setInterval(() => void read(), 5000);
-    return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  useRepeat('alerts', 5000, read);
   if (!st || !draft) return <PageHead title={t('Alerts')} />;
   const dirty = JSON.stringify(draft) !== JSON.stringify(st.settings);
   const edit = (p: Partial<Settings>) => setDraft({ ...draft, ...p });
@@ -101,7 +105,7 @@ export function AlertsPage({ onCount }: { onCount?: (n: number) => void }) {
       const r = await api<{ results: [string, string | null][] }>('POST', '/api/health/alerts/test', draft);
       for (const [channel, err] of r.results) {
         const name = channel === 'webhook' ? 'Webhook' : channel === 'snmp' ? t('SNMP traps') : t('E-mail');
-        toast(err ? `${name} : ${friendly(err)}` : t('{channel}: test message sent', { channel: name }), err ? 'error' : 'info');
+        toast(err ? t('{channel}: {error}', { channel: name, error: friendly(err) }) : t('{channel}: test message sent', { channel: name }), err ? 'error' : 'info');
       }
     } catch (e) {
       toast(friendly(e), 'error');

@@ -902,6 +902,10 @@ async fn ip_set(
     Json(b): Json<IpBody>,
 ) -> ApiResult<Json<Value>> {
     require(me.admin)?;
+    // Un changement à la fois, de la lecture de la demande jusqu'à son application (même différée) :
+    // deux interfaces changées coup sur coup ne s'effacent pas l'une l'autre.
+    static ONE: std::sync::LazyLock<std::sync::Arc<tokio::sync::Mutex<()>>> = std::sync::LazyLock::new(Default::default);
+    let one = ONE.clone().lock_owned().await;
     let mut w = ip::read_wanted();
     w.interfaces.retain(|i| i.name != name);
     let clean = |v: Vec<String>| v.into_iter().map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect::<Vec<_>>();
@@ -932,6 +936,7 @@ async fn ip_set(
     if w.guard {
         // Répondre d'abord : la page qui l'a demandé peut perdre la liaison.
         tokio::spawn(async move {
+            let _one = one;
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             let r = tokio::task::spawn_blocking(move || ip::apply(&w)).await;
             if let Ok(Err(e)) = r {

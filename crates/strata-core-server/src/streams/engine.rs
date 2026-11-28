@@ -1009,32 +1009,38 @@ fn feed_encoder(
     let (mut acc, mut frames, mut missing) = (0u64, 0u64, 0u64);
     let mut next = Instant::now();
     let mut tick = Instant::now();
+    let mut checked = Instant::now() - Duration::from_secs(1);
     let mut result = Ok(());
     loop {
         if stop.load(Ordering::Relaxed) {
             break;
         }
-        // La source : prise quand elle apparaît ; une autre forme fait relancer l'encodeur.
-        if env.mxl.is_active(vid) {
-            if reader.is_none() {
-                reader = env.mxl.video_reader(vid).ok();
+        // La source : prise quand elle apparaît ; une autre forme fait relancer l'encodeur. Revue
+        // deux fois par seconde (chaque vérification ouvre et verrouille un fichier), pas à
+        // chaque image.
+        if checked.elapsed() >= Duration::from_millis(500) {
+            checked = Instant::now();
+            if env.mxl.is_active(vid) {
+                if reader.is_none() {
+                    reader = env.mxl.video_reader(vid).ok();
+                }
+                if reader.as_ref().is_some_and(|r| r.video != *feed) {
+                    break;
+                }
+                // Le flux recréé à un autre format (une entrée qui a reconnu sa source) : on suit.
+                if env.mxl.video_of(vid).is_some_and(|v| v != *feed) {
+                    break;
+                }
+            } else {
+                reader = None;
             }
-            if reader.as_ref().is_some_and(|r| r.video != *feed) {
-                break;
+            if env.mxl.is_active(aid) {
+                if areader.is_none() {
+                    areader = env.mxl.audio_reader(aid).ok();
+                }
+            } else {
+                areader = None;
             }
-            // Le flux recréé à un autre format (une entrée qui a reconnu sa source) : on suit.
-            if tick.elapsed() >= Duration::from_secs(1) && env.mxl.video_of(vid).is_some_and(|v| v != *feed) {
-                break;
-            }
-        } else {
-            reader = None;
-        }
-        if env.mxl.is_active(aid) {
-            if areader.is_none() {
-                areader = env.mxl.audio_reader(aid).ok();
-            }
-        } else {
-            areader = None;
         }
         // Un tampon libre (que le fil d'écriture a rendu) reçoit la nouvelle image : pas
         // d'allocation de 5 Mo à chaque image.
@@ -1150,25 +1156,37 @@ fn run_destination(d: &Destination, hls_dir: &Path, rx: mpsc::Receiver<Arc<Vec<u
         if let Some(w) = &stdin {
             set_nonblocking(w);
         }
+        // `pending[head..]` reste à écrire : avancer `head` coûte rien, le début n'est retiré que de
+        // temps en temps (pas 8 Mo déplacés à chaque écriture partielle de 64 Ko).
         let mut pending: Vec<u8> = Vec::new();
+        let mut head = 0usize;
         let mut tick = Instant::now();
         let started = Instant::now();
         loop {
-            let next = if pending.is_empty() { rx.recv_timeout(Duration::from_millis(500)) } else { rx.recv_timeout(Duration::from_millis(20)) };
+            let waiting = pending.len() - head;
+            let next = if waiting == 0 { rx.recv_timeout(Duration::from_millis(500)) } else { rx.recv_timeout(Duration::from_millis(20)) };
             match next {
                 Ok(chunk) => {
-                    if pending.len() < 8 << 20 {
+                    if waiting < 8 << 20 {
+                        if head > 0 && head * 2 >= pending.len() {
+                            pending.drain(..head);
+                            head = 0;
+                        }
                         pending.extend_from_slice(&chunk);
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break 'outer,
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
-            if !pending.is_empty() {
+            if head < pending.len() {
                 let Some(w) = stdin.as_mut() else { break };
-                match w.write(&pending) {
+                match w.write(&pending[head..]) {
                     Ok(n) => {
-                        pending.drain(..n);
+                        head += n;
+                        if head == pending.len() {
+                            pending.clear();
+                            head = 0;
+                        }
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
                     Err(_) => break,

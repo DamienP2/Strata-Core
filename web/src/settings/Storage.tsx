@@ -238,7 +238,7 @@ function StorageModal({ target, onClose, onSaved }: { target: StorageTarget; onC
         )}
         {x.kind === 'smb' && (
           <Field label={t('Share (SMB)')}>
-            <input className="st-mono" value={x.share} placeholder="Sauvegardes" spellCheck={false} onChange={(e) => set({ share: e.target.value })} />
+            <input className="st-mono" value={x.share} placeholder={t('Backups')} spellCheck={false} onChange={(e) => set({ share: e.target.value })} />
           </Field>
         )}
         {remote && (

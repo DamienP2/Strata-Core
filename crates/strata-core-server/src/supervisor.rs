@@ -39,6 +39,18 @@ pub struct Launch {
     pub port: u16,
 }
 
+impl Launch {
+    /// La même façon de lancer, à ce qui ne change qu'à l'antenne près : le nom du serveur et
+    /// l'adresse de l'appli (renommer le serveur, passer en HTTPS) ne relancent pas les applis en
+    /// cours — elles les liront à leur prochain démarrage.
+    pub fn same_run(&self, o: &Launch) -> bool {
+        let stable = |l: &Launch| -> Vec<(String, String)> {
+            l.env.iter().filter(|(k, _)| !matches!(k.as_str(), "STRATA_SERVER_NAME" | "STRATA_APP_URL")).cloned().collect()
+        };
+        (&self.program, &self.args, &self.cwd, self.port) == (&o.program, &o.args, &o.cwd, o.port) && stable(self) == stable(o)
+    }
+}
+
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum RunState {
@@ -182,7 +194,7 @@ impl Supervisor {
 
 /// Lance (sous `ops`) ; déjà lancée de la même façon : rien ; autrement : relancée.
 async fn start_now(id: &str, w: &Arc<Watch>, launch: Launch) {
-    let same = w.task.lock().unwrap().as_ref().is_some_and(|(_, _, l)| *l == launch);
+    let same = w.task.lock().unwrap().as_ref().is_some_and(|(_, _, l)| l.same_run(&launch));
     if same {
         return;
     }
@@ -337,9 +349,16 @@ async fn terminate(child: &mut Child, pid: Option<u32>) {
         unsafe {
             libc::kill(-(pid as i32), libc::SIGTERM);
         }
+        let started = std::time::Instant::now();
         if tokio::time::timeout(STOP_GRACE, child.wait()).await.is_ok() {
-            return;
+            // L'appli est partie, mais ses enfants (un ffmpeg qui tient un port, une carte) peuvent
+            // rester : ils ont le reste du délai, puis SIGKILL au groupe.
+            // SAFETY : signal 0 au groupe : rien n'est envoyé, on demande seulement s'il existe.
+            while unsafe { libc::kill(-(pid as i32), 0) } == 0 && started.elapsed() < STOP_GRACE {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
         }
+        // SAFETY : comme plus haut ; sans effet si le groupe n'existe plus.
         unsafe {
             libc::kill(-(pid as i32), libc::SIGKILL);
         }

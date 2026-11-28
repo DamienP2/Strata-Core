@@ -106,7 +106,7 @@ impl Mxl {
         }
         let rate = info.common().grain_rate().map_err(|e| e.to_string())?;
         let grains = w.to_grain_writer().map_err(|e| e.to_string())?;
-        Ok(VideoWriter { inst: self.inst.clone(), grains, rate, video: *v, last: None, scratch: Vec::new() })
+        Ok(VideoWriter { inst: self.inst.clone(), grains, rate, video: *v, last: None })
     }
 
     /// Ouvre le flux vidéo `id` en lecture.
@@ -228,7 +228,6 @@ pub struct VideoWriter {
     rate: mxl::Rational,
     video: Video,
     last: Option<u64>,
-    scratch: Vec<u8>,
 }
 
 impl VideoWriter {
@@ -281,13 +280,23 @@ impl VideoWriter {
     }
 
     fn grain(&mut self, first_field: bool, lines: &mut dyn Iterator<Item = &[u8]>) -> Result<(), String> {
+        self.grain_fill(first_field, &mut |_, dst| {
+            if let Some(src) = lines.next() {
+                let n = src.len().min(dst.len());
+                dst[..n].copy_from_slice(&src[..n]);
+            }
+        })
+    }
+
+    /// Un grain rempli ligne par ligne, sur place (`fill(n° de ligne du grain, ligne)`).
+    fn grain_fill(&mut self, first_field: bool, fill: &mut dyn FnMut(usize, &mut [u8])) -> Result<(), String> {
         let index = self.next_index(first_field);
         let stride = v210_stride(self.video.width);
         let mut g = self.grains.open_grain(index).map_err(|e| format!("cannot open MXL grain {index}: {e}"))?;
         let slices = g.total_slices();
         let payload = g.payload_mut();
-        for (dst, src) in payload.chunks_exact_mut(stride).zip(lines) {
-            dst[..src.len().min(stride)].copy_from_slice(&src[..src.len().min(stride)]);
+        for (i, dst) in payload.chunks_exact_mut(stride).enumerate() {
+            fill(i, dst);
         }
         g.commit(slices).map_err(|e| format!("cannot commit MXL grain {index}: {e}"))
     }
@@ -311,18 +320,28 @@ impl VideoWriter {
         self.grain(!second, &mut (0..lines).map(row))
     }
 
-    /// Une image UYVY 8 bits, passée en v210.
+    /// Une image UYVY 8 bits, passée en v210 directement dans le grain (sans image intermédiaire).
     pub fn write_uyvy(&mut self, frame: &[u8], stride: usize) -> Result<(), String> {
         let (w, h) = (self.video.width as usize, self.video.height as usize);
-        let out = v210_stride(self.video.width);
-        let mut scratch = std::mem::take(&mut self.scratch);
-        scratch.resize(out * h, 0);
-        for y in 0..h {
-            uyvy_to_v210(&frame[y * stride..y * stride + w * 2], &mut scratch[y * out..(y + 1) * out], w);
+        let put = |y: usize, dst: &mut [u8]| {
+            if let Some(src) = frame.get(y * stride..y * stride + w * 2) {
+                uyvy_to_v210(src, dst, w);
+            }
+        };
+        if self.video.interlaced {
+            self.grain_fill(true, &mut |i, dst| put(2 * i, dst))?;
+            self.grain_fill(false, &mut |i, dst| {
+                if 2 * i + 1 < h {
+                    put(2 * i + 1, dst)
+                }
+            })
+        } else {
+            self.grain_fill(true, &mut |i, dst| {
+                if i < h {
+                    put(i, dst)
+                }
+            })
         }
-        let r = self.write_v210(&scratch, out);
-        self.scratch = scratch;
-        r
     }
 }
 

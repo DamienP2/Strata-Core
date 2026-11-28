@@ -568,26 +568,33 @@ async fn upload_core(State(s): State<Shared>, CurrentUser(me): CurrentUser, mut 
         }
         *slot = Some(Job::new("archive"));
     }
+    // La suite dans une tâche à part : si le navigateur coupe (ou si le remplacement panique), la
+    // mise à jour se finit quand même, et son état n'en reste jamais à « en cours ».
     let exe = s.updates.exe();
-    let r = blocking(move || replace_binary(&exe, &tmp.0, None)).await?;
-    let v = match r {
-        Ok(v) => {
-            s.updates.set_job(|j| {
-                j.version = Some(v.to_string());
-                j.finish(Step::Done);
-            });
-            v
-        }
-        Err(e) => {
-            s.updates.set_job(|j| {
+    let s2 = s.clone();
+    let who = me.username.clone();
+    let task = tokio::spawn(async move {
+        let r = match tokio::task::spawn_blocking(move || replace_binary(&exe, &tmp.0, None)).await {
+            Ok(r) => r,
+            Err(e) => Err(format!("the update stopped: {e}")),
+        };
+        match &r {
+            Ok(v) => {
+                s2.updates.set_job(|j| {
+                    j.version = Some(v.to_string());
+                    j.finish(Step::Done);
+                });
+                tracing::info!("Core {v} installed from an archive by {who}");
+                restart_soon(&s2);
+            }
+            Err(e) => s2.updates.set_job(|j| {
                 j.error = Some(e.clone());
                 j.finish(Step::Failed);
-            });
-            return Err(bad(e));
+            }),
         }
-    };
-    tracing::info!("Core {v} installed from an archive by {}", me.username);
-    restart_soon(&s);
+        r
+    });
+    let v = task.await.map_err(crate::api::internal)?.map_err(bad)?;
     Ok(Json(json!({ "version": v.to_string() })))
 }
 

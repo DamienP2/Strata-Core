@@ -557,7 +557,10 @@ class Input final : public IDeckLinkInputCallback {
 
     std::mutex m;
     std::condition_variable arrived; // a frame (or the loss of the signal) came
-    std::vector<uint8_t> frame; // newest frame (v210, else UYVY), `rowbytes` per row
+    // The newest frame (v210, else UYVY), `rowbytes` per row: the card's own
+    // buffer, held (AddRef) until a newer one comes; dl_input_take copies
+    // straight out of it, outside the lock.
+    IDeckLinkVideoInputFrame *held = NULL;
     int width = 0, height = 0;
     long rowbytes = 0;
     // 10-bit 4:2:2 (v210, what MXL keeps) when the card captures it, else 8-bit UYVY.
@@ -621,28 +624,34 @@ class Input final : public IDeckLinkInputCallback {
 
     HRESULT STDMETHODCALLTYPE VideoInputFrameArrived(IDeckLinkVideoInputFrame *f,
                                                      IDeckLinkAudioInputPacket *audio) override {
-        // The audio of this frame, kept in order (at most 2 s of it).
-        if (audio && audio_channels > 0) {
+        // The audio of this frame, kept in order (at most 2 s of it). None
+        // without a signal: nobody takes it then (no picture), and 2 s of
+        // stale audio would come out at once when the signal is back.
+        bool no_source = f && (f->GetFlags() & bmdFrameHasNoInputSource);
+        if (audio && audio_channels > 0 && !no_source) {
             void *pcm = NULL;
             long frames = audio->GetSampleFrameCount();
             if (frames > 0 && audio->GetBytes(&pcm) == S_OK && pcm) {
                 std::lock_guard<std::mutex> lk(m);
                 const int32_t *p = (const int32_t *)pcm;
-                this->audio.insert(this->audio.end(), p, p + (size_t)frames * (size_t)audio_channels);
+                // Nobody took it for 2 s: dropped at once (not 6 MB moved at
+                // every packet to keep the last 2 s).
                 size_t cap = (size_t)96000 * (size_t)audio_channels;
-                if (this->audio.size() > cap) {
-                    this->audio.erase(this->audio.begin(), this->audio.begin() + (long)(this->audio.size() - cap));
+                if (this->audio.size() + (size_t)frames * (size_t)audio_channels > cap) {
+                    this->audio.clear();
                 }
+                this->audio.insert(this->audio.end(), p, p + (size_t)frames * (size_t)audio_channels);
                 audio_last = frames;
             }
         }
         if (!f) {
             return S_OK;
         }
-        if (f->GetFlags() & bmdFrameHasNoInputSource) {
+        if (no_source) {
             {
                 std::lock_guard<std::mutex> lk(m);
                 signal = 0;
+                this->audio.clear();
             }
             arrived.notify_all();
             return S_OK;
@@ -686,17 +695,22 @@ class Input final : public IDeckLinkInputCallback {
         if (w <= 0 || h <= 0 || row < (format == bmdFormat10BitYUV ? (w + 47) / 48 * 128 : w * 2)) {
             return S_OK;
         }
+        // No copy here: the frame is kept as the card gives it (v210 rows
+        // already have the stride MXL wants), the previous one let go.
+        IDeckLinkVideoInputFrame *old = NULL;
+        f->AddRef();
         {
-            // One copy, as the card gives it (v210 rows already have the
-            // stride MXL wants).
             std::lock_guard<std::mutex> lk(m);
-            frame.resize((size_t)row * (size_t)h);
-            std::memcpy(frame.data(), bytes, frame.size());
+            old = held;
+            held = f;
             width = (int)w;
             height = (int)h;
             rowbytes = row;
             seq++;
             signal = 1;
+        }
+        if (old) {
+            old->Release();
         }
         arrived.notify_all();
         return S_OK;
@@ -717,6 +731,7 @@ class Input final : public IDeckLinkInputCallback {
   private:
     std::atomic<ULONG> refs{1};
     virtual ~Input() {
+        release(held);
         release(in);
         release(dev);
     }
@@ -1259,21 +1274,35 @@ fail:
 int64_t dl_input_take(void *h, uint8_t *out, int64_t cap, int *width, int *height, int64_t *rowbytes, int *ten_bit,
                       uint64_t *seq) {
     Input *in = (Input *)h;
-    std::lock_guard<std::mutex> lk(in->m);
-    if (in->seq == *seq || in->frame.empty()) {
-        return 0;
+    IDeckLinkVideoInputFrame *f = NULL;
+    int64_t need = 0;
+    {
+        // Only the frame is taken under the lock (a hold on it): the copy is
+        // made outside, so the card's callback never waits for it.
+        std::lock_guard<std::mutex> lk(in->m);
+        if (in->seq == *seq || !in->held) {
+            return 0;
+        }
+        need = (int64_t)in->rowbytes * (int64_t)in->height;
+        if (cap < need) {
+            return -need;
+        }
+        f = in->held;
+        f->AddRef();
+        *width = in->width;
+        *height = in->height;
+        *rowbytes = in->rowbytes;
+        *ten_bit = in->format == bmdFormat10BitYUV ? 1 : 0;
+        *seq = in->seq;
     }
-    int64_t need = (int64_t)in->frame.size();
-    if (cap < need) {
-        return -need;
+    void *bytes = NULL;
+    int64_t r = 0;
+    if (f->GetBytes(&bytes) == S_OK && bytes) {
+        std::memcpy(out, bytes, (size_t)need);
+        r = 1;
     }
-    std::memcpy(out, in->frame.data(), in->frame.size());
-    *width = in->width;
-    *height = in->height;
-    *rowbytes = in->rowbytes;
-    *ten_bit = in->format == bmdFormat10BitYUV ? 1 : 0;
-    *seq = in->seq;
-    return 1;
+    f->Release();
+    return r;
 }
 
 // Waits up to timeout_ms for a frame newer than seq (or the signal lost):

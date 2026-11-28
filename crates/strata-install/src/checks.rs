@@ -36,6 +36,15 @@ pub fn os_release(text: &str) -> (String, String, String) {
     (get("ID"), get("VERSION_ID"), get("PRETTY_NAME"))
 }
 
+/// `VERSION_ID` vaut 24.04 ou plus (« 24.10 », « 26.04 ») ; faux si illisible.
+pub fn at_least_2404(ver: &str) -> bool {
+    let mut it = ver.split('.').map(|n| n.parse::<u32>().ok());
+    match (it.next().flatten(), it.next().flatten()) {
+        (Some(major), Some(minor)) => (major, minor) >= (24, 4),
+        _ => false,
+    }
+}
+
 /// Mémoire totale (Go) d'après `/proc/meminfo`.
 pub fn mem_gb(meminfo: &str) -> f64 {
     meminfo
@@ -71,6 +80,11 @@ pub fn system(offline: bool) -> Vec<Check> {
     let (id, ver, pretty) = os_release(&std::fs::read_to_string("/etc/os-release").unwrap_or_default());
     out.push(match (id.as_str(), ver.as_str()) {
         ("ubuntu", "24.04") => check("Système", Level::Ok, pretty),
+        // Avant 24.04 : des paquets manquent (libelf1t64, libbpf1, polkitd) et le Core, construit
+        // sur 24.04, demande la glibc 2.39.
+        ("ubuntu", v) if !at_least_2404(v) => {
+            check("Système", Level::Bad, format!("{pretty} : trop ancien, Strata demande Ubuntu 24.04 ou plus récent (paquets et glibc 2.39)"))
+        }
         ("ubuntu", _) => check("Système", Level::Warn, format!("{pretty} : prévu pour Ubuntu 24.04")),
         _ => check("Système", Level::Bad, format!("{} : Strata s'installe sur Ubuntu 24.04", if pretty.is_empty() { "inconnu".into() } else { pretty })),
     });
@@ -351,11 +365,16 @@ pub fn installed_core(root: &Path) -> Option<String> {
 /// Un dossier temporaire à soi : nom imprévisible, créé neuf (pas un dossier posé d'avance par un
 /// autre compte), 0700.
 pub fn private_tmp(prefix: &str) -> Result<PathBuf, String> {
+    private_dir(&std::env::temp_dir(), prefix)
+}
+
+/// Le même, dans `parent` (un dossier à root : /tmp peut être monté noexec).
+pub fn private_dir(parent: &Path, prefix: &str) -> Result<PathBuf, String> {
     use std::io::Read;
     use std::os::unix::fs::DirBuilderExt;
     let mut r = [0u8; 8];
     std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut r)).map_err(|e| e.to_string())?;
-    let dir = std::env::temp_dir().join(format!("{prefix}-{}", r.iter().map(|b| format!("{b:02x}")).collect::<String>()));
+    let dir = parent.join(format!("{prefix}-{}", r.iter().map(|b| format!("{b:02x}")).collect::<String>()));
     std::fs::DirBuilder::new().mode(0o700).create(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     Ok(dir)
 }
@@ -390,6 +409,8 @@ mod tests {
     fn reads_the_system() {
         let (id, v, p) = os_release("NAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nID=ubuntu\nPRETTY_NAME=\"Ubuntu 24.04.1 LTS\"\n");
         assert_eq!((id.as_str(), v.as_str(), p.as_str()), ("ubuntu", "24.04", "Ubuntu 24.04.1 LTS"));
+        assert!(at_least_2404("24.04") && at_least_2404("24.10") && at_least_2404("26.04"));
+        assert!(!at_least_2404("22.04") && !at_least_2404("23.10") && !at_least_2404("") && !at_least_2404("noble"));
         assert!((mem_gb("MemTotal:       16303860 kB\nMemFree: 1 kB\n") - 15.55).abs() < 0.01);
         assert!(free_gb(Path::new("/tmp/does/not/exist")).is_some());
         assert!(valid_dns("strata01.regie.fr") && !valid_dns("strata01") && !valid_dns("Strata.fr") && !valid_dns("a..b"));

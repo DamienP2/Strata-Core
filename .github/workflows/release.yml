@@ -72,6 +72,7 @@ jobs:
 
       - name: MXL (libmxl.so, embarquée dans l'archive du Core)
         run: |
+          sudo apt-get update -q
           sudo apt-get install -y -q libclang-dev ninja-build
           git clone -q https://github.com/microsoft/vcpkg.git /tmp/vcpkg
           /tmp/vcpkg/bootstrap-vcpkg.sh -disableMetrics
@@ -88,10 +89,13 @@ jobs:
 
       - name: MTL et DPDK (ST 2110, embarqués dans l'archive du Core sous lib/mtl)
         run: |
-          sudo apt-get update -q
           sudo apt-get install -y -q meson ninja-build python3-pyelftools libnuma-dev libjson-c-dev libpcap-dev libssl-dev libxdp-dev libbpf-dev systemtap-sdt-dev pkg-config
           sudo scripts/build-mtl.sh /tmp/mtl-work /tmp/mtl-out
           ls /tmp/mtl-out/lib/mtl
+          # Pas de recherche d'AVX ici, contrairement à libmxl : DPDK (-Dplatform=generic, soit
+          # -march=corei7) et MTL (-msse4.2) visent un x86-64 sans AVX, mais livrent exprès des
+          # chemins AVX2 / AVX-512 choisis à l'exécution selon le processeur (pilotes ice/iavf,
+          # conversions de MTL) : un grep de %ymm / %zmm les refuserait à tort.
 
       - name: Serveur
         # Le pont DeckLink (C++) est exigé dans une release : sans lui, pas de cartes SDI.

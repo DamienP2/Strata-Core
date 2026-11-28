@@ -220,7 +220,12 @@ Type=oneshot\n\
 ExecStart=/usr/lib/strata/strata-media-setup net-setup\n";
 
 fn save(o: &Outcome) {
-    let _ = std::fs::write(outcome_path(), serde_json::to_string_pretty(o).unwrap_or_default());
+    let _ = put(&outcome_path(), &serde_json::to_string_pretty(o).unwrap_or_default());
+}
+
+/// Un fichier de réglages écrit d'un coup (une coupure ne laisse jamais un fichier à moitié écrit).
+fn put(path: &Path, text: &str) -> Result<(), String> {
+    strata_core::files::write_atomic(path, text.as_bytes(), false).map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
 fn now_secs() -> u64 {
@@ -302,7 +307,7 @@ pub fn revert() -> Result<(), String> {
     }
     // La demande aussi : la page montre ce qui est en place.
     if let Ok(text) = std::fs::read_to_string(prev_json()) {
-        let _ = std::fs::write(etc(), text);
+        let _ = put(&etc(), &text);
     }
     let r = reload(&touched);
     save(&Outcome { ok: r.is_ok(), error: r.as_ref().err().cloned(), revert_at: None, reverted: true });
@@ -338,13 +343,13 @@ pub fn apply(w: &Wanted) -> Result<Outcome, String> {
 fn apply_inner(w: &Wanted) -> Result<Outcome, String> {
     check(w)?;
     // L'état actuel, pour un retour arrière.
-    let _ = std::fs::write(prev_json(), serde_json::to_string_pretty(&read_wanted()).unwrap_or_default());
-    std::fs::write(etc(), serde_json::to_string_pretty(w).unwrap_or_default()).map_err(|e| format!("cannot write {}: {e}", etc().display()))?;
+    let _ = put(&prev_json(), &serde_json::to_string_pretty(&read_wanted()).unwrap_or_default());
+    put(&etc(), &serde_json::to_string_pretty(w).unwrap_or_default())?;
     if let Some(e) = super::clock::run_for("systemctl", &["restart", "strata-net"], Duration::from_secs(60)) {
         // Rien n'a été appliqué : la demande d'avant reste celle en place.
         if read_outcome().is_none_or(|o| o.ok) {
             if let Ok(prev) = std::fs::read_to_string(prev_json()) {
-                let _ = std::fs::write(etc(), prev);
+                let _ = put(&etc(), &prev);
             }
         }
         return Err(read_outcome().and_then(|o| o.error).unwrap_or(format!("strata-net: {e} (run the installer again and choose Repair)")));

@@ -1,6 +1,6 @@
 // Réglages › Matériel : Cartes SDI, NDI, ST 2110, Réseau, Horloge. Les réglages sont partagés par
 // les cinq pages (store.ts) et enregistrés d'un coup.
-import { useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import { Cable, Gauge, MonitorPlay, Network as NetIcon, Pencil, Plus, Radio, RefreshCw, Search, Trash2, Waves } from 'lucide-react';
 import { Badge, Card, Dropdown, Empty, Field, FieldGrid, InfoTip, Modal, NumberField, PageHead, Segmented, SubTabs, Switch, confirmDialog, t, tn, toast, type DropOption } from '@strata/ui';
 import { navigate } from '../../router';
@@ -9,8 +9,11 @@ import { friendly } from '../../errors';
 import { HwSaveBar, useHardware } from './common';
 import { Meter } from '../health/Resources';
 import { TagInput } from '../TagInput';
-import { FlowsCard, InputsCard, OutputsCard, Preview, Tile, usePoll } from './Inputs';
-import { DeckLink3D, SDI_COLOR, printedOf } from './Card3D';
+import { FlowsCard, InputsCard, OutputsCard, Preview, Tile } from './Inputs';
+import { useMounted, usePoll, useRepeat } from '../../poll';
+import { SDI_COLOR, printedOf } from './decklink';
+// La carte en 3D (et three.js) n'est chargée que là où une carte SDI est dessinée.
+const DeckLink3D = lazy(() => import('./Card3D').then((m) => ({ default: m.DeckLink3D })));
 import { cardOf, editCard, editHw, loadHw, type DetectedCard, type Flow, type Fn, type Capacity, type HwConfig, type Nic, type NmosStatus, type Port, type Snapshot } from './store';
 
 function Rescan() {
@@ -129,7 +132,9 @@ function SdiCard({ d, snap, draft }: { d: DetectedCard; snap: Snapshot; draft: H
     >
       <div className="core-hw-body">
         <div className="core-hw-figure">
-          <DeckLink3D model={d.modelName} jack={jack} order={order} reference={reference} functions={functions} genlock={c.genlock} sel={sel} onPick={setSel} />
+          <Suspense fallback={<div className="core-hw-card3d" style={{ aspectRatio: '1.6' }} />}>
+            <DeckLink3D model={d.modelName} jack={jack} order={order} reference={reference} functions={functions} genlock={c.genlock} sel={sel} onPick={setSel} />
+          </Suspense>
           <div className="core-hw-legend">
             <span style={{ ['--c' as string]: SDI_COLOR.input }}>{t('Input')}</span>
             <span style={{ ['--c' as string]: SDI_COLOR.output }}>{t('Output')}</span>
@@ -1182,21 +1187,22 @@ function NdiSources() {
   const [sources, setSources] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [looking, setLooking] = useState(false);
-  const look = async () => {
+  const mounted = useMounted();
+  // `alive` : faux une fois la page quittée (ou la recherche régulière arrêtée) ; rien ne change alors.
+  const look = async (alive: () => boolean = mounted) => {
     setLooking(true);
     try {
-      setSources((await api<{ sources: string[] }>('GET', '/api/hardware/ndi/sources')).sources);
-      setError(null);
+      const r = await api<{ sources: string[] }>('GET', '/api/hardware/ndi/sources');
+      if (alive()) {
+        setSources((cur) => (JSON.stringify(cur) === JSON.stringify(r.sources) ? cur : r.sources));
+        setError(null);
+      }
     } catch (e) {
-      setError(friendly(e));
+      if (alive()) setError(friendly(e));
     }
-    setLooking(false);
+    if (mounted()) setLooking(false);
   };
-  useEffect(() => {
-    void look();
-    const id = setInterval(() => void look(), 10000);
-    return () => clearInterval(id);
-  }, []);
+  useRepeat('ndi', 10000, (alive) => look(alive));
   return (
     <Card
       icon={<Search size={16} />}

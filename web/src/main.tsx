@@ -1,5 +1,5 @@
 // L'interface du Core : la connexion (et le premier administrateur), puis le cockpit.
-import { StrictMode, useEffect, useState } from 'react';
+import { StrictMode, Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { CircleHelp, CloudDownload, LoaderCircle, RotateCw, Settings as SettingsIcon, Unplug } from 'lucide-react';
 import '@strata/ui/styles.css';
@@ -13,7 +13,9 @@ import { api, ApiError, expectRestart, movedUrl, useApp, type AuthState, type Pu
 import { fr } from './fr';
 import { appIcon } from './icons';
 import { navigate, useRoute } from './router';
-import { Settings } from './settings/Settings';
+import { useRepeat } from './poll';
+// Les réglages (administrateurs seulement) : chargés à part, en les ouvrant.
+const Settings = lazy(() => import('./settings/Settings').then((m) => ({ default: m.Settings })));
 
 addTranslations('fr', fr);
 installTooltips();
@@ -67,13 +69,16 @@ function useHeartbeat() {
         fails = 0;
         if (h.updating) useApp.setState({ down: 'update', connected: true });
         else if (h.restarting) useApp.setState({ down: down === 'update' ? 'update' : 'restart', connected: true });
-        else if (down && (down === 'lost' || sawDown)) {
+        else if (down === 'moved' ? movedLost : down && (down === 'lost' || sawDown)) {
+          // L'adresse a changé : l'écran garde son lien tant que l'ancienne adresse répond ; seule
+          // l'ancienne adresse revenue après une coupure (changement non confirmé) recharge la page.
           location.reload();
           return;
         } else useApp.setState({ connected: true });
         if (useApp.getState().down) sawDown = true;
       } catch {
         fails++;
+        if (down === 'moved') movedLost = true;
         if (down || fails >= 2) {
           sawDown = true;
           useApp.setState({ down: down === 'update' || down === 'restart' || down === 'moved' ? down : 'lost', connected: false });
@@ -84,6 +89,8 @@ function useHeartbeat() {
     // Le Core a dit (ou on lui a demandé) qu'il allait redémarrer : vu une fois bloqué, son retour
     // sans mise à jour ni redémarrage recharge la page.
     let sawDown = false;
+    // Adresse changée (`moved`) : l'ancienne adresse a cessé de répondre au moins une fois.
+    let movedLost = false;
     const unsub = useApp.subscribe((s, prev) => {
       if (s.down && !prev.down) {
         window.clearTimeout(timer);
@@ -185,22 +192,20 @@ function DownOverlay() {
   );
 }
 
+/** Le cockpit, relu toutes les 15 s ; la page n'est redessinée que s'il a changé. */
 function useCockpit(signedIn: boolean) {
   const [data, setData] = useState<CockpitData | null>(null);
-  useEffect(() => {
-    if (!signedIn) return;
-    let live = true;
-    const load = () =>
-      api<CockpitWire>('GET', '/api/cockpit')
-        .then((w) => live && setData({ ...w, apps: w.apps.map((a) => ({ id: a.id, name: a.name, icon: appIcon(a.icon) })) }))
-        .catch((e) => live && toast(message(e), 'error'));
-    void load();
-    const id = setInterval(load, 15000);
-    return () => {
-      live = false;
-      clearInterval(id);
-    };
-  }, [signedIn]);
+  const last = useRef('');
+  useRepeat(signedIn && 'cockpit', 15000, (alive) =>
+    api<CockpitWire>('GET', '/api/cockpit')
+      .then((w) => {
+        const text = JSON.stringify(w);
+        if (!alive() || text === last.current) return;
+        last.current = text;
+        setData({ ...w, apps: w.apps.map((a) => ({ id: a.id, name: a.name, icon: appIcon(a.icon) })) });
+      })
+      .catch((e) => alive() && toast(message(e), 'error')),
+  );
   return data;
 }
 
@@ -330,7 +335,15 @@ function App() {
         }
       />
       {user.admin && <Degraded />}
-      <div className="st-content">{inSettings ? <Settings path={path.slice('/reglages/'.length)} /> : data && <Cockpit data={data} onOpen={open} onServer={user.admin ? (id) => openServer(data, id) : undefined} />}</div>
+      <div className="st-content">
+        {inSettings ? (
+          <Suspense fallback={null}>
+            <Settings path={path.slice('/reglages/'.length)} />
+          </Suspense>
+        ) : (
+          data && <Cockpit data={data} onOpen={open} onServer={user.admin ? (id) => openServer(data, id) : undefined} />
+        )}
+      </div>
       <ContextMenuHost />
       <DialogHost />
       <Toasts />

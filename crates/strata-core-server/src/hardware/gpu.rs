@@ -64,9 +64,32 @@ fn read(p: &Path) -> String {
     std::fs::read_to_string(p).map(|s| s.trim().to_string()).unwrap_or_default()
 }
 
+/// Ce qu'un outil écrit, en 5 s au plus : un pilote bloqué fait parfois attendre nvidia-smi pour
+/// toujours, et il ne doit pas bloquer le Core (l'outil est alors arrêté).
 fn output(prog: &str, args: &[&str]) -> Option<String> {
-    let out = Command::new(prog).args(args).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    use std::io::Read;
+    let mut child = Command::new(prog).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut text = Vec::new();
+        let _ = stdout.read_to_end(&mut text);
+        text
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(st)) => break Some(st),
+            Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(20)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                tracing::warn!("{prog} did not answer in 5 s: stopped");
+                break None;
+            }
+        }
+    };
+    let text = reader.join().unwrap_or_default();
+    status?.success().then(|| String::from_utf8_lossy(&text).into_owned())
 }
 
 /// `lspci -mm` : `00:02.0 "VGA compatible controller" "Intel Corporation" "Device 9a49" …`.

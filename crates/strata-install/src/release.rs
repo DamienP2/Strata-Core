@@ -114,9 +114,34 @@ pub fn extract_core(archive: &Path, to: &Path) -> Result<(), String> {
     Err("this archive holds no strata-core".into())
 }
 
+/// Le dossier `rel` sous `base`, créé au besoin et ouvert sans suivre aucun lien : `base` est au
+/// compte du service, qui pourrait y remplacer un dossier par un lien vers /etc. Son chemin sûr
+/// est `/proc/self/fd/<n>` tant que le fichier rendu reste ouvert.
+fn open_dir_nofollow(base: &Path, rel: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let open = |p: &Path| std::fs::OpenOptions::new().read(true).custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW).open(p);
+    let mut cur = open(base)?;
+    for c in rel.components() {
+        let p = fd_path(&cur).join(c);
+        match std::fs::create_dir(&p) {
+            Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => return Err(e),
+            _ => {}
+        }
+        cur = open(&p)?;
+    }
+    Ok(cur)
+}
+
+fn fd_path(f: &std::fs::File) -> PathBuf {
+    use std::os::unix::io::AsRawFd;
+    PathBuf::from(format!("/proc/self/fd/{}", f.as_raw_fd()))
+}
+
 /// Sort les bibliothèques embarquées avec le Core (`lib/` de l'archive : MXL, et MTL avec DPDK
 /// sous `lib/mtl/`) dans `dir`, liens compris. Rend combien.
 pub fn extract_libs(archive: &Path, dir: &Path) -> Result<usize, String> {
+    // `dir` lui-même est dans un dossier à root (/opt/strata) : sûr à créer ainsi.
+    std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     let f = std::fs::File::open(archive).map_err(|e| format!("cannot open {}: {e}", archive.display()))?;
     let mut ar = tar::Archive::new(flate2::read::GzDecoder::new(f));
     let mut n = 0;
@@ -134,17 +159,19 @@ pub fn extract_libs(archive: &Path, dir: &Path) -> Result<usize, String> {
             continue;
         }
         let to = dir.join(&rest);
+        // Chaque dossier ouvert sans suivre de lien (le dossier est au compte du service).
         if e.header().entry_type().is_dir() {
-            std::fs::create_dir_all(&to).map_err(|e| format!("cannot create {}: {e}", to.display()))?;
+            open_dir_nofollow(dir, &rest).map_err(|e| format!("cannot create {}: {e}", to.display()))?;
             continue;
         }
-        let parent = to.parent().unwrap_or(dir);
-        std::fs::create_dir_all(parent).map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
-        // Posé à côté puis renommé : un Core qui tourne garde l'ancienne en mémoire.
-        let tmp = parent.join(format!(".{}.new", to.file_name().unwrap_or_default().to_string_lossy()));
+        let parent = open_dir_nofollow(dir, rest.parent().unwrap_or(Path::new(""))).map_err(|e| format!("cannot create {}: {e}", to.display()))?;
+        let name = to.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        // Posé à côté (fichier neuf, jamais un lien suivi) puis renommé : un Core qui tourne garde
+        // l'ancienne en mémoire.
+        let (tmp, dst) = (fd_path(&parent).join(format!(".{name}.new")), fd_path(&parent).join(&name));
         let _ = std::fs::remove_file(&tmp);
         e.unpack(&tmp).map_err(|e| format!("cannot write {}: {e}", to.display()))?;
-        std::fs::rename(&tmp, &to).map_err(|e| format!("cannot write {}: {e}", to.display()))?;
+        std::fs::rename(&tmp, &dst).map_err(|e| format!("cannot write {}: {e}", to.display()))?;
         n += 1;
     }
     Ok(n)
@@ -190,6 +217,13 @@ mod tests {
         assert_eq!(std::fs::read_link(out.join("libmxl.so")).unwrap(), std::path::PathBuf::from("libmxl.so.1.2.0"));
         assert_eq!(std::fs::read(out.join("mtl/dpdk/pmds-26.2/librte_net_ice.so")).unwrap(), b"ice");
         assert!(!out.join("strata-core").exists());
+        // Un dossier remplacé par un lien (vers /etc…) n'est jamais suivi.
+        let elsewhere = dir.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::remove_dir_all(out.join("mtl")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, out.join("mtl")).unwrap();
+        assert!(extract_libs(&dir.join("core.tar.gz"), &out).is_err());
+        assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

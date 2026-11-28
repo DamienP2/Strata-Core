@@ -222,6 +222,12 @@ struct Map {
     len: usize,
     /// (appareil, inode) du fichier.
     ino: (u64, u64),
+    /// La disposition (cases, taille d'une case, début des images) : vérifiée à l'ouverture puis
+    /// gardée ici. N'importe quel lecteur peut écrire dans l'en-tête partagé : on ne la relit
+    /// jamais de là pour calculer une adresse.
+    slots: usize,
+    slot_bytes: usize,
+    data_offset: usize,
 }
 
 // SAFETY: la mémoire est partagée par nature ; tout accès concurrent passe par des atomiques ou
@@ -238,7 +244,7 @@ impl Map {
         if ptr == libc::MAP_FAILED {
             return Err(io::Error::last_os_error());
         }
-        Ok(Map { ptr: ptr.cast(), len, ino: (meta.dev(), meta.ino()) })
+        Ok(Map { ptr: ptr.cast(), len, ino: (meta.dev(), meta.ino()), slots: 0, slot_bytes: 0, data_offset: 0 })
     }
 
     fn header(&self) -> &Header {
@@ -247,9 +253,9 @@ impl Map {
     }
 
     fn slot(&self, i: usize) -> *mut u8 {
-        let h = self.header();
-        // SAFETY: inside the mapping (checked at open).
-        unsafe { self.ptr.add(h.data_offset as usize + i * h.slot_bytes as usize) }
+        assert!(i < self.slots);
+        // SAFETY: inside the mapping (the geometry was checked at open and is kept private).
+        unsafe { self.ptr.add(self.data_offset + i * self.slot_bytes) }
     }
 }
 
@@ -312,7 +318,8 @@ impl Writer {
         let file = fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&tmp)?;
         set_mode(&file);
         file.set_len(len as u64)?;
-        let map = Map::open(&file, len)?;
+        let mut map = Map::open(&file, len)?;
+        (map.slots, map.slot_bytes, map.data_offset) = (slots, slot_bytes, data_offset());
         // SAFETY: fresh, zeroed, private to us until renamed.
         unsafe {
             let h = map.ptr as *mut Header;
@@ -339,7 +346,7 @@ impl Writer {
 
     /// La taille maximale d'une image.
     pub fn slot_bytes(&self) -> usize {
-        self.map.header().slot_bytes as usize
+        self.map.slot_bytes
     }
 
     /// Publie une image : `data` (au plus [`Self::slot_bytes`]) ; son numéro.
@@ -350,11 +357,11 @@ impl Writer {
     /// Publie une image écrite sur place par `fill` (`len` octets), sans copie intermédiaire.
     pub fn publish_with(&mut self, info: &FrameInfo, len: usize, fill: impl FnOnce(&mut [u8])) -> io::Result<u64> {
         let h = self.map.header();
-        if len > h.slot_bytes as usize {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("a frame of {len} bytes does not fit ({} at most)", h.slot_bytes)));
+        if len > self.map.slot_bytes {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("a frame of {len} bytes does not fit ({} at most)", self.map.slot_bytes)));
         }
         let no = self.no + 1;
-        let i = (no % h.slots as u64) as usize;
+        let i = (no % self.map.slots as u64) as usize;
         let m = &h.metas[i];
         let seq = m.seq.load(Ordering::Relaxed);
         m.seq.store(seq | 1, Ordering::Relaxed);
@@ -536,17 +543,22 @@ impl Reader {
         if len < data_offset() {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "not a Strata share"));
         }
-        let map = Map::open(&file, len)?;
+        let mut map = Map::open(&file, len)?;
         let h = map.header();
+        // La disposition lue une seule fois (copiée : un autre processus peut réécrire l'en-tête).
+        let (slots, slot_bytes, offset) = (h.slots as usize, h.slot_bytes as usize, h.data_offset as usize);
+        let end = slots.checked_mul(slot_bytes).and_then(|n| n.checked_add(offset));
         // Un fichier étranger ou abîmé (0 case : division par zéro plus loin) n'est pas suivi.
         if h.magic != MAGIC
             || h.version != VERSION
-            || !(2..=MAX_SLOTS).contains(&(h.slots as usize))
-            || h.slot_bytes == 0
-            || h.data_offset as usize + h.slots as usize * h.slot_bytes as usize > len
+            || !(2..=MAX_SLOTS).contains(&slots)
+            || slot_bytes == 0
+            || offset < data_offset()
+            || end.is_none_or(|e| e > len)
         {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "not a Strata share (or another version)"));
         }
+        (map.slots, map.slot_bytes, map.data_offset) = (slots, slot_bytes, offset);
         Ok(Reader { map, path: path.to_path_buf(), slot: None, last: 0 })
     }
 
@@ -625,7 +637,7 @@ impl Reader {
             if no == 0 || no == self.last {
                 return None;
             }
-            let i = (no % h.slots as u64) as usize;
+            let i = (no % self.map.slots as u64) as usize;
             let m = &h.metas[i];
             let s1 = m.seq.load(Ordering::Acquire);
             if s1 & 1 == 1 {
@@ -633,7 +645,7 @@ impl Reader {
                 continue;
             }
             let frame = meta_of(m)?;
-            let len = (m.len.load(Ordering::Relaxed) as usize).min(h.slot_bytes as usize);
+            let len = (m.len.load(Ordering::Relaxed) as usize).min(self.map.slot_bytes);
             // SAFETY: inside the slot; a concurrent write is detected by `seq` below.
             let data = unsafe { std::slice::from_raw_parts(self.map.slot(i), len) };
             read(frame, data);
@@ -659,7 +671,7 @@ impl Reader {
             if no == 0 {
                 return None;
             }
-            let m = &h.metas[(no % h.slots as u64) as usize];
+            let m = &h.metas[(no % self.map.slots as u64) as usize];
             let s1 = m.seq.load(Ordering::Acquire);
             if s1 & 1 == 1 {
                 std::hint::spin_loop();

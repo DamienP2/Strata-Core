@@ -1,11 +1,12 @@
 // Réglages › Applis : la Bibliothèque (toutes les applis du serveur) et la page de chaque appli.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowUpRight, Cloud, Download, LayoutGrid, PackagePlus, Power, RefreshCw, RotateCw, ScrollText, Server, Store } from 'lucide-react';
-import { Badge, Card, Empty, Field, FieldGrid, PageHead, Switch, formatDuration, openAppTab, t, tn, toast } from '@strata/ui';
+import { Badge, Card, Empty, Field, FieldGrid, PageHead, Switch, formatDuration, formatTime, openAppTab, t, tn, toast } from '@strata/ui';
 import { api } from '../api';
 import { friendly, pollError } from '../errors';
 import { appIcon } from '../icons';
 import { navigate } from '../router';
+import { useJsonState, useMounted, useRepeat } from '../poll';
 import { InstallModal, JobLine, RemoveCard, SourceCard, running, type Job } from './Install';
 
 export interface AppInfo {
@@ -53,14 +54,17 @@ export function serviceTone(a: AppInfo): 'ok' | 'warn' | 'bad' | null {
 
 /** Les applis du serveur, relues à la demande ; partagées par la liste de gauche et les pages. */
 export function useApps() {
-  const [apps, setApps] = useState<AppInfo[] | null>(null);
+  // Relues sans cesse : la page n'est redessinée que si elles ont changé.
+  const [apps, setApps] = useJsonState<AppInfo[] | null>(null);
   const [core, setCore] = useState('');
-  const [jobs, setJobs] = useState<Job[]>([]);
+  const [jobs, setJobs] = useJsonState<Job[]>([]);
+  const mounted = useMounted();
   // L'étape vue de chaque installation : sa fin est dite une seule fois.
   const seen = useRef(new Map<string, Job['step']>());
   const reload = useCallback(async () => {
     try {
       const r = await api<{ core: string; apps: AppInfo[]; jobs: Job[] }>('GET', '/api/apps');
+      if (!mounted()) return;
       for (const j of r.jobs) {
         const before = seen.current.get(j.repo);
         if (before && before !== j.step) {
@@ -74,19 +78,15 @@ export function useApps() {
       setCore(r.core);
       setJobs(r.jobs);
     } catch (e) {
-      pollError(e);
+      if (mounted()) pollError(e);
     }
-  }, []);
+  }, [mounted, setApps, setJobs]);
   useEffect(() => {
     void reload();
   }, [reload]);
   // Pendant une installation : relu chaque seconde.
   const busy = jobs.some(running);
-  useEffect(() => {
-    if (!busy) return;
-    const timer = setInterval(() => void reload(), 1000);
-    return () => clearInterval(timer);
-  }, [busy, reload]);
+  useRepeat(busy && 'jobs', 1000, () => reload(), { now: false });
   const dismiss = async (j: Job) => {
     await api('POST', '/api/apps/jobs/dismiss', { repo: j.repo }).catch(() => {});
     await reload();
@@ -288,21 +288,13 @@ function Catalog({ jobs, reload }: { jobs: Job[]; reload: () => Promise<void> })
 
 /** Les dernières lignes du journal d'une appli lancée par le Core, relues toutes les 2 s. */
 function AppLog({ id }: { id: string }) {
-  const [lines, setLines] = useState<LogLine[] | null>(null);
+  const [lines, setLines] = useJsonState<LogLine[] | null>(null);
   const box = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    let live = true;
-    const load = () =>
-      api<{ lines: LogLine[] }>('GET', `/api/apps/${id}/log`)
-        .then((r) => live && setLines(r.lines))
-        .catch(() => {});
-    void load();
-    const timer = setInterval(load, 2000);
-    return () => {
-      live = false;
-      clearInterval(timer);
-    };
-  }, [id]);
+  useRepeat(id, 2000, (alive) =>
+    api<{ lines: LogLine[] }>('GET', `/api/apps/${id}/log`)
+      .then((r) => alive() && setLines(r.lines))
+      .catch(() => {}),
+  );
   // Collé en bas, sauf si on remonte lire.
   const atBottom = useRef(true);
   useEffect(() => {
@@ -310,7 +302,6 @@ function AppLog({ id }: { id: string }) {
     if (el && atBottom.current) el.scrollTop = el.scrollHeight;
   }, [lines]);
   if (!lines) return null;
-  const time = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   return (
     <div
       ref={box}
@@ -323,7 +314,7 @@ function AppLog({ id }: { id: string }) {
       {lines.length === 0 && <span className="st-muted">{t('Nothing yet')}</span>}
       {lines.map((l, i) => (
         <div key={i} className={`core-log-line ${l.src}`}>
-          <span className="core-log-t">{time(l.t)}</span>
+          <span className="core-log-t">{formatTime(l.t)}</span>
           <span>{l.text}</span>
         </div>
       ))}
@@ -344,10 +335,7 @@ export function AppPage({ app: a, core, job, setActive, restart, reload }: {
   const [restarting, setRestarting] = useState(false);
   const [sending, setSending] = useState(false);
   // L'état du service bouge tout seul (démarrage, relance) : relu toutes les 2 s.
-  useEffect(() => {
-    const timer = setInterval(() => void reload(), 2000);
-    return () => clearInterval(timer);
-  }, [reload]);
+  useRepeat(a.id, 2000, () => reload(), { now: false });
   const r = a.run;
   const since = r.since ? formatDuration(Date.now() / 1000 - r.since) : '';
   return (

@@ -57,6 +57,18 @@ export function formatDateTime(at: number | string | null | undefined): string {
   }
 }
 
+/** « 14:05:12 » dans le fuseau du serveur : une heure à la seconde (journaux, courbes). */
+export function formatTime(at: number | string | null | undefined): string {
+  const d = toDate(at);
+  if (!d) return '';
+  const opts: Intl.DateTimeFormatOptions = { hour: '2-digit', minute: '2-digit', second: '2-digit' };
+  try {
+    return d.toLocaleTimeString(locale(), { ...opts, timeZone: timezone });
+  } catch {
+    return d.toLocaleTimeString(locale(), opts);
+  }
+}
+
 /** « 18 nov. 2026 » dans le fuseau du serveur. */
 export function formatDate(at: number | string | null | undefined): string {
   const d = toDate(at);

@@ -690,6 +690,9 @@ async fn setup(State(s): State<Shared>, ConnectInfo(peer): ConnectInfo<SocketAdd
     }
     let auth = s.auth.clone();
     let user = blocking(move || {
+        // Une création à la fois : deux demandes au même instant ne font pas deux administrateurs.
+        static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
         if !auth.needs_setup() {
             return Err((StatusCode::CONFLICT, "already set up".to_string()));
         }

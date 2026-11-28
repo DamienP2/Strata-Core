@@ -174,12 +174,24 @@ fn keep_keys(new: &mut StreamsConfig, old: &StreamsConfig) {
     }
 }
 
+/// Les sorties déclarées par les applis vivent avec elles : celles déclarées depuis l'ouverture de
+/// la page sont gardées, celles retirées entre-temps ne reviennent pas.
+fn keep_app_outputs(new: &mut StreamsConfig, old: &StreamsConfig) {
+    new.outputs.retain(|o| o.app.is_none() || old.outputs.iter().any(|x| x.id == o.id));
+    for o in old.outputs.iter().filter(|o| o.app.is_some()) {
+        if !new.outputs.iter().any(|x| x.id == o.id) {
+            new.outputs.push(o.clone());
+        }
+    }
+}
+
 async fn write(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(mut cfg): Json<StreamsConfig>) -> ApiResult<Json<Value>> {
     require(me.admin)?;
     let s2 = s.clone();
     blocking(move || {
         let _w = super::write_lock();
         let old = StreamsConfig::load(&s2.data_dir);
+        keep_app_outputs(&mut cfg, &old);
         keep_keys(&mut cfg, &old);
         cfg.check().map_err(bad)?;
         cfg.save(&s2.data_dir).map_err(bad)?;

@@ -246,8 +246,12 @@ pub fn apply_pending(data_dir: &Path) {
         return;
     }
     let parts: Vec<String> = std::fs::read_to_string(staging.join("parts.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    // Chaque partie mise en place est notée : si le Core s'arrête au milieu, la reprise ne refait
+    // pas les parties déjà faites (elle effacerait ce qui vient d'être restauré).
+    let done = staging.join("done");
+    let _ = std::fs::create_dir_all(&done);
     for p in &parts {
-        if p.contains('/') || p.starts_with('.') {
+        if p.contains('/') || p.starts_with('.') || done.join(p).exists() {
             continue;
         }
         let dest = data_dir.join(p);
@@ -262,6 +266,7 @@ pub fn apply_pending(data_dir: &Path) {
                 tracing::error!("restore: cannot put {p} in place: {e}");
             }
         }
+        let _ = std::fs::write(done.join(p), b"");
     }
     // Les sessions ouvertes étaient celles des anciens comptes.
     let _ = std::fs::remove_file(data_dir.join("sessions.json"));
@@ -618,20 +623,28 @@ async fn restore(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(
     if !archive.is_file() {
         return Err((StatusCode::NOT_FOUND, "unknown backup".into()));
     }
-    let s2 = s.clone();
-    let m = blocking(move || -> Result<Manifest, String> {
-        // L'état actuel d'abord : on peut revenir en arrière.
-        create(&s2.data_dir, &s2.config.load(), "before-restore", b.apps)?;
-        stage(&s2.data_dir, &archive, b.apps, b.identity)
-    })
-    .await?
-    .map_err(bad)?;
-    tracing::warn!("restore of {name} asked by {} (apps: {}, identity: {}): restarting", me.username, b.apps && m.apps, b.identity);
-    let s3 = s.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        s3.ask_restart();
+    // Dans une tâche à part : une restauration préparée redémarre le Core même si le navigateur
+    // coupe entre-temps.
+    let (s2, who) = (s.clone(), me.username.clone());
+    let task = tokio::spawn(async move {
+        let d = s2.data_dir.clone();
+        let cfg = s2.config.load();
+        let m = tokio::task::spawn_blocking(move || -> Result<Manifest, String> {
+            // L'état actuel d'abord : on peut revenir en arrière.
+            create(&d, &cfg, "before-restore", b.apps)?;
+            stage(&d, &archive, b.apps, b.identity)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        tracing::warn!("restore of {name} asked by {who} (apps: {}, identity: {}): restarting", b.apps && m.apps, b.identity);
+        let s3 = s2.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            s3.ask_restart();
+        });
+        Ok::<_, String>(m)
     });
+    let m = task.await.map_err(internal)?.map_err(bad)?;
     Ok(Json(json!({ "manifest": m })))
 }
 

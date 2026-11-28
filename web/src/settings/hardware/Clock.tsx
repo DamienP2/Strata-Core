@@ -5,7 +5,8 @@ import { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, Clock, FileCode2, Info, ListChecks, RefreshCw, Timer, TriangleAlert, XCircle } from 'lucide-react';
 import { Badge, Card, Field, FieldGrid, InfoTip, NumberField, PageHead, Segmented, Switch, formatDateTime, t, toast } from '@strata/ui';
 import { api } from '../../api';
-import { friendly } from '../../errors';
+import { friendly, pollError } from '../../errors';
+import { useMounted, useRepeat } from '../../poll';
 import { HwSaveBar, useHardware } from './common';
 import { editHw, type ApplyStep, type HouseRate } from './store';
 
@@ -206,21 +207,24 @@ export function ClockPage() {
   const hw = useHardware();
   const [st, setSt] = useState<ClockStatus | null>(null);
   const [busy, setBusy] = useState(false);
-  const read = async () => {
+  const mounted = useMounted();
+  // `alive` : faux une fois la page quittée ; le sondage régulier tait aussi le serveur absent.
+  const read = async (alive: () => boolean = mounted, polled = false) => {
     setBusy(true);
     try {
-      setSt(await api<ClockStatus>('GET', '/api/hardware/clock'));
+      const r = await api<ClockStatus>('GET', '/api/hardware/clock');
+      if (alive()) setSt((cur) => (JSON.stringify(cur) === JSON.stringify(r) ? cur : r));
     } catch (e) {
-      toast(friendly(e), 'error');
+      if (alive()) {
+        if (polled) pollError(e);
+        else toast(friendly(e), 'error');
+      }
     }
-    setBusy(false);
+    if (mounted()) setBusy(false);
   };
+  // Relu toutes les 10 s, et dès que les réglages enregistrés changent.
   const saved = hw ? JSON.stringify(hw[0].config) : '';
-  useEffect(() => {
-    void read();
-    const id = setInterval(() => void read(), 10000);
-    return () => clearInterval(id);
-  }, [saved]);
+  useRepeat(saved, 10000, (alive) => read(alive, true));
   if (!hw) return null;
   const [snap, draft] = hw;
   const ptp = st?.ptp;

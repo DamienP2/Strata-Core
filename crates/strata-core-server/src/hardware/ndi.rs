@@ -48,7 +48,8 @@ pub fn write_settings(data_dir: &Path, s: &NdiSettings, interface: &str) -> bool
     if std::fs::read_to_string(&file).ok().as_deref() == Some(text.as_str()) {
         return false;
     }
-    if let Err(e) = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&file, &text)) {
+    // D'un coup : une appli qui charge NDI à ce moment ne lit jamais un fichier à moitié écrit.
+    if let Err(e) = std::fs::create_dir_all(&dir).and_then(|_| strata_core::files::write_atomic(&file, text.as_bytes(), false)) {
         tracing::warn!("cannot write the NDI settings ({}): {e}", file.display());
         return false;
     }

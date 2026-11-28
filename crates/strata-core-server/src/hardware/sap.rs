@@ -45,13 +45,14 @@ pub fn encode(p: &Packet) -> Vec<u8> {
 }
 
 pub fn decode(b: &[u8]) -> Option<Packet> {
-    let (flags, auth) = (*b.first()?, *b.get(1)? as usize);
+    let head: &[u8; 8] = b.get(..8)?.try_into().ok()?;
+    let (flags, auth) = (head[0], head[1] as usize);
     // Version 1, adresses IPv4, ni chiffré ni compressé.
     if flags >> 5 != 1 || flags & 0x10 != 0 || flags & 0x03 != 0 {
         return None;
     }
-    let hash = u16::from_be_bytes([b[2], *b.get(3)?]);
-    let origin = Ipv4Addr::new(*b.get(4)?, b[5], b[6], *b.get(7)?);
+    let hash = u16::from_be_bytes([head[2], head[3]]);
+    let origin = Ipv4Addr::new(head[4], head[5], head[6], head[7]);
     let mut rest = b.get(8 + auth * 4..)?;
     if !rest.starts_with(b"v=0") {
         let end = rest.iter().position(|&c| c == 0)?;
@@ -388,6 +389,10 @@ mod tests {
         assert_eq!(decode(&bare).unwrap().sdp, "v=0\r\n");
         // Chiffré, compressé ou IPv6 : ignoré.
         assert!(decode(&[0x22, 0, 0, 0, 0, 0, 0, 0]).is_none());
+        // Un paquet trop court (n'importe qui peut en envoyer) : ignoré, sans paniquer.
+        for n in 0..8 {
+            assert!(decode(&[0x20, 0, 0, 0, 0, 0, 0, 0][..n]).is_none());
+        }
         assert!(decode(&[0x30, 0, 0, 0, 0, 0, 0, 0]).is_none());
     }
 

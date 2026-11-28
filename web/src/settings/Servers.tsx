@@ -6,6 +6,7 @@ import { ExternalLink, Link2, Plus, Server as ServerIcon, Unlink } from 'lucide-
 import { Badge, Card, Empty, Field, Modal, PageHead, confirmDialog, t, timeAgo, tn, toast } from '@strata/ui';
 import { api } from '../api';
 import { friendly, pollError } from '../errors';
+import { useJsonState, useMounted, useRepeat } from '../poll';
 
 interface Member {
   id: string;
@@ -95,17 +96,15 @@ function JoinCard({ onDone }: { onDone: () => void }) {
 }
 
 export function Servers() {
-  const [st, setSt] = useState<ClusterState | null>(null);
+  const [st, setSt] = useJsonState<ClusterState | null>(null);
   const [inviting, setInviting] = useState(false);
-  const read = () =>
+  const mounted = useMounted();
+  // `alive` : faux une fois la page quittée ; rien ne change alors.
+  const read = (alive: () => boolean = mounted) =>
     api<ClusterState>('GET', '/api/cluster')
-      .then(setSt)
-      .catch(pollError);
-  useEffect(() => {
-    void read();
-    const id = setInterval(read, 3000);
-    return () => clearInterval(id);
-  }, []);
+      .then((r) => alive() && setSt(r))
+      .catch((e) => alive() && pollError(e));
+  useRepeat('cluster', 3000, (alive) => read(alive));
   if (!st) return <PageHead title={t('Servers')} />;
 
   const detachMember = async (m: Member) => {

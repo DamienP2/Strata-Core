@@ -1,9 +1,10 @@
 // Réglages › Santé › Journal : plantages, erreurs et avertissements du dernier jour regroupés,
 // le journal du Core et des applis (30 jours), l'export pour le support.
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Download, ListTree, Search, TriangleAlert } from 'lucide-react';
-import { Badge, Card, Dropdown, Empty, PageHead, Segmented, formatDateTime, formatDuration, t, timeAgo, type DropOption } from '@strata/ui';
+import { Badge, Card, Dropdown, Empty, PageHead, Segmented, formatDateTime, formatDuration, t, timeAgo, toast, type DropOption } from '@strata/ui';
 import { api } from '../../api';
+import { friendly } from '../../errors';
 
 interface Crash {
   at: number;
@@ -107,24 +108,43 @@ export function JournalPage() {
     if (before) p.set('before', String(before));
     return `/api/health/journal?${p}`;
   };
+  // Le numéro de la lecture qui compte : un autre filtre (ou la page quittée) l'augmente, et une
+  // réponse arrivée trop tard (d'un filtre précédent) est ignorée.
+  const seq = useRef(0);
+  const [loading, setLoading] = useState(false);
   useEffect(() => {
+    const mine = ++seq.current;
+    setLoading(false);
     const id = setTimeout(() => {
       api<{ lines: Line[]; more: boolean }>('GET', query())
         .then((r) => {
+          if (mine !== seq.current) return;
           setLines(r.lines);
           setMore(r.more);
         })
         .catch(() => {});
     }, 250);
-    return () => clearTimeout(id);
+    return () => {
+      clearTimeout(id);
+      seq.current++;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [level, cat, days, q]);
   const loadMore = async () => {
     const last = lines[lines.length - 1];
-    if (!last) return;
-    const r = await api<{ lines: Line[]; more: boolean }>('GET', query(last.at));
-    setLines((l) => [...l, ...r.lines]);
-    setMore(r.more);
+    if (!last || loading) return;
+    const mine = seq.current;
+    setLoading(true);
+    try {
+      const r = await api<{ lines: Line[]; more: boolean }>('GET', query(last.at));
+      if (mine !== seq.current) return;
+      setLines((l) => [...l, ...r.lines]);
+      setMore(r.more);
+    } catch (e) {
+      if (mine === seq.current) toast(friendly(e), 'error');
+    } finally {
+      if (mine === seq.current) setLoading(false);
+    }
   };
 
   const catOptions: DropOption<string>[] = [
@@ -216,7 +236,7 @@ export function JournalPage() {
           </div>
         )}
         {more && (
-          <button type="button" className="st-btn small" onClick={() => void loadMore()}>
+          <button type="button" className="st-btn small" disabled={loading} onClick={() => void loadMore()}>
             {t('Older lines')}
           </button>
         )}

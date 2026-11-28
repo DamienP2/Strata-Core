@@ -1,11 +1,11 @@
 // Réglages › Matériel › GPU : chaque GPU (NVIDIA, Intel, AMD), son pilote, son nœud de rendu, ce
 // qu'il encode et décode, sa charge. Les applis lisent les mêmes informations pour choisir leur GPU.
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Gpu as GpuIcon, RefreshCw } from 'lucide-react';
 import { Badge, Card, Empty, PageHead, formatBytes, t, tn } from '@strata/ui';
 import { api } from '../../api';
 import { friendly } from '../../errors';
-import { usePoll } from './Inputs';
+import { usePoll } from '../../poll';
 
 export interface GpuUsage {
   gpu: number;
@@ -90,12 +90,12 @@ export function GpuCard({ g }: { g: Gpu }) {
 export function GpuPage() {
   // Les GPU seulement (pas tout le matériel), et seulement quand l'onglet est visible.
   const polled = usePoll<{ gpus: Gpu[] }>('/api/hardware/gpus');
-  const [fresh, setFresh] = useState<Gpu[] | null>(null);
-  const gpus = fresh ?? polled?.gpus ?? null;
-  useEffect(() => setFresh(null), [polled]);
+  // « Regarder à nouveau » : sa réponse sert jusqu'à la lecture régulière suivante (sans rendu de plus).
+  const [fresh, setFresh] = useState<{ gpus: Gpu[]; after: typeof polled } | null>(null);
+  const gpus = (fresh && fresh.after === polled ? fresh.gpus : null) ?? polled?.gpus ?? null;
   const read = () =>
     api<{ gpus: Gpu[] }>('GET', '/api/hardware/gpus')
-      .then((r) => setFresh(r.gpus))
+      .then((r) => setFresh({ gpus: r.gpus, after: polled }))
       .catch(() => {});
   return (
     <>

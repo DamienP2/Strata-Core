@@ -158,14 +158,31 @@ fn from_mxl(mxl: &strata_mxl::Mxl, id: strata_mxl::Uuid, reader: &mut Option<str
         *reader = Some(mxl.video_reader(id)?);
     }
     let Some(r) = reader.as_ref() else { return Ok(None) };
-    let Some(v210) = r.latest(Duration::from_secs(2)) else { return Ok(None) };
     let (w, h) = (r.video.width as usize, r.video.height as usize);
     let stride = strata_mxl::v210_stride(r.video.width);
-    let mut uyvy = vec![0u8; w * 2 * h];
-    for y in 0..h {
-        strata_mxl::v210_to_uyvy(&v210[y * stride..(y + 1) * stride], &mut uyvy[y * w * 2..(y + 1) * w * 2], w);
+    // Lu sur place, sans copier l'image (22 Mo en UHD) : seules les lignes de l'aperçu (une sur
+    // `step`) sont converties.
+    let step = capture::jpeg_step(w as u32, WIDTH) as usize;
+    let rows = h / step;
+    let mut uyvy = vec![0u8; w * 2 * rows];
+    let done = r.with_latest(Duration::from_secs(2), |a, b| {
+        for oy in 0..rows {
+            let y = oy * step;
+            // Entrelacé : les lignes paires dans la première trame, les impaires dans la seconde.
+            let (field, line) = match b {
+                Some(b) if y % 2 == 1 => (b, y / 2),
+                Some(_) => (a, y / 2),
+                None => (a, y),
+            };
+            if let Some(src) = field.get(line * stride..(line + 1) * stride) {
+                strata_mxl::v210_to_uyvy(src, &mut uyvy[oy * w * 2..(oy + 1) * w * 2], w);
+            }
+        }
+    });
+    if done.is_none() {
+        return Ok(None);
     }
-    capture::jpeg(&uyvy, w as u32, h as u32, w * 2, WIDTH).map(Some)
+    capture::jpeg_of_rows(&uyvy, w as u32, rows as u32, w * 2, WIDTH).map(Some)
 }
 
 /// Une image du partage, si une nouvelle est là (ou arrive dans les 400 ms).

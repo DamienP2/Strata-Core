@@ -5,6 +5,7 @@ import { CloudDownload, Download, FileArchive, KeyRound, RefreshCw } from 'lucid
 import { Badge, Card, Field, Modal, PageHead, Switch, confirmDialog, t, timeAgo, tn, toast } from '@strata/ui';
 import { api, expectRestart, upload } from '../api';
 import { friendly } from '../errors';
+import { useJsonState, useMounted, useRepeat } from '../poll';
 import { JobLine, running, type Job } from './Install';
 import type { AppInfo } from './Library';
 
@@ -31,23 +32,21 @@ export interface UpdatesInfo {
 
 /** L'état des mises à jour ; relu chaque seconde pendant une mise à jour du Core. */
 export function useUpdates() {
-  const [info, setInfo] = useState<UpdatesInfo | null>(null);
+  const [info, setInfo] = useJsonState<UpdatesInfo | null>(null);
+  const mounted = useMounted();
   const reload = useCallback(async () => {
     try {
-      setInfo(await api<UpdatesInfo>('GET', '/api/updates'));
+      const r = await api<UpdatesInfo>('GET', '/api/updates');
+      if (mounted()) setInfo(r);
     } catch {
       /* pendant un redémarrage */
     }
-  }, []);
+  }, [mounted, setInfo]);
   useEffect(() => {
     void reload();
   }, [reload]);
   const busy = !!info?.job && running(info.job);
-  useEffect(() => {
-    if (!busy) return;
-    const timer = setInterval(() => void reload(), 1000);
-    return () => clearInterval(timer);
-  }, [busy, reload]);
+  useRepeat(busy && 'job', 1000, () => reload(), { now: false });
   return { info, setInfo, reload };
 }
 

@@ -172,8 +172,15 @@ impl Installer {
     }
 
     pub fn set_core_key(&self, key: &str) -> Result<(), String> {
+        self.edit_sources(|f| f.core_key = key.trim().to_string())
+    }
+
+    /// Lire, modifier, écrire sources.json, une modification à la fois.
+    fn edit_sources(&self, change: impl FnOnce(&mut SourcesFile)) -> Result<(), String> {
+        static EDIT: Mutex<()> = Mutex::new(());
+        let _one = EDIT.lock().unwrap_or_else(|e| e.into_inner());
         let mut f = self.read_sources();
-        f.core_key = key.trim().to_string();
+        change(&mut f);
         strata_core::files::write_json(&self.sources, &f, true).map_err(|e| format!("cannot save the sources: {e}"))
     }
 
@@ -187,12 +194,12 @@ impl Installer {
     }
 
     fn set_source(&self, id: &str, src: Option<Source>) -> Result<(), String> {
-        let mut f = self.read_sources();
-        match src {
-            Some(s) => f.apps.insert(id.to_string(), s),
-            None => f.apps.remove(id),
-        };
-        strata_core::files::write_json(&self.sources, &f, true).map_err(|e| format!("cannot save the sources: {e}"))
+        self.edit_sources(|f| {
+            match src {
+                Some(s) => f.apps.insert(id.to_string(), s),
+                None => f.apps.remove(id),
+            };
+        })
     }
 
     /// La clé gardée pour ce dépôt (celle d'une appli déjà installée depuis lui).

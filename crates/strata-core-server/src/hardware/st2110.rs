@@ -321,28 +321,26 @@ fn run(legs: &[Leg], stop: &AtomicBool, shared: &Mutex<(Status, Option<Picture>)
     let mut k = 0;
     while !stop.load(Ordering::Relaxed) {
         let leg = &legs[k % legs.len()];
-        let sock = match open(leg) {
-            Ok(s) => s,
-            Err(e) => {
-                shared.lock().unwrap().0 = Status { leg: Some(leg.name), error: Some(format!("cannot join {}: {e}", leg.group)), ..Status::default() };
-                k += 1;
-                if sleep(stop, Duration::from_secs(2)) {
-                    return;
-                }
-                continue;
-            }
-        };
         tracing::debug!("previewing ST 2110 flow {} ({})", leg.group, leg.name);
         shared.lock().unwrap().0 = Status { leg: Some(leg.name), ..Status::default() };
         let mut last_packet = Instant::now();
         while !stop.load(Ordering::Relaxed) {
             let window = Instant::now();
-            // Ce qui a attendu dans la file depuis la dernière fois : jeté.
-            let _ = sock.set_nonblocking(true);
-            while sock.recv(&mut buf).is_ok() {}
-            let _ = sock.set_nonblocking(false);
-            // Puis une image entière : de la fin d'une image à la fin de la suivante (en
-            // entrelacé, deux trames), 400 ms au plus.
+            // Le groupe rejoint le temps d'une image seulement, puis quitté (socket fermé) : entre
+            // deux prises, le serveur ne reçoit pas le flux (2,6 Gb/s en 1080p50, 10 en 2160p50)
+            // pour le jeter ; et rien n'attend dans la file à la prise suivante.
+            let sock = match open(leg) {
+                Ok(s) => s,
+                Err(e) => {
+                    shared.lock().unwrap().0 = Status { leg: Some(leg.name), error: Some(format!("cannot join {}: {e}", leg.group)), ..Status::default() };
+                    if sleep(stop, Duration::from_secs(2)) {
+                        return;
+                    }
+                    break;
+                }
+            };
+            // Une image entière : de la fin d'une image à la fin de la suivante (en entrelacé, deux
+            // trames), 400 ms au plus.
             let need = if canvas.interlaced { 3 } else { 2 };
             let mut ends = 0;
             let mut got = 0u64;
@@ -358,6 +356,7 @@ fn run(legs: &[Leg], stop: &AtomicBool, shared: &Mutex<(Status, Option<Picture>)
                     Err(_) => break,
                 }
             }
+            drop(sock);
             if got > 0 {
                 last_packet = Instant::now();
             }

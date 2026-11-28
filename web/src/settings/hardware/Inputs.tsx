@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Cable, MonitorUp, Waves } from 'lucide-react';
 import { Badge, Card, t, tn } from '@strata/ui';
-import { api } from '../../api';
+import { usePageVisible, usePoll } from '../../poll';
 import { friendly } from '../../errors';
 import type { Flow, HwConfig } from './store';
 
@@ -50,45 +50,6 @@ interface FlowStatus extends Partial<Sent> {
   reception?: { receiving: boolean; leg?: string | null; format?: string | null; error?: string | null } | null;
 }
 
-/** L'onglet est visible. */
-function usePageVisible(): boolean {
-  const [v, setV] = useState(!document.hidden);
-  useEffect(() => {
-    const on = () => setV(!document.hidden);
-    document.addEventListener('visibilitychange', on);
-    return () => document.removeEventListener('visibilitychange', on);
-  }, []);
-  return v;
-}
-
-/** Relit `path` chaque seconde tant que l'onglet est visible. */
-export function usePoll<T>(path: string | null): T | null {
-  const [data, setData] = useState<T | null>(null);
-  const visible = usePageVisible();
-  useEffect(() => {
-    if (!visible || !path) return;
-    let gone = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    // La lecture suivante part une seconde après la réponse : jamais deux en même temps, jamais
-    // une vieille réponse par-dessus une plus récente.
-    const read = async () => {
-      try {
-        const r = await api<T>('GET', path);
-        if (!gone) setData(r);
-      } catch {
-        /* le serveur redémarre : on réessaie */
-      }
-      if (!gone) timer = setTimeout(read, 1000);
-    };
-    void read();
-    return () => {
-      gone = true;
-      clearTimeout(timer);
-    };
-  }, [path, visible]);
-  return data;
-}
-
 /** Une image par seconde de `src`, seulement quand la vignette est à l'écran et l'onglet visible. */
 export function Preview({ src, on, empty, children }: { src: string; on: boolean; empty: string; children?: ReactNode }) {
   const box = useRef<HTMLDivElement>(null);
@@ -107,18 +68,41 @@ export function Preview({ src, on, empty, children }: { src: string; on: boolean
     if (!on || !seen || !visible) return;
     let gone = false;
     let n = 0;
+    // La réponse attendue : une image en retard (d'une lecture précédente) est ignorée.
+    let seq = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let im: HTMLImageElement | null = null;
+    // L'image suivante est demandée une fois la précédente arrivée (ou ratée), au moins 1 s après
+    // le début de la précédente : jamais d'images qui s'empilent sur un serveur lent.
     const load = () => {
-      const url = `${src}?n=${Date.now()}-${n++}`;
-      const im = new Image();
-      im.onload = () => !gone && setImg(url);
-      im.onerror = () => !gone && setImg(null);
+      const mine = ++seq;
+      const start = Date.now();
+      const url = `${src}?n=${start}-${n++}`;
+      const next = () => {
+        if (gone || mine !== seq) return;
+        timer = setTimeout(load, Math.max(0, 1000 - (Date.now() - start)));
+      };
+      im = new Image();
+      im.onload = () => {
+        if (gone || mine !== seq) return;
+        setImg(url);
+        next();
+      };
+      im.onerror = () => {
+        if (gone || mine !== seq) return;
+        setImg(null);
+        next();
+      };
       im.src = url;
     };
     load();
-    const id = setInterval(load, 1000);
     return () => {
       gone = true;
-      clearInterval(id);
+      clearTimeout(timer);
+      if (im) {
+        im.onload = im.onerror = null;
+        im.src = '';
+      }
     };
   }, [src, on, seen, visible]);
   return (
@@ -297,7 +281,7 @@ export function FlowsCard({ flows, state }: { flows: Flow[]; state?: FlowsState 
       icon={<Waves size={16} />}
       title={t('Video flows')}
     >
-      {engine?.problem && <p className="core-warn">{engine.problem}</p>}
+      {engine?.problem && <p className="core-warn">{friendly(engine.problem)}</p>}
       <div className="core-inputs">
         {video.map((f) => {
           const s = st(f.id);

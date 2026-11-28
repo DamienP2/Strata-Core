@@ -1,12 +1,13 @@
 // Réglages › Matériel › Flux réseau : les entrées (SRT, RTMP, RTSP, HLS, UDP…) que le Core reçoit et
 // met en MXL pour les applis, et les sorties qu'il encode et envoie à leurs destinations (YouTube,
 // un CDN SRT, du HLS servi par le Core…). Chaque flux a son aperçu et son état en direct.
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { ArrowDownToLine, ArrowUpFromLine, Cast, Pencil, Plus, Trash2 } from 'lucide-react';
 import { Badge, Card, Dropdown, Empty, Field, FieldGrid, Modal, NumberField, PageHead, Segmented, Switch, confirmDialog, t, tn, toast } from '@strata/ui';
 import { api } from '../api';
 import { friendly } from '../errors';
-import { Preview, Tile, usePoll } from './hardware/Inputs';
+import { Preview, Tile } from './hardware/Inputs';
+import { usePoll } from '../poll';
 
 type State = 'starting' | 'running' | 'waiting' | 'error';
 
@@ -319,9 +320,14 @@ function proto(url: string): string {
 
 export function StreamsPage() {
   const data = usePoll<StreamsView>('/api/streams');
-  const [editIn, setEditIn] = useState<{ v: Input; i: number } | null>(null);
-  const [editOut, setEditOut] = useState<{ v: Output; i: number } | null>(null);
+  // Les flux à éditer, par leur id (vide : un nouveau) : la liste est relue chaque seconde, ses
+  // positions peuvent changer pendant qu'un dialogue est ouvert.
+  const [editIn, setEditIn] = useState<Input | null>(null);
+  const [editOut, setEditOut] = useState<Output | null>(null);
   const [saving, setSaving] = useState(false);
+  // La dernière lecture : ce qu'on enregistre après un dialogue (pas celle d'avant le dialogue).
+  const latest = useRef(data);
+  latest.current = data;
   if (!data) return null;
 
   const save = async (next: StreamsView) => {
@@ -337,17 +343,17 @@ export function StreamsPage() {
       setSaving(false);
     }
   };
-  const ids = [...data.inputs.map((x) => x.id), ...data.outputs.map((x) => x.id)];
+  const idsOf = (d: StreamsView) => [...d.inputs.map((x) => x.id), ...d.outputs.map((x) => x.id)];
   const newInput: Input = { id: '', name: '', url: '', enabled: true, format: '', relay: false, relayPort: 0 };
   const newOutput: Output = { id: '', name: '', enabled: true, source: '', format: '', videoKbps: 6000, audioKbps: 192, encoder: 'auto', destinations: [] };
 
   return (
     <>
       <PageHead title={t('Network streams')} sub={`${tn(data.inputs.length, '{n} input', '{n} inputs')} · ${tn(data.outputs.length, '{n} output', '{n} outputs')}${data.ffmpeg ? ` · ffmpeg ${data.ffmpeg}` : ''}`}>
-        <button type="button" className="st-btn" onClick={() => setEditIn({ v: newInput, i: -1 })}>
+        <button type="button" className="st-btn" onClick={() => setEditIn(newInput)}>
           <Plus size={14} /> {t('New input')}
         </button>
-        <button type="button" className="st-btn primary" onClick={() => setEditOut({ v: newOutput, i: -1 })}>
+        <button type="button" className="st-btn primary" onClick={() => setEditOut(newOutput)}>
           <Plus size={14} /> {t('New output')}
         </button>
       </PageHead>
@@ -358,9 +364,9 @@ export function StreamsPage() {
           <Empty icon={Cast} text={t('No network input')} />
         ) : (
           <div className="core-inputs">
-            {data.inputs.map((x, i) => {
+            {data.inputs.map((x) => {
               const st = x.status;
-              const sub = [proto(x.url), st?.format, st?.state === 'running' ? `${st.fps} i/s` : null, st?.state === 'running' ? (st.audio ? t('with sound') : t('no sound')) : null].filter(Boolean).join(' · ');
+              const sub = [proto(x.url), st?.format, st?.state === 'running' ? `${st.fps} ${t('fps')}` : null, st?.state === 'running' ? (st.audio ? t('with sound') : t('no sound')) : null].filter(Boolean).join(' · ');
               return (
                 <Tile
                   key={x.id}
@@ -381,11 +387,11 @@ export function StreamsPage() {
                       {st?.source?.[0] && <span className="st-muted">{st.source.map(codec).join(' · ')}</span>}
                       {x.relayUrl && (
                         <span className="st-muted">
-                          {t('Original stream')} : <span className="st-mono">{x.relayUrl}</span>
+                          {t('Original stream:')} <span className="st-mono">{x.relayUrl}</span>
                         </span>
                       )}
                       <span className="core-stream-actions">
-                        <button type="button" className="st-icon-btn ghost" title={t('Edit')} onClick={() => setEditIn({ v: x, i })}>
+                        <button type="button" className="st-icon-btn ghost" title={t('Edit')} onClick={() => setEditIn(x)}>
                           <Pencil size={14} />
                         </button>
                         <button
@@ -394,7 +400,8 @@ export function StreamsPage() {
                           title={t('Delete')}
                           onClick={async () => {
                             if (await confirmDialog({ title: t('Delete {name}?', { name: x.name }), confirm: t('Delete'), danger: true })) {
-                              await save({ ...data, inputs: data.inputs.filter((_, k) => k !== i) });
+                              const cur = latest.current ?? data;
+                              await save({ ...cur, inputs: cur.inputs.filter((y) => y.id !== x.id) });
                             }
                           }}
                         >
@@ -415,7 +422,7 @@ export function StreamsPage() {
           <Empty icon={Cast} text={t('No network output')} />
         ) : (
           <div className="core-inputs">
-            {data.outputs.map((o, i) => {
+            {data.outputs.map((o) => {
               const st = o.status;
               const src = o.source ? data.sources.find((s) => s.flow === o.source)?.label ?? o.source : o.app ? t('App {name}', { name: o.app }) : t('An app');
               const sub = [src, st?.format, st?.encoder?.toUpperCase(), st && st.kbps > 0 ? `${Math.round(st.kbps)} kb/s` : null].filter(Boolean).join(' · ');
@@ -444,7 +451,7 @@ export function StreamsPage() {
                         );
                       })}
                       <span className="core-stream-actions">
-                        <button type="button" className="st-icon-btn ghost" title={t('Edit')} onClick={() => setEditOut({ v: o, i })}>
+                        <button type="button" className="st-icon-btn ghost" title={t('Edit')} onClick={() => setEditOut(o)}>
                           <Pencil size={14} />
                         </button>
                         <button
@@ -453,7 +460,8 @@ export function StreamsPage() {
                           title={t('Delete')}
                           onClick={async () => {
                             if (await confirmDialog({ title: t('Delete {name}?', { name: o.name }), confirm: t('Delete'), danger: true })) {
-                              await save({ ...data, outputs: data.outputs.filter((_, k) => k !== i) });
+                              const cur = latest.current ?? data;
+                              await save({ ...cur, outputs: cur.outputs.filter((y) => y.id !== o.id) });
                             }
                           }}
                         >
@@ -471,30 +479,34 @@ export function StreamsPage() {
 
       {editIn && (
         <InputEditor
-          value={editIn.v}
+          value={editIn}
           busy={saving}
           onClose={() => setEditIn(null)}
           onSave={async (v) => {
-            const inputs = [...data.inputs];
-            const item = { ...v, id: v.id || slug(v.name, ids) };
-            if (editIn.i < 0) inputs.push(item);
-            else inputs[editIn.i] = item;
-            if (await save({ ...data, inputs })) setEditIn(null);
+            const cur = latest.current ?? data;
+            const inputs = [...cur.inputs];
+            const item = { ...v, id: v.id || slug(v.name, idsOf(cur)) };
+            const k = editIn.id ? inputs.findIndex((y) => y.id === editIn.id) : -1;
+            if (k < 0) inputs.push(item);
+            else inputs[k] = item;
+            if (await save({ ...cur, inputs })) setEditIn(null);
           }}
         />
       )}
       {editOut && (
         <OutputEditor
-          value={editOut.v}
+          value={editOut}
           sources={data.sources}
           busy={saving}
           onClose={() => setEditOut(null)}
           onSave={async (v) => {
-            const outputs = [...data.outputs];
-            const item = { ...v, id: v.id || slug(v.name, ids) };
-            if (editOut.i < 0) outputs.push(item);
-            else outputs[editOut.i] = item;
-            if (await save({ ...data, outputs })) setEditOut(null);
+            const cur = latest.current ?? data;
+            const outputs = [...cur.outputs];
+            const item = { ...v, id: v.id || slug(v.name, idsOf(cur)) };
+            const k = editOut.id ? outputs.findIndex((y) => y.id === editOut.id) : -1;
+            if (k < 0) outputs.push(item);
+            else outputs[k] = item;
+            if (await save({ ...cur, outputs })) setEditOut(null);
           }}
         />
       )}

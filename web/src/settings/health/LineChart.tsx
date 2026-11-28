@@ -1,6 +1,7 @@
 // Une petite courbe des 10 dernières minutes : une ou deux séries, une seule échelle, un repère
 // vertical qui suit le pointeur et donne les valeurs de toutes les séries à cet instant.
 import { useRef, useState } from 'react';
+import { formatTime } from '@strata/ui';
 
 export interface Series {
   name: string;
@@ -34,7 +35,6 @@ export function LineChart({ times, series, max, format, label }: { times: number
     const px = ((e.clientX - r.left) / r.width) * W;
     setHover(Math.max(0, Math.min(n - 1, Math.round(((px - PAD.l) / (W - PAD.l - PAD.r)) * (n - 1)))));
   };
-  const time = (ms: number) => new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   return (
     <div className="core-chart">
       <div className="core-chart-head">
@@ -66,7 +66,7 @@ export function LineChart({ times, series, max, format, label }: { times: number
       </svg>
       {hover !== null && (
         <div className="core-chart-tip" style={{ left: `${(x(hover) / W) * 100}%` }}>
-          <div className="st-muted">{time(times[hover])}</div>
+          <div className="st-muted">{formatTime(times[hover])}</div>
           {series.map((s) => (
             <div key={s.name}>
               <i style={{ background: s.color }} />

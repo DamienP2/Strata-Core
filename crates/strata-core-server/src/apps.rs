@@ -124,6 +124,9 @@ impl Apps {
 
     /// Active ou désactive une appli installée. Une appli qui n'accepte pas ce Core ne s'active pas.
     pub fn set_active(&self, id: &str, on: bool) -> Result<Installed, String> {
+        // Une modification à la fois : lire, vérifier, écrire apps.json sans en perdre une.
+        static EDIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _one = EDIT.lock().unwrap_or_else(|e| e.into_inner());
         self.forget();
         let app = self.get(id).ok_or_else(|| format!("no such app: {id}"))?;
         if on && !app.compatible {

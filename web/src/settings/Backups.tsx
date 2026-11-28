@@ -3,7 +3,7 @@
 // télécharger, ou à envoyer depuis un autre serveur. Une restauration redémarre le Core.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Archive, Check, Download, FileArchive, History, HardDrive, Plus, Trash2, Upload } from 'lucide-react';
-import { Badge, Card, Dropdown, Empty, Field, FieldGrid, InfoTip, Modal, PageHead, SaveBar, Switch, confirmDialog, t, timeAgo, tn, toast } from '@strata/ui';
+import { Badge, Card, Dropdown, Empty, Field, FieldGrid, InfoTip, Modal, PageHead, SaveBar, Switch, confirmDialog, formatBytes, formatDateTime, t, timeAgo, tn, toast } from '@strata/ui';
 import { navigate } from '../router';
 import { KIND_TAG, useStorage } from './Storage';
 import { api, expectRestart, upload } from '../api';
@@ -32,12 +32,6 @@ interface Backup {
   name: string;
   size: number;
   manifest: Manifest;
-}
-
-function size(n: number) {
-  if (n >= 1 << 30) return t('{n} GB', { n: (n / (1 << 30)).toFixed(1) });
-  if (n >= 1 << 20) return t('{n} MB', { n: (n / (1 << 20)).toFixed(1) });
-  return t('{n} KB', { n: Math.max(1, Math.round(n / 1024)) });
 }
 
 function kindLabel(k: string) {
@@ -155,7 +149,7 @@ export function Backups() {
               {list.map((b) => (
                 <tr key={b.name}>
                   <td>
-                    <strong>{new Date(b.manifest.createdAt).toLocaleString()}</strong> <span className="st-muted">{timeAgo(b.manifest.createdAt)}</span>
+                    <strong>{formatDateTime(b.manifest.createdAt)}</strong> <span className="st-muted">{timeAgo(b.manifest.createdAt)}</span>
                     <div>
                       <Badge>{kindLabel(b.manifest.kind)}</Badge>
                     </div>
@@ -165,7 +159,7 @@ export function Backups() {
                     <div className="st-muted st-mono">Core {b.manifest.coreVersion}</div>
                   </td>
                   <td>{b.manifest.apps ? t('Settings and apps') : t('Settings')}</td>
-                  <td className="r st-mono">{size(b.size)}</td>
+                  <td className="r st-mono">{formatBytes(b.size)}</td>
                   <td className="r">
                     <div className="core-stream-actions">
                       <a className="st-btn small" href={`/api/backups/${encodeURIComponent(b.name)}`} download title={t('Download')}>
@@ -234,7 +228,7 @@ function RestoreModal({ backup, onClose, onDone }: { backup: Backup; onClose: ()
       }
     >
       <p>
-        {t('{server}, {when}', { server: m.serverName || '—', when: new Date(m.createdAt).toLocaleString() })} · Core {m.coreVersion}
+        {t('{server}, {when}', { server: m.serverName || '—', when: formatDateTime(m.createdAt) })} · Core {m.coreVersion}
       </p>
       <p className="st-muted">
         {t('The settings of this server are replaced by those of the backup (the current ones are backed up first), then the Core restarts. Everyone signs in again.')}

@@ -180,8 +180,13 @@ impl Ctx {
             return exec(self, &bin.display().to_string(), &all, input);
         }
         // Le Core tourne sous son compte : le dossier des données doit être à lui avant qu'il y
-        // écrive (créé ici par root à la première installation).
-        std::fs::create_dir_all(&data).map_err(|e| format!("cannot create {}: {e}", data.display()))?;
+        // écrive (créé ici par root à la première installation), et à lui seul (0700) dès le
+        // premier fichier : secrets, journaux.
+        {
+            use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+            std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&data).map_err(|e| format!("cannot create {}: {e}", data.display()))?;
+            std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700)).map_err(|e| format!("cannot protect {}: {e}", data.display()))?;
+        }
         self.chown(paths::DATA, false)?;
         let mut with_user = vec!["-u", paths::USER, "--", paths::BIN];
         with_user.extend(all);
@@ -200,15 +205,14 @@ impl Ctx {
         exec(self, "runuser", &with_user, None)
     }
 
-    /// Écrit un fichier (ses dossiers créés), avec ses droits.
+    /// Écrit un fichier (ses dossiers créés), avec ses droits ; sans suivre un lien posé à sa
+    /// place (voir [`put_file`]).
     pub fn write(&self, path: &str, content: &str, mode: u32) -> Result<(), String> {
         let p = self.p(path);
         if let Some(d) = p.parent() {
             std::fs::create_dir_all(d).map_err(|e| format!("cannot create {}: {e}", d.display()))?;
         }
-        std::fs::write(&p, content).map_err(|e| format!("cannot write {}: {e}", p.display()))?;
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode));
+        put_file(&p, mode, |f| f.write_all(content.as_bytes()))?;
         self.log(&format!("wrote {}", p.display()));
         Ok(())
     }
@@ -223,6 +227,47 @@ impl Ctx {
             self.run("chown", &[&owner, &p]).map(|_| ())
         }
     }
+}
+
+/// Écrit `dst` d'un coup, sans jamais suivre de lien : un fichier neuf (`create_new` refuse ce qui
+/// est déjà là, lien compris) à côté, rempli par `fill`, puis renommé par-dessus (un lien posé à
+/// la place de `dst` est remplacé, pas suivi). Un programme qui a l'ancien en mémoire le garde
+/// (pas de SIGBUS).
+fn put_file(dst: &Path, mode: u32, fill: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>) -> Result<(), String> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let name = dst.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let tmp = dst.with_file_name(format!(".{name}.{}.new", std::process::id()));
+    let _ = std::fs::remove_file(&tmp);
+    let r = std::fs::OpenOptions::new().write(true).create_new(true).mode(mode).open(&tmp).and_then(|mut f| {
+        fill(&mut f)?;
+        f.set_permissions(std::fs::Permissions::from_mode(mode))?;
+        std::fs::rename(&tmp, dst)
+    });
+    r.map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("cannot write {}: {e}", dst.display())
+    })
+}
+
+/// Une copie de `src` posée en `dst` (voir [`put_file`]).
+fn put_copy(src: &Path, dst: &Path, mode: u32) -> Result<(), String> {
+    put_file(dst, mode, |f| std::io::copy(&mut std::fs::File::open(src)?, f).map(|_| ()))
+}
+
+/// Un dossier temporaire effacé quoi qu'il arrive (réussite, erreur).
+struct TmpDir(PathBuf);
+
+impl Drop for TmpDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// apt-get attend jusqu'à 10 minutes qu'un autre apt (mises à jour automatiques) ait fini.
+fn apt<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    let mut v = vec!["-o", "DPkg::Lock::Timeout=600"];
+    v.extend_from_slice(args);
+    v
 }
 
 fn exec(ctx: &Ctx, prog: &str, args: &[&str], input: Option<&str>) -> Result<String, String> {
@@ -388,18 +433,18 @@ fn enable_universe(ctx: &Ctx) -> Result<bool, String> {
 /// Installe les paquets du système, puis vérifie que ffmpeg répond.
 fn system_packages(ctx: &Ctx, pkgs: &[String], say: &dyn Fn(String)) -> Result<String, String> {
     say("mise à jour de la liste des paquets…".into());
-    ctx.run("apt-get", &["update", "-q"])?;
+    ctx.run("apt-get", &apt(&["update", "-q"]))?;
     if !ctx.dry() {
         let candidate =
             Command::new("apt-cache").args(["policy", "ffmpeg"]).output().map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
         if !candidate.contains("Candidate:") || candidate.contains("Candidate: (none)") {
             say("ajout du dépôt universe d'Ubuntu (ffmpeg)…".into());
             if enable_universe(ctx)? {
-                ctx.run("apt-get", &["update", "-q"])?;
+                ctx.run("apt-get", &apt(&["update", "-q"]))?;
             }
         }
     }
-    let mut args = vec!["install", "-y", "-q"];
+    let mut args = apt(&["install", "-y", "-q"]);
     args.extend(pkgs.iter().map(String::as_str));
     ctx.run_live("apt-get", &args, say)?;
     if !ctx.dry() {
@@ -440,28 +485,37 @@ fn mb(n: u64) -> String {
 
 /// Pose le Core : depuis l'archive donnée, sinon la release ; l'ancien gardé (`.previous`).
 fn put_core(ctx: &Ctx, plan: &Plan, say: &dyn Fn(String)) -> Result<String, String> {
-    let tmp = crate::checks::private_tmp("strata-install")?;
-    let (version, archive) = match &plan.package {
-        Some(p) => ("".to_string(), p.clone()),
-        None => release::fetch_core(&plan.repo, plan.version.as_deref(), &tmp, &|done, total| {
-            say(if total > 0 { format!("{} / {}", mb(done), mb(total)) } else { mb(done) })
-        })?,
+    // Root ne lance ni ne copie un fichier que le compte du service peut remplacer : l'archive et
+    // le nouveau Core restent dans un dossier à root seul (0700), effacé même en cas d'échec.
+    // Sous /usr/lib/strata (à root) plutôt que /tmp, qui peut être monté noexec.
+    let helper_dir = ctx.p(paths::HELPER_DIR);
+    std::fs::create_dir_all(&helper_dir).map_err(|e| format!("cannot create {}: {e}", helper_dir.display()))?;
+    let tmp = TmpDir(crate::checks::private_dir(&helper_dir, ".strata-install")?);
+    let archive = match &plan.package {
+        Some(p) => p.clone(),
+        None => {
+            release::fetch_core(&plan.repo, plan.version.as_deref(), &tmp.0, &|done, total| {
+                say(if total > 0 { format!("{} / {}", mb(done), mb(total)) } else { mb(done) })
+            })?
+            .1
+        }
     };
     let bin = ctx.p(paths::BIN);
     std::fs::create_dir_all(bin.parent().unwrap()).map_err(|e| e.to_string())?;
-    let new = bin.with_extension("new");
+    let new = tmp.0.join("strata-core");
     release::extract_core(&archive, &new)?;
     // Il doit démarrer avant de remplacer l'ancien.
     let v = Command::new(&new).arg("--version").output().map_err(|e| format!("the new Core does not start: {e}"))?;
     let shown = String::from_utf8_lossy(&v.stdout).split_whitespace().last().unwrap_or_default().to_string();
     if !v.status.success() || shown.is_empty() {
-        let _ = std::fs::remove_file(&new);
         return Err("the new Core does not start".into());
     }
-    if bin.exists() {
-        let _ = std::fs::copy(&bin, bin.with_extension("previous"));
-    }
-    std::fs::rename(&new, &bin).map_err(|e| format!("cannot replace {}: {e}", bin.display()))?;
+    // L'ancien gardé par un lien dur (rien n'est lu ni suivi : un lien symbolique posé là resterait
+    // un lien), puis le nouveau posé sans suivre de lien.
+    let previous = bin.with_extension("previous");
+    let _ = std::fs::remove_file(&previous);
+    let _ = std::fs::hard_link(&bin, &previous);
+    put_copy(&new, &bin, 0o755)?;
     // MXL (les flux vidéo partagés avec les applis), livrée dans l'archive du Core.
     // Le dossier existe toujours et est au compte du service : une mise à jour par le Core y pose
     // les bibliothèques de la version suivante.
@@ -475,14 +529,14 @@ fn put_core(ctx: &Ctx, plan: &Plan, say: &dyn Fn(String)) -> Result<String, Stri
     let _ = std::fs::remove_file(&link);
     let _ = std::os::unix::fs::symlink(paths::BIN, &link);
     ctx.chown(paths::BIN_DIR, true)?;
-    put_media_helper(ctx, &bin)?;
-    let _ = std::fs::remove_dir_all(&tmp);
+    // La copie à root vient du fichier essayé dans le dossier privé, pas de /opt/strata/bin.
+    put_media_helper(ctx, &new)?;
     ctx.log(&format!("Strata Core {shown} → {}", bin.display()));
-    let _ = version;
     Ok(format!("Strata Core {shown}"))
 }
 
 /// La copie du Core que lance `strata-media` (root) : à root, 0755, dans un dossier à root.
+/// `bin` est dans un dossier à root seul (jamais celui du compte du service).
 fn put_media_helper(ctx: &Ctx, bin: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
     let dir = ctx.p(paths::HELPER_DIR);
@@ -523,9 +577,15 @@ fn system_files(ctx: &Ctx) -> Result<String, String> {
         let _ = std::fs::set_permissions(ctx.p(paths::DATA), std::fs::Permissions::from_mode(0o700));
     }
     ctx.write(paths::UNIT, &core_unit(), 0o644)?;
-    let ptp = ctx.core_plain(&["ptp4l-unit"])?;
-    if !ptp.trim().is_empty() {
-        ctx.write(paths::PTP_UNIT, &ptp, 0o644)?;
+    // Un Core abîmé (à réinstaller) ne doit pas empêcher de remettre le reste en place.
+    let mut warn = String::new();
+    match ctx.core_plain(&["ptp4l-unit"]) {
+        Ok(ptp) if !ptp.trim().is_empty() => ctx.write(paths::PTP_UNIT, &ptp, 0o644)?,
+        Ok(_) => {}
+        Err(e) => {
+            ctx.log(&format!("warning: strata-core ptp4l-unit: {e} ({} kept as is)", paths::PTP_UNIT));
+            warn = format!(" ; ! service ptp4l non réécrit ({e})");
+        }
     }
     ctx.write(paths::POLKIT, POLKIT_RULE, 0o644)?;
     // Un Core plus ancien n'a pas ce service.
@@ -552,7 +612,7 @@ fn system_files(ctx: &Ctx) -> Result<String, String> {
     ctx.write(paths::SYSCTL, SYSCTL_CONF, 0o644)?;
     let _ = ctx.run("sysctl", &["-q", "-p", &ctx.p(paths::SYSCTL).display().to_string()]);
     ctx.run("systemctl", &["daemon-reload"])?;
-    Ok("service, ptp4l, ST 2110, polkit, tampons réseau".into())
+    Ok(format!("service, ptp4l, ST 2110, polkit, tampons réseau{warn}"))
 }
 
 /// Le pilote Blackmagic : son paquet sorti de l'archive, installé avec DKMS.
@@ -579,9 +639,9 @@ fn desktop_video(ctx: &Ctx, src: &Path, say: &dyn Fn(String)) -> Result<String, 
     };
     let files = if src.is_file() && !is_archive(src) { vec![src.to_path_buf()] } else { files_in(&dir) };
     let headers = format!("linux-headers-{}", String::from_utf8_lossy(&Command::new("uname").arg("-r").output().map(|o| o.stdout).unwrap_or_default()).trim());
-    ctx.run_live("apt-get", &["install", "-y", "-q", "dkms", &headers], say)?;
+    ctx.run_live("apt-get", &apt(&["install", "-y", "-q", "dkms", &headers]), say)?;
     if let Some(deb) = pick_deb(&files) {
-        ctx.run_live("apt-get", &["install", "-y", "-q", &deb.display().to_string()], say)?;
+        ctx.run_live("apt-get", &apt(&["install", "-y", "-q", &deb.display().to_string()]), say)?;
     } else if let Some(sh) = pick_installer(&files) {
         // L'installateur de Blackmagic : lancé dans son dossier, chaque question acceptée.
         let cwd = sh.parent().unwrap_or(Path::new("/"));
@@ -693,7 +753,8 @@ fn ndi(ctx: &Ctx, lib: &Path) -> Result<String, String> {
     let target = format!("/usr/local/lib/libndi.so.{major}");
     let dest = ctx.p(&target);
     std::fs::create_dir_all(dest.parent().unwrap()).map_err(|e| e.to_string())?;
-    std::fs::copy(lib, &dest).map_err(|e| format!("cannot install {target}: {e}"))?;
+    // Posée à côté puis renommée : le Core qui l'a en mémoire garde l'ancienne (pas de SIGBUS).
+    put_copy(lib, &dest, 0o755).map_err(|e| format!("cannot install {target}: {e}"))?;
     let link = ctx.p("/usr/local/lib/libndi.so");
     let _ = std::fs::remove_file(&link);
     let _ = std::os::unix::fs::symlink(format!("libndi.so.{major}"), &link);
@@ -709,7 +770,7 @@ fn ndi(ctx: &Ctx, lib: &Path) -> Result<String, String> {
         }
     }
     ctx.run("ldconfig", &[])?;
-    ctx.run("apt-get", &["install", "-y", "-q", "avahi-daemon", "libavahi-client3"])?;
+    ctx.run("apt-get", &apt(&["install", "-y", "-q", "avahi-daemon", "libavahi-client3"]))?;
     let _ = ctx.run("systemctl", &["enable", "--now", "avahi-daemon"]);
     Ok(format!("{target} ; découverte des sources par Avahi"))
 }
@@ -717,18 +778,28 @@ fn ndi(ctx: &Ctx, lib: &Path) -> Result<String, String> {
 /// Le pilote NVIDIA recommandé pour cette carte (celui d'Ubuntu, avec NVENC/NVDEC).
 fn nvidia(ctx: &Ctx, say: &dyn Fn(String)) -> Result<String, String> {
     say("recherche du pilote recommandé…".into());
-    ctx.run_live("apt-get", &["install", "-y", "-q", "ubuntu-drivers-common"], say)?;
+    ctx.run_live("apt-get", &apt(&["install", "-y", "-q", "ubuntu-drivers-common"]), say)?;
     ctx.run_live("ubuntu-drivers", &["install"], say)?;
     let loaded = !ctx.dry() && Command::new("nvidia-smi").output().is_ok_and(|o| o.status.success());
     Ok(if loaded { "pilote NVIDIA en place".into() } else { "pilote installé : redémarrez le serveur pour le charger".into() })
 }
 
 fn vaapi(ctx: &Ctx, pkgs: &[String], say: &dyn Fn(String)) -> Result<String, String> {
-    let mut args = vec!["install", "-y", "-q"];
+    let mut args = apt(&["install", "-y", "-q"]);
     args.extend(pkgs.iter().map(String::as_str));
     ctx.run_live("apt-get", &args, say)?;
     Ok(pkgs.join(", "))
 }
+
+/// Les ports ouverts dans ufw : le cockpit (80, 443), NMOS (l'API du nœud IS-04 / IS-05 et son
+/// annonce mDNS, pour le contrôleur de la régie), SNMP (Santé › SNMP, s'il est activé).
+const FW_RULES: [(&str, &str); 5] = [
+    ("80/tcp", "Strata Core"),
+    ("443/tcp", "Strata Core"),
+    ("3212/tcp", "Strata Core NMOS"),
+    ("5353/udp", "Strata Core NMOS (mDNS)"),
+    ("161/udp", "Strata Core SNMP"),
+];
 
 fn firewall(ctx: &Ctx) -> Result<String, String> {
     let status = if ctx.dry() {
@@ -739,13 +810,9 @@ fn firewall(ctx: &Ctx) -> Result<String, String> {
     if !ctx.dry() && !status.contains("Status: active") {
         return Ok("ufw inactif : rien à ouvrir".into());
     }
-    ctx.run("ufw", &["allow", "80/tcp", "comment", "Strata Core"])?;
-    ctx.run("ufw", &["allow", "443/tcp", "comment", "Strata Core"])?;
-    // NMOS : l'API du nœud (IS-04, IS-05) et son annonce mDNS, pour le contrôleur de la régie.
-    ctx.run("ufw", &["allow", "3212/tcp", "comment", "Strata Core NMOS"])?;
-    ctx.run("ufw", &["allow", "5353/udp", "comment", "Strata Core NMOS (mDNS)"])?;
-    // SNMP (Santé › SNMP), s'il est activé.
-    ctx.run("ufw", &["allow", "161/udp", "comment", "Strata Core SNMP"])?;
+    for (port, comment) in FW_RULES {
+        ctx.run("ufw", &["allow", port, "comment", comment])?;
+    }
     Ok("80/tcp, 443/tcp, 3212/tcp (NMOS), 5353/udp (mDNS) et 161/udp (SNMP) ouverts".into())
 }
 
@@ -855,6 +922,12 @@ pub fn steps(plan: &Plan) -> Vec<Step> {
             let pkgs = system_pkgs(plan.ndi.is_some());
             v.push(step("Paquets du système", true, move |ctx, say| system_packages(ctx, &pkgs, say)));
             v.push(step("Compte du service", false, |ctx, _| service_user(ctx)));
+            // Une archive (ou une version) donnée : le Core et sa copie à root sont reposés depuis
+            // elle. Jamais depuis /opt/strata/bin, que le compte du service peut remplacer.
+            if plan.package.is_some() || plan.version.is_some() {
+                let p = plan.clone();
+                v.push(step("Strata Core", false, move |ctx, say| put_core(ctx, &p, say)));
+            }
             v.push(step("Fichiers du système", false, |ctx, _| system_files(ctx)));
             v.push(step("Droits", false, |ctx, _| {
                 ctx.chown(paths::BIN_DIR, true)?;
@@ -869,12 +942,16 @@ pub fn steps(plan: &Plan) -> Vec<Step> {
                 let _ = ctx.run("systemctl", &["disable", "--now", "strata-ptp4l"]);
                 // Les ports DPDK rendus au noyau, les hugepages rendues.
                 if ctx.p(paths::MEDIA_UNIT).exists() {
+                    // Écrit sans suivre de lien : /etc/strata est au compte du service.
                     let _ = ctx.write("/etc/strata/media.json", "{\"hugepages\": 0, \"dpdk\": []}\n", 0o644);
                     if ctx.p(paths::MEDIA_HELPER).exists() {
                         let _ = ctx.run(paths::MEDIA_HELPER, &["media-setup"]);
                     }
-                    let _ = ctx.run("systemctl", &["disable", "strata-media"]);
+                    let _ = ctx.run("systemctl", &["disable", "--now", "strata-media"]);
                 }
+                // Un retour arrière des adresses IP en attente : il lancerait la copie retirée.
+                let _ = ctx.run("systemctl", &["stop", "strata-net-revert.timer"]);
+                let _ = ctx.run("systemctl", &["disable", "--now", "strata-net"]);
                 Ok("arrêté".into())
             }));
             v.push(step("Fichiers du système", false, |ctx, _| {
@@ -888,7 +965,15 @@ pub fn steps(plan: &Plan) -> Vec<Step> {
                             let _ = std::fs::remove_file(e.path());
                         }
                     }
+                    let _ = std::fs::remove_dir_all(ctx.p("/etc/systemd/network/.strata-prev"));
                     let _ = ctx.run("networkctl", &["reload"]);
+                }
+                // Les tampons réseau : le fichier retiré, les réglages restants du système remis
+                // (les valeurs du noyau reviennent au redémarrage).
+                let _ = ctx.run("sysctl", &["-q", "--system"]);
+                // Les ports ouverts à l'installation, règle pour règle (ufw absent : rien à faire).
+                for (port, comment) in FW_RULES {
+                    let _ = ctx.run("ufw", &["delete", "allow", port, "comment", comment]);
                 }
                 let _ = std::fs::remove_dir_all(ctx.p(paths::ETC));
                 let _ = std::fs::remove_dir_all(ctx.p("/opt/strata"));
@@ -1003,6 +1088,21 @@ mod tests {
         assert!(e.is_ok() || e.unwrap_err().contains("copy it again"));
         std::fs::write(base.join("z.tar"), b"PK\x03\x04 not a tar").unwrap();
         assert!(unpack_any(&base.join("z.tar"), &base.join("z.out")).unwrap_err().contains(".zip"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn files_are_written_without_following_a_link() {
+        let base = std::env::temp_dir().join(format!("strata-put-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("victim"), b"secret").unwrap();
+        std::os::unix::fs::symlink(base.join("victim"), base.join("media.json")).unwrap();
+        put_file(&base.join("media.json"), 0o644, |f| f.write_all(b"{}")).unwrap();
+        assert_eq!(std::fs::read(base.join("victim")).unwrap(), b"secret");
+        assert!(!std::fs::symlink_metadata(base.join("media.json")).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read(base.join("media.json")).unwrap(), b"{}");
+        assert_eq!(std::fs::read_dir(&base).unwrap().count(), 2);
         let _ = std::fs::remove_dir_all(&base);
     }
 

@@ -1,9 +1,8 @@
 // Réglages › Santé › Ressources : processeurs, mémoire, disques, réseau, ce que prend chaque
 // programme, ce qui reste, et les 10 dernières minutes. Relu toutes les 2 s.
-import { useEffect, useState } from 'react';
 import { Activity, Cpu, HardDrive, Network } from 'lucide-react';
 import { Badge, Card, PageHead, formatBytes, formatDuration, locale, t } from '@strata/ui';
-import { api } from '../../api';
+import { usePoll } from '../../poll';
 import { UseBar, type Gpu } from '../hardware/Gpu';
 import { LineChart } from './LineChart';
 
@@ -62,20 +61,7 @@ export function Meter({ value, warn = 80, bad = 95 }: { value: number; warn?: nu
 }
 
 export function ResourcesPage() {
-  const [r, setR] = useState<Res | null>(null);
-  useEffect(() => {
-    let gone = false;
-    const read = () =>
-      api<Res>('GET', '/api/health/resources')
-        .then((v) => !gone && setR(v))
-        .catch(() => {});
-    void read();
-    const id = setInterval(read, 2000);
-    return () => {
-      gone = true;
-      clearInterval(id);
-    };
-  }, []);
+  const r = usePoll<Res>('/api/health/resources', 2000);
   if (!r?.now) return <PageHead title={t('Resources')} />;
   const { now, machine, history } = r;
   const times = history.map((p) => p.t);

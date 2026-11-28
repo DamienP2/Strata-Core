@@ -123,14 +123,14 @@ fn boot_guard(data_dir: &std::path::Path) {
     let path = data_dir.join("health").join("boot.json");
     let quick = std::fs::read_to_string(&path).ok().and_then(|s| s.trim().parse::<u32>().ok()).unwrap_or(0) + 1;
     let _ = std::fs::create_dir_all(data_dir.join("health"));
-    let _ = std::fs::write(&path, quick.to_string());
+    let _ = strata_core::files::write_atomic(&path, quick.to_string().as_bytes(), false);
     if quick > 3 {
         SAFE_MODE.store(true, std::sync::atomic::Ordering::Relaxed);
         tracing::error!("the Core stopped {} times in a row at start: safe mode, MXL and MTL are not loaded", quick - 1);
     }
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-        let _ = std::fs::write(&path, "0");
+        let _ = strata_core::files::write_atomic(&path, b"0", false);
     });
 }
 
@@ -241,9 +241,14 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
             let mut tls_at = std::time::Instant::now();
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                apps::reconcile(&s).await;
-                reconcile_inputs(&s).await;
-                nmos::apply(&s).await;
+                // Chaque tâche à part : une panique dans l'une est notée, et le gardien continue
+                // (sinon les applis, les entrées et le certificat ne seraient plus tenus).
+                let s2 = s.clone();
+                step("apps", async move { apps::reconcile(&s2).await }).await;
+                let s2 = s.clone();
+                step("inputs", async move { reconcile_inputs(&s2).await }).await;
+                let s2 = s.clone();
+                step("nmos", async move { nmos::apply(&s2).await }).await;
                 let s3 = s.clone();
                 let _ = tokio::task::spawn_blocking(move || hardware::sap::apply(&s3)).await;
                 let s2 = s.clone();
@@ -256,7 +261,8 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
                 // des tours).
                 if tls_at.elapsed() >= std::time::Duration::from_secs(12 * 3600) {
                     tls_at = std::time::Instant::now();
-                    tls::apply(&s).await;
+                    let s2 = s.clone();
+                    step("tls", async move { tls::apply(&s2).await }).await;
                 }
             }
         })
@@ -284,6 +290,15 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
     let ending = if s.restart_asked() { Ending::Restart } else { Ending::Stop };
     tracing::info!("{}", if ending == Ending::Restart { "stopped, restarting" } else { "stopped" });
     Ok(ending)
+}
+
+/// Une tâche du gardien, à part : sa panique est notée au lieu d'arrêter le gardien.
+async fn step(name: &str, f: impl std::future::Future<Output = ()> + Send + 'static) {
+    if let Err(e) = tokio::spawn(f).await {
+        if e.is_panic() {
+            tracing::error!("the {name} keeper task panicked: {e}");
+        }
+    }
 }
 
 /// Les entrées SDI captées, en accord avec les réglages et les cartes présentes.

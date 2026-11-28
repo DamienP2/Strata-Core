@@ -239,27 +239,29 @@ fn run(w: &WantedOut, mxl: &Mxl, stop: &AtomicBool, status: &Mutex<OutStatus>) {
         o.wait(Duration::from_millis(200), v);
         let period = Duration::from_secs_f64(v.rate.1 as f64 / v.rate.0.max(1) as f64);
         let stride = strata_mxl::v210_stride(v.width);
-        // Progressif : poussé à la carte droit depuis MXL ; entrelacé : les deux trames remises
-        // ensemble dans un tampon réutilisé (pas d'allocation à chaque image).
+        // Progressif : poussé à la carte droit depuis le grain MXL (sans copie) ; entrelacé : les
+        // deux trames remises ensemble dans un tampon réutilisé (pas d'allocation à chaque image).
         // L'image d'abord (son instant dit où prendre le son), puis les deux ensemble à la carte.
-        let r = follow.reader(mxl);
-        let got = r.is_some_and(|r| {
+        let channels = o.audio_channels();
+        let mut heard = None;
+        if let Some(r) = follow.reader(mxl) {
             if r.video.interlaced {
-                r.latest_into(period * 3, &mut woven)
+                if r.latest_into(period * 3, &mut woven) {
+                    heard = Some(sound.frame(mxl, aid, v, r.last_frame_audio_index(), channels));
+                    o.push_av(&woven, stride, &sound.pcm);
+                }
             } else {
                 r.with_latest(period * 3, |a, _| {
-                    woven.resize(a.len(), 0);
-                    woven.copy_from_slice(a);
-                })
-                .is_some()
+                    heard = Some(sound.frame(mxl, aid, v, r.last_frame_audio_index(), channels));
+                    o.push_av(a, stride, &sound.pcm);
+                });
             }
-        });
-        let at = if got { follow.reader(mxl).and_then(|r| r.last_frame_audio_index()) } else { None };
-        let heard = sound.frame(mxl, aid, v, at, o.audio_channels());
+        }
+        let got = heard.is_some();
+        let heard = heard.unwrap_or_else(|| sound.frame(mxl, aid, v, None, channels));
         match got {
             true => {
                 last_new = Instant::now();
-                o.push_av(&woven, stride, &sound.pcm);
                 set(&|s| {
                     s.state = OutState::Playing;
                     s.frames += 1;

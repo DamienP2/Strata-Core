@@ -234,7 +234,7 @@ impl Sink {
 
     /// Une image v210 (10 bits, `stride` octets par ligne), telle que la carte la donne : copiée
     /// dans MXL, sans conversion. Sans MXL (le partage, en 8 bits), elle est convertie.
-    pub(crate) fn publish_v210(&mut self, info: &FrameInfo, data: &[u8], stride: usize, scratch: &mut Vec<u8>) -> Result<(), String> {
+    pub(crate) fn publish_v210(&mut self, info: &FrameInfo, data: &[u8], stride: usize) -> Result<(), String> {
         match self {
             Sink::Mxl { mxl, id, label, writer, published, .. } => {
                 let v = strata_mxl::Video { width: info.width, height: info.height, rate: info.rate, interlaced: info.interlaced };
@@ -246,14 +246,19 @@ impl Sink {
                 *published += 1;
                 Ok(())
             }
-            Sink::Share(_) => {
+            Sink::Share(sw) => {
+                // Convertie directement dans la case du partage (pas d'image intermédiaire).
                 let (w, h) = (info.width as usize, info.height as usize);
-                scratch.resize(w * 2 * h, 0);
-                for y in 0..h {
-                    strata_mxl::v210_to_uyvy(&data[y * stride..(y + 1) * stride], &mut scratch[y * w * 2..(y + 1) * w * 2], w);
-                }
                 let uyvy = FrameInfo { stride: info.width * 2, ..*info };
-                self.publish(&uyvy, scratch)
+                sw.publish_with(&uyvy, w * 2 * h, |dst| {
+                    for y in 0..h {
+                        if let Some(src) = data.get(y * stride..(y + 1) * stride) {
+                            strata_mxl::v210_to_uyvy(src, &mut dst[y * w * 2..(y + 1) * w * 2], w);
+                        }
+                    }
+                })
+                .map(|_| ())
+                .map_err(|e| e.to_string())
             }
         }
     }
@@ -433,7 +438,6 @@ fn capture(writer: &mut Sink, device: u32, stop: &AtomicBool, status: &Mutex<Sta
             s.error = None;
         }
         let mut buf = Vec::new();
-        let mut scratch = Vec::new();
         let mut seq = 0u64;
         let mut meter = Meter::new();
         let mut refused: Option<String> = None;
@@ -467,7 +471,7 @@ fn capture(writer: &mut Sink, device: u32, stop: &AtomicBool, status: &Mutex<Sta
                     };
                     // 10 bits : copiée telle quelle dans MXL ; une carte qui ne donne que du 8 bits :
                     // convertie.
-                    let published = match if t.v210 { writer.publish_v210(&info, &buf, t.stride, &mut scratch) } else { writer.publish(&info, &buf) } {
+                    let published = match if t.v210 { writer.publish_v210(&info, &buf, t.stride) } else { writer.publish(&info, &buf) } {
                         Ok(_) => {
                             refused = None;
                             true
@@ -633,12 +637,30 @@ pub fn jpeg(buf: &[u8], w: u32, h: u32, stride: usize, width: u32) -> Result<Vec
     if w < 2 || h < 2 || buf.len() < stride * h as usize {
         return Err("no picture yet".into());
     }
+    let step = jpeg_step(w, width);
+    encode(buf, w, h / step, stride, step, step)
+}
+
+/// Un pixel sur combien (en largeur comme en hauteur) pour un aperçu de `width` pixels.
+pub fn jpeg_step(w: u32, width: u32) -> u32 {
+    w.div_ceil(width.max(16)).max(1)
+}
+
+/// Un aperçu fait de lignes déjà choisies (une sur `jpeg_step`, à la suite dans `buf`) : seules
+/// celles-là ont été converties.
+pub fn jpeg_of_rows(buf: &[u8], w: u32, rows: u32, stride: usize, width: u32) -> Result<Vec<u8>, String> {
+    if w < 2 || rows < 1 || buf.len() < stride * rows as usize {
+        return Err("no picture yet".into());
+    }
+    encode(buf, w, rows, stride, jpeg_step(w, width), 1)
+}
+
+fn encode(buf: &[u8], w: u32, oh: u32, stride: usize, step: u32, row_step: u32) -> Result<Vec<u8>, String> {
     // Un pixel sur `step` (pair, pour garder Cb et Cr), pareil en hauteur.
-    let step = w.div_ceil(width.max(16)).max(1);
-    let (ow, oh) = (w / step, h / step);
+    let ow = w / step;
     let mut rgb = Vec::with_capacity((ow * oh * 3) as usize);
     for oy in 0..oh {
-        let row = &buf[(oy * step) as usize * stride..];
+        let row = &buf[(oy * row_step) as usize * stride..];
         for ox in 0..ow {
             // Une largeur impaire : la dernière paire de pixels reste dans la ligne.
             let x = ((ox * step) as usize).min((w as usize & !1).saturating_sub(1));
