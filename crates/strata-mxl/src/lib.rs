@@ -625,7 +625,7 @@ pub fn uyvy_to_v210(src: &[u8], dst: &mut [u8], width: usize) {
     let blocks = width.div_ceil(6);
     // Les blocs entiers (6 pixels, 12 octets → 16), sans vérification à chaque valeur.
     let full = (width / 6).min(src.len() / 12).min(dst.len() / 16);
-    for (i, o) in src.chunks_exact(12).zip(dst.chunks_exact_mut(16)).take(full) {
+    for (i, o) in src.as_chunks::<12>().0.iter().zip(dst.as_chunks_mut::<16>().0.iter_mut()).take(full) {
         for k in 0..4 {
             let w = (u32::from(i[3 * k]) << 2) | (u32::from(i[3 * k + 1]) << 12) | (u32::from(i[3 * k + 2]) << 22);
             o[4 * k..4 * k + 4].copy_from_slice(&w.to_le_bytes());
@@ -664,7 +664,7 @@ fn v210_to_uyvy_from(src: &[u8], dst: &mut [u8], width: usize, from: usize) {
     let blocks = width.div_ceil(6);
     let full = (width / 6).min(src.len() / 16).min(dst.len() / 12);
     let start = from.min(full);
-    for (i, o) in src.chunks_exact(16).zip(dst.chunks_exact_mut(12)).take(full).skip(start) {
+    for (i, o) in src.as_chunks::<16>().0.iter().zip(dst.as_chunks_mut::<12>().0.iter_mut()).take(full).skip(start) {
         for k in 0..4 {
             let w = u32::from_le_bytes([i[4 * k], i[4 * k + 1], i[4 * k + 2], i[4 * k + 3]]);
             o[3 * k] = (w >> 2) as u8;
