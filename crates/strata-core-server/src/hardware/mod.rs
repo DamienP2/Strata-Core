@@ -29,6 +29,7 @@ pub mod ndi;
 pub mod net;
 pub mod playout;
 pub mod preview;
+pub mod sap;
 pub mod st2110;
 pub mod st2110io;
 pub mod sync;
@@ -68,6 +69,15 @@ pub struct HardwareConfig {
     pub clock: clock::ClockSettings,
     /// NMOS : les flux ST 2110 vus et branchés par un contrôleur (IS-04, IS-05).
     pub nmos: crate::nmos::NmosSettings,
+    /// SAP : nos flux de son envoyés annoncés (Dante, AES67).
+    pub sap: SapSettings,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SapSettings {
+    /// Annoncer nos flux de son envoyés (SAP), pour Dante Controller et les appareils AES67.
+    pub announce: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -556,6 +566,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/hardware/nmos", get(nmos_status))
         .route("/api/hardware/ports", get(ports))
         .route("/api/hardware/gpus", get(gpus))
+        .route("/api/hardware/sap", get(sap_state))
         .route("/api/hardware/ip", get(ip_state))
         .route("/api/hardware/ip/confirm", axum::routing::post(ip_confirm))
         .route("/api/hardware/ip/revert", axum::routing::post(ip_revert))
@@ -837,6 +848,17 @@ async fn flow_preview(State(s): State<Shared>, CurrentUser(me): CurrentUser, Url
     .await?
     .map_err(|e| (StatusCode::NOT_FOUND, e))?;
     Ok(jpeg_response(jpeg))
+}
+
+/// SAP : les flux de son annoncés sur le réseau (Dante, AES67), et les nôtres annoncés.
+async fn sap_state(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
+    require(me.admin)?;
+    Ok(Json(json!({
+        "heard": s.sap.heard(),
+        "announced": s.sap.announced.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+        "listening": s.sap.listening(),
+        "error": s.sap.error(),
+    })))
 }
 
 /// Les adresses IP réglées par Strata, et un changement qui attend d'être confirmé.

@@ -113,6 +113,20 @@ répond sur le port 3212 (IS-04 Node API v1.2/v1.3, IS-05 Connection API v1.1). 
 - L'API n'a pas de mot de passe (comme NMOS le prévoit) : elle ne doit être joignable que depuis
   le réseau de la régie. L'installateur ouvre 3212/tcp et 5353/udp si ufw est actif.
 
+## Dante et AES67 (SAP)
+
+Un appareil Dante en **mode AES67** (Dante Controller : *Device Config › AES67 Config*) échange du
+son avec le Core en ST 2110-30 (L24, 48 kHz, paquets de 1 ms, multicast, 8 canaux au plus par
+flux). SAP sert à se trouver : *Matériel › ST 2110*, carte **Flux de son annoncés (AES67 / Dante)**.
+
+- **Recevoir** : créer dans Dante Controller un flux multicast AES67 ; il apparaît dans la carte ;
+  « Recevoir » crée le flux d'entrée tout réglé ; enregistrer. Les applis le lisent en MXL.
+- **Émettre** : un flux de son envoyé (L24 · 1 ms, 8 canaux au plus) et **Annoncer nos flux de son
+  (SAP)** : il apparaît dans Dante Controller comme émetteur ; le router vers l'appareil Dante.
+- **Horloge** : le même grand maître PTP des deux côtés (Dante en AES67 : PTP par défaut, domaine
+  0 ; le 2110 souvent domaine 127). La carte montre l'horloge annoncée par chaque appareil.
+- Le Dante natif (hors AES67) demande une licence Audinate : il n'est pas pris en charge.
+
 ## Sauvegardes
 
 *Ce serveur › Sauvegardes* : les réglages du Core (comptes, groupes, SSO, nom et HTTPS, cartes

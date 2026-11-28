@@ -241,6 +241,8 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
                 apps::reconcile(&s).await;
                 reconcile_inputs(&s).await;
                 nmos::apply(&s).await;
+                let s3 = s.clone();
+                let _ = tokio::task::spawn_blocking(move || hardware::sap::apply(&s3)).await;
                 let s2 = s.clone();
                 let _ = tokio::task::spawn_blocking(move || s2.previews.sweep()).await;
                 // La recherche quotidienne à part : sans internet, ses délais ne figent pas ce
@@ -261,6 +263,8 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
     s.supervisor.stop_all().await;
     let s2 = s.clone();
     let _ = tokio::task::spawn_blocking(move || nmos::stop(&s2)).await;
+    let s2 = s.clone();
+    let _ = tokio::task::spawn_blocking(move || hardware::sap::stop(&s2)).await;
     // Les entrées après les applis qui les lisent.
     let s2 = s.clone();
     let _ = tokio::task::spawn_blocking(move || {

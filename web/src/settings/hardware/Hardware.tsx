@@ -910,6 +910,109 @@ function FlowEditor({ flow, redundant, onClose, onSave }: { flow: Flow; redundan
   );
 }
 
+interface SapHeard {
+  name: string;
+  origin: string;
+  group: string;
+  port: number;
+  source?: string | null;
+  channels?: number | null;
+  bits?: number | null;
+  ptimeUs?: number | null;
+  clock?: string | null;
+  seenSecs: number;
+}
+
+/** SAP : les flux de son AES67 annoncés (Dante, consoles), à recevoir d'un clic ; et l'annonce des
+ *  nôtres pour Dante Controller. */
+function SapCard({ draft }: { draft: HwConfig }) {
+  const sap = usePoll<{ heard: SapHeard[]; announced: string[]; listening: string[]; error?: string | null }>('/api/hardware/sap');
+  const announce = draft.sap?.announce ?? false;
+  const taken = (h: SapHeard) => draft.flows.some((f) => f.direction === 'input' && f.red === `${h.group}:${h.port}`);
+  const receive = (h: SapHeard) => {
+    const n = draft.flows.length + 1;
+    editHw((x) => {
+      let id = `flow-${n}`;
+      for (let k = n; x.flows.some((f) => f.id === id); k++) id = `flow-${k + 1}`;
+      x.flows.push({
+        id,
+        name: h.name || `${h.origin} ${h.group}`,
+        direction: 'input',
+        essence: 'audio',
+        red: `${h.group}:${h.port}`,
+        blue: null,
+        port: 1,
+        channels: h.channels ?? 2,
+        bits: h.bits ?? 24,
+        ptimeUs: h.ptimeUs ?? 1000,
+        enabled: true,
+      } as Flow);
+    });
+    toast(t('Flow added: save to receive it'));
+  };
+  return (
+    <Card
+      icon={<Radio size={16} />}
+      title={t('Announced sound flows (AES67 / Dante)')}
+      actions={
+        <Switch
+          checked={announce}
+          onChange={(v) => editHw((x) => void (x.sap = { ...(x.sap ?? {}), announce: v }))}
+          label={t('Announce our sound flows (SAP)')}
+        />
+      }
+    >
+      {sap?.error && <p className="core-warn">{friendly(sap.error)}</p>}
+      {announce && sap && (
+        <p className="st-muted core-note">
+          {sap.announced.length ? t('Announced: {list}', { list: sap.announced.join(', ') }) : t('No sound flow sent to announce.')}
+        </p>
+      )}
+      {!sap ? null : sap.heard.length === 0 ? (
+        <p className="st-muted">{t('No flow announced on the network yet (Dante devices in AES67 mode announce theirs every 30 s).')}</p>
+      ) : (
+        <table className="st-table">
+          <thead>
+            <tr>
+              <th>{t('Flow')}</th>
+              <th>{t('Address')}</th>
+              <th>{t('Format')}</th>
+              <th>{t('Clock')}</th>
+              <th className="r" />
+            </tr>
+          </thead>
+          <tbody>
+            {sap.heard.map((h) => (
+              <tr key={`${h.origin}-${h.group}-${h.port}`}>
+                <td>
+                  <strong>{h.name || '—'}</strong>
+                  <div className="st-muted st-mono">{h.origin}</div>
+                </td>
+                <td className="st-mono">
+                  {h.group}:{h.port}
+                </td>
+                <td>{h.channels ? `${h.channels} ch · L${h.bits ?? 24} · ${(h.ptimeUs ?? 1000) / 1000} ms` : <span className="st-muted">{t('not sound')}</span>}</td>
+                <td className="st-mono st-muted" title={h.clock ?? undefined}>
+                  {h.clock?.replace('ptp=IEEE1588-2008:', 'PTP ') ?? '—'}
+                </td>
+                <td className="r">
+                  {taken(h) ? (
+                    <Badge tone="ok">{t('Received')}</Badge>
+                  ) : h.channels ? (
+                    <button type="button" className="st-btn small" onClick={() => receive(h)}>
+                      {t('Receive')}
+                    </button>
+                  ) : null}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Card>
+  );
+}
+
 export function St2110Page() {
   const hw = useHardware();
   const [editing, setEditing] = useState<{ flow: Flow; index: number } | null>(null);
@@ -1051,6 +1154,7 @@ export function St2110Page() {
         </table>
       ))}
       {tab === 'flows' && <FlowsCard flows={snap.config.flows} state={io as Parameters<typeof FlowsCard>[0]['state']} />}
+      {tab === 'flows' && <SapCard draft={draft} />}
       {editing && (
         <FlowEditor
           flow={editing.flow}

@@ -105,6 +105,8 @@ export interface HwConfig {
   clock: ClockSettings;
   /** NMOS : IS-04 en pair-à-pair (mDNS) et IS-05. */
   nmos?: NmosSettings;
+  /** SAP : nos flux de son envoyés annoncés (Dante, AES67). */
+  sap?: { announce: boolean };
 }
 
 export interface NmosSettings {

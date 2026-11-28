@@ -41,6 +41,8 @@ pub struct AppState {
     pub streams: crate::streams::engine::Engine,
     /// NMOS (IS-04, IS-05) : l'API du nœud et son annonce.
     pub nmos: crate::nmos::Nmos,
+    /// SAP : flux de son annoncés (Dante, AES67).
+    pub sap: crate::hardware::sap::Sap,
     /// Les relevés des ports média ST 2110 (débits).
     pub port_meter: crate::hardware::capacity::Meter,
     /// MTL : chargée au démarrage si elle est installée (sinon la raison).
@@ -92,6 +94,7 @@ impl AppState {
             st2110: Default::default(),
             streams: Default::default(),
             nmos: Default::default(),
+            sap: Default::default(),
             port_meter: Default::default(),
             mtl: Default::default(),
             resources: Default::default(),

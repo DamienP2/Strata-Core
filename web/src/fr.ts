@@ -957,4 +957,12 @@ export const fr: Record<string, string> = {
   'Encryption': 'Chiffrement',
   'Segment length': 'Durée d’un segment',
   'Segments in the playlist': 'Segments dans la liste',
+  'Flow added: save to receive it': 'Flux ajouté : enregistrez pour le recevoir',
+  'Announced sound flows (AES67 / Dante)': 'Flux de son annoncés (AES67 / Dante)',
+  'Announce our sound flows (SAP)': 'Annoncer nos flux de son (SAP)',
+  'Announced: {list}': 'Annoncés : {list}',
+  'No sound flow sent to announce.': 'Aucun flux de son envoyé à annoncer.',
+  'No flow announced on the network yet (Dante devices in AES67 mode announce theirs every 30 s).': 'Aucun flux annoncé sur le réseau pour l’instant (les appareils Dante en mode AES67 annoncent les leurs toutes les 30 s).',
+  'not sound': 'pas du son',
+  'Receive': 'Recevoir',
 };
