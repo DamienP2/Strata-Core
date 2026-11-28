@@ -189,8 +189,6 @@ async fn forward(s: &Shared, app: &Installed, user: Option<&User>, token: Option
     if let Some(u) = user {
         identity(s, h, u);
     }
-    // Le jeton de l'appli : ce qui vient du relais, et non d'un autre programme de la machine.
-    set(h, "x-strata-app-token", &crate::apps::app_token(&s.data_dir, &app.manifest.id));
     if let Some(peer) = peer {
         let ip = guard::plain_ip(peer.ip()).to_string();
         // Derrière un relais de cette machine, la chaîne qu'il a commencée continue.

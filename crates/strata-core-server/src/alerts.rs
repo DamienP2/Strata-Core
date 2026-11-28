@@ -820,9 +820,6 @@ async fn declare(
     if !s.apps.get(&d.app).is_some_and(|a| a.active) {
         return Err(bad(format!("no active app: {}", d.app)));
     }
-    if crate::apps::app_token_ok(&s.data_dir, &headers, &d.app) == Some(false) {
-        return Err((axum::http::StatusCode::FORBIDDEN, format!("this is not the token of {}", d.app)));
-    }
     let key = d.key.trim();
     if key.is_empty() || key.len() > 64 || d.text.len() > 500 || d.over.len() > 500 {
         return Err(bad("an alert has a key (64 characters at most) and a text (500 at most)"));

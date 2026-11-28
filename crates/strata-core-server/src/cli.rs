@@ -285,7 +285,7 @@ pub fn app(cmd: AppCmd) -> anyhow::Result<()> {
             }
             // Lancé avec sudo : ce qui vient d'être posé revient au compte du service, qui doit
             // pouvoir le lire et le mettre à jour.
-            for f in ["apps", "apps.json", "sources.json", "app-secret"] {
+            for f in ["apps", "apps.json", "sources.json"] {
                 give_back(&dir, f);
             }
             give_back_tree(&dir, &format!("apps/{}", app.manifest.id));
