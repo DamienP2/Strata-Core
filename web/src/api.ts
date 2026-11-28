@@ -39,7 +39,15 @@ export interface AuthState {
 }
 
 /** L'état de l'interface : la connexion, et la liaison avec le serveur. */
-export const useApp = create<{ auth: AuthState | null; connected: boolean }>(() => ({ auth: null, connected: true }));
+/** `down` : l'écran est bloqué (mise à jour, redémarrage, serveur injoignable) jusqu'au retour du Core. */
+export type Down = 'update' | 'restart' | 'lost';
+export const useApp = create<{ auth: AuthState | null; connected: boolean; down: Down | null }>(() => ({ auth: null, connected: true, down: null }));
+
+/** Le Core va redémarrer (mise à jour, restauration, redémarrage) : l'écran est bloqué jusqu'à son
+ *  retour, puis la page se recharge. */
+export function expectRestart(kind: 'update' | 'restart') {
+  useApp.setState({ down: kind });
+}
 
 export async function api<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
   let res: Response;

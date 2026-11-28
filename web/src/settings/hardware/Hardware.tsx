@@ -116,7 +116,6 @@ function SdiCard({ d, snap, draft }: { d: DetectedCard; snap: Snapshot; draft: H
   const jack = m?.jack ?? (d.connectors > 4 ? 'din' : 'bnc');
   const reference = m?.reference ?? d.hasReference;
   const functions = c.connectors.map((k) => k.function);
-  const used = functions.filter((f) => f !== 'unused').length;
   return (
     <Card
       icon={<MonitorPlay size={16} />}
@@ -124,7 +123,7 @@ function SdiCard({ d, snap, draft }: { d: DetectedCard; snap: Snapshot; draft: H
       actions={
         <span className="core-service">
           <RefPill d={d} genlock={c.genlock} />
-          <span className="st-muted">{[d.modelName, d.interface === 'pcie' ? 'PCIe' : d.interface, tn(used, '{n} connector used', '{n} connectors used')].filter(Boolean).join(' · ')}</span>
+          {c.name && c.name !== d.modelName && <span className="st-muted">{d.modelName}</span>}
         </span>
       }
     >
@@ -957,7 +956,6 @@ export function NdiPage() {
             <input value={draft.ndi.machine} placeholder={t('The computer’s')} onChange={(e) => editHw((x) => void (x.ndi.machine = e.target.value))} />
           </Field>
         </FieldGrid>
-        <p className="st-muted core-note">{t('These settings are the same for every app; an app reads them when it starts.')}</p>
       </Card>
       <Card icon={<Search size={16} />} title={t('Visible sources')}>
         <div className="st-row">

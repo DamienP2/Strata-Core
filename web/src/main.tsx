@@ -1,11 +1,11 @@
 // L'interface du Core : la connexion (et le premier administrateur), puis le cockpit.
 import { StrictMode, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { CircleHelp, Settings as SettingsIcon } from 'lucide-react';
+import { CircleHelp, CloudDownload, LoaderCircle, RotateCw, Settings as SettingsIcon, Unplug } from 'lucide-react';
 import '@strata/ui/styles.css';
 import './core.css';
 import {
-  Cockpit, ContextMenuHost, DialogHost, Launcher, Login, StatusPill, Toasts, TopBar, UserMenu,
+  Cockpit, ContextMenuHost, DialogHost, Launcher, Login, Toasts, TopBar, UserMenu,
   addTranslations, installEscape, installTooltips, instanceKey, nameTab, openAppTab, setLang, setTheme, setTimezone, t, toast, useLang,
   type CockpitData, type CockpitInstance, type Lang, type ThemePref,
 } from '@strata/ui';
@@ -48,16 +48,90 @@ async function savePrefs(prefs: { lang?: Lang; theme?: ThemePref }) {
   }
 }
 
-/** La liaison : /api/health toutes les 5 s. */
+/** La liaison : /api/health toutes les 5 s (2 s quand l'écran est bloqué). Une mise à jour ou un
+ *  redémarrage en cours, ou deux appels sans réponse : l'écran se bloque ; le Core revenu, la page
+ *  se recharge. */
 function useHeartbeat() {
   useEffect(() => {
-    const beat = () =>
-      api('GET', '/api/health')
-        .then(() => useApp.setState({ connected: true }))
-        .catch(() => useApp.setState({ connected: false }));
-    const id = setInterval(beat, 5000);
-    return () => clearInterval(id);
+    let fails = 0;
+    let timer = 0;
+    let stop = false;
+    const beat = async () => {
+      const down = useApp.getState().down;
+      try {
+        // Un serveur figé ne répond pas sans échouer : 4 s au plus.
+        const res = await fetch('/api/health', { credentials: 'same-origin', signal: AbortSignal.timeout(4000) });
+        if (!res.ok) throw new Error(res.statusText);
+        const h = (await res.json()) as { updating?: boolean; restarting?: boolean };
+        fails = 0;
+        if (h.updating) useApp.setState({ down: 'update', connected: true });
+        else if (h.restarting) useApp.setState({ down: down === 'update' ? 'update' : 'restart', connected: true });
+        else if (down && (down === 'lost' || sawDown)) {
+          location.reload();
+          return;
+        } else useApp.setState({ connected: true });
+        if (useApp.getState().down) sawDown = true;
+      } catch {
+        fails++;
+        if (down || fails >= 2) {
+          sawDown = true;
+          useApp.setState({ down: down === 'update' || down === 'restart' ? down : 'lost', connected: false });
+        }
+      }
+      if (!stop) timer = window.setTimeout(() => void beat(), useApp.getState().down || fails > 0 ? 2000 : 5000);
+    };
+    // Le Core a dit (ou on lui a demandé) qu'il allait redémarrer : vu une fois bloqué, son retour
+    // sans mise à jour ni redémarrage recharge la page.
+    let sawDown = false;
+    const unsub = useApp.subscribe((s, prev) => {
+      if (s.down && !prev.down) {
+        window.clearTimeout(timer);
+        timer = window.setTimeout(() => void beat(), 2000);
+      }
+    });
+    timer = window.setTimeout(() => void beat(), 5000);
+    return () => {
+      stop = true;
+      unsub();
+      window.clearTimeout(timer);
+    };
   }, []);
+}
+
+/** L'écran bloqué : mise à jour, redémarrage, ou serveur injoignable. */
+function DownOverlay() {
+  useLang((s) => s.lang);
+  const down = useApp((s) => s.down);
+  const [since, setSince] = useState(0);
+  useEffect(() => {
+    if (!down) return;
+    const start = Date.now();
+    setSince(0);
+    const id = setInterval(() => setSince(Math.floor((Date.now() - start) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [down]);
+  if (!down) return null;
+  const Icon = down === 'update' ? CloudDownload : down === 'restart' ? RotateCw : Unplug;
+  const title = down === 'update' ? t('The server is being updated') : down === 'restart' ? t('The server is restarting') : t('The server does not answer');
+  const text =
+    down === 'lost'
+      ? t('Trying again every 2 seconds. This page reloads by itself as soon as the server answers.')
+      : t('Please wait: the Core restarts. This page reloads by itself as soon as it answers.');
+  const elapsed = `${Math.floor(since / 60)}:${String(since % 60).padStart(2, '0')}`;
+  return (
+    <div className="core-down" role="alertdialog" aria-modal="true" aria-label={title}>
+      <div className={`core-down-box ${down}`}>
+        <span className="core-down-icon">
+          <Icon size={26} />
+        </span>
+        <h2>{title}</h2>
+        <p>{text}</p>
+        <p className="core-down-wait">
+          <LoaderCircle size={15} className="st-spin" /> {t('For {time}', { time: elapsed })}
+        </p>
+      </div>
+    </div>
+  );
 }
 
 function useCockpit(signedIn: boolean) {
@@ -111,7 +185,6 @@ function returnTo(): { local: string } | { app: string } | null {
 function App() {
   useLang((s) => s.lang);
   const auth = useApp((s) => s.auth);
-  const connected = useApp((s) => s.connected);
   const path = useRoute((s) => s.path);
   const user = auth?.user ?? null;
   const data = useCockpit(!!user);
@@ -186,7 +259,6 @@ function App() {
         start={<Launcher data={data ?? empty} onOpen={open} onCockpit={() => navigate('/')} />}
         end={
           <>
-            <StatusPill connected={connected} serverName={auth.serverName} onLost={() => void loadAuth().catch(() => {})} />
             <button type="button" className="st-help" title={t('Help')}>
               <CircleHelp size={17} />
             </button>
@@ -222,5 +294,6 @@ loadAuth().catch((e) => {
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App />
+    <DownOverlay />
   </StrictMode>,
 );

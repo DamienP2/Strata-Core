@@ -3,8 +3,8 @@
 // télécharger, ou à envoyer depuis un autre serveur. Une restauration redémarre le Core.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Archive, Download, FileArchive, History, Plus, Trash2 } from 'lucide-react';
-import { Badge, Card, Empty, InfoTip, Modal, PageHead, Switch, confirmDialog, t, timeAgo, toast } from '@strata/ui';
-import { api, upload } from '../api';
+import { Badge, Card, Empty, InfoTip, Modal, PageHead, Switch, confirmDialog, t, timeAgo, tn, toast } from '@strata/ui';
+import { api, expectRestart, upload } from '../api';
 import { friendly } from '../errors';
 
 interface Manifest {
@@ -29,20 +29,6 @@ function size(n: number) {
 
 function kindLabel(k: string) {
   return k === 'manual' ? t('By hand') : k === 'daily' ? t('Daily') : k === 'before-restore' ? t('Before a restore') : k === 'uploaded' ? t('Uploaded') : k;
-}
-
-/** Attend que le Core redémarré réponde, puis recharge la page. */
-async function afterRestart() {
-  await new Promise((r) => setTimeout(r, 2500));
-  for (let i = 0; i < 90; i++) {
-    try {
-      await api('GET', '/api/health');
-      location.reload();
-      return;
-    } catch {
-      await new Promise((r) => setTimeout(r, 1000));
-    }
-  }
 }
 
 export function Backups() {
@@ -102,7 +88,7 @@ export function Backups() {
 
   return (
     <>
-      <PageHead title={t('Backups')} sub={t('The Core’s settings: accounts, hardware, flows, HTTPS, alerts…')}>
+      <PageHead title={t('Backups')} sub={list ? tn(list.length, '{n} backup', '{n} backups') : undefined}>
         <input ref={picker} type="file" accept=".gz,.tgz,application/gzip" hidden onChange={(e) => e.target.files?.[0] && void send(e.target.files[0])} />
         <button type="button" className="st-btn" disabled={sent !== null || restarting} onClick={() => picker.current?.click()}>
           <FileArchive size={14} /> {t('Send a backup')}
@@ -183,7 +169,7 @@ export function Backups() {
           onDone={() => {
             setRestoring(null);
             setRestarting(true);
-            void afterRestart();
+            expectRestart('restart');
           }}
         />
       )}

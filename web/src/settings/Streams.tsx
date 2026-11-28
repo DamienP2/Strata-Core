@@ -179,7 +179,7 @@ export function StreamsPage() {
       </PageHead>
       {data.problem && <p className="core-warn">{friendly(data.problem)}</p>}
 
-      <Card icon={<ArrowDownToLine size={16} />} title={t('Inputs')} actions={<span className="st-muted">{t('Received by the Core, shared with the apps in MXL')}</span>}>
+      <Card icon={<ArrowDownToLine size={16} />} title={t('Inputs')}>
         {data.inputs.length === 0 ? (
           <Empty icon={Cast} text={t('No network input')} />
         ) : (
@@ -236,7 +236,7 @@ export function StreamsPage() {
         )}
       </Card>
 
-      <Card icon={<ArrowUpFromLine size={16} />} title={t('Outputs')} actions={<span className="st-muted">{t('Encoded once by the Core, sent to each destination')}</span>}>
+      <Card icon={<ArrowUpFromLine size={16} />} title={t('Outputs')}>
         {data.outputs.length === 0 ? (
           <Empty icon={Cast} text={t('No network output')} />
         ) : (

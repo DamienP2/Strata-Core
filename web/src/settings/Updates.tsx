@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CloudDownload, Download, FileArchive, KeyRound, RefreshCw } from 'lucide-react';
 import { Badge, Card, Field, Modal, PageHead, Switch, confirmDialog, t, timeAgo, tn, toast } from '@strata/ui';
-import { api, upload } from '../api';
+import { api, expectRestart, upload } from '../api';
 import { friendly } from '../errors';
 import { JobLine, running, type Job } from './Install';
 import type { AppInfo } from './Library';
@@ -49,21 +49,6 @@ export function useUpdates() {
     return () => clearInterval(timer);
   }, [busy, reload]);
   return { info, setInfo, reload };
-}
-
-/** Attend que le Core redémarré réponde, puis recharge la page (la nouvelle interface). */
-async function afterRestart() {
-  await new Promise((r) => setTimeout(r, 2500));
-  for (let i = 0; i < 90; i++) {
-    try {
-      await api('GET', '/api/health');
-      location.reload();
-      return;
-    } catch {
-      await new Promise((r) => setTimeout(r, 1000));
-    }
-  }
-  toast(t('The Core does not answer'), 'error');
 }
 
 /** Une clé d'accès GitHub à remplacer ou retirer. */
@@ -115,7 +100,7 @@ export function Updates({ apps, jobs, reloadApps, onCount }: { apps: AppInfo[] |
   useEffect(() => {
     if (done && !restarting) {
       setRestarting(true);
-      void afterRestart();
+      expectRestart('update');
     }
   }, [done, restarting]);
 
@@ -144,6 +129,7 @@ export function Updates({ apps, jobs, reloadApps, onCount }: { apps: AppInfo[] |
     if (!ok) return;
     try {
       setInfo(await api<UpdatesInfo>('POST', '/api/updates/core'));
+      expectRestart('update');
     } catch (e) {
       toast(friendly(e), 'error');
     }
@@ -162,7 +148,7 @@ export function Updates({ apps, jobs, reloadApps, onCount }: { apps: AppInfo[] |
       const r = await upload<{ version: string }>('/api/updates/core/upload', file, setSent);
       toast(t('Core {version} installed; restarting…', { version: r.version }));
       setRestarting(true);
-      void afterRestart();
+      expectRestart('update');
     } catch (e) {
       toast(friendly(e), 'error');
       setSent(null);

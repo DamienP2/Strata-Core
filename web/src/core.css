@@ -214,4 +214,12 @@ button.core-hw-role.on { border-style: solid; background: color-mix(in srgb, var
 .core-nic-state { display: inline-flex; align-items: center; gap: 8px; }
 .core-table-group td { background: var(--panel-2); font-size: 12px; font-weight: 600; color: var(--text-2); padding-top: 6px; padding-bottom: 6px; }
 .core-table-group .st-mono { font-weight: 400; margin-left: 6px; opacity: .7; }
+/* L'écran bloqué : mise à jour, redémarrage, serveur injoignable */
+.core-down { position: fixed; inset: 0; z-index: 10000; display: grid; place-items: center; padding: 16px; background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(6px); }
+.core-down-box { width: min(440px, 100%); padding: 28px; border-radius: 14px; border: 1px solid var(--line-2); background: var(--panel); text-align: center; box-shadow: 0 20px 60px rgba(0, 0, 0, .45); }
+.core-down-box h2 { margin: 14px 0 8px; font-size: 18px; }
+.core-down-box p { margin: 0; color: var(--text-2); line-height: 1.5; }
+.core-down-icon { display: inline-grid; place-items: center; width: 52px; height: 52px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); }
+.core-down-box.lost .core-down-icon { background: var(--live-soft); color: var(--live); }
+.core-down-wait { display: inline-flex; align-items: center; gap: 6px; margin-top: 14px !important; font-size: 13px; color: var(--text-3) !important; }
 

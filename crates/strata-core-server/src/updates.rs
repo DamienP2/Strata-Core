@@ -99,6 +99,13 @@ pub struct Updates {
     last_auto: Mutex<Option<Instant>>,
 }
 
+impl Updates {
+    /// Une mise à jour du Core est en cours (téléchargement, vérification, remplacement).
+    pub fn busy(&self) -> bool {
+        self.job.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|j| j.running())
+    }
+}
+
 impl Default for Updates {
     fn default() -> Self {
         Updates {

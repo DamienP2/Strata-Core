@@ -60,5 +60,8 @@ async fn health(State(s): State<Shared>) -> Json<Value> {
         "version": strata_core::VERSION,
         "needsSetup": s.auth.needs_setup(),
         "uptimeSecs": s.started_at.elapsed().as_secs(),
+        // L'interface bloque l'écran pendant une mise à jour ou un redémarrage.
+        "updating": s.updates.busy(),
+        "restarting": s.restart_asked(),
     }))
 }

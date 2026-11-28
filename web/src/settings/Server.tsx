@@ -4,7 +4,7 @@ import { CircleCheck, Download, FileKey, Globe, Lock, Package, RefreshCw, Rotate
 import {
   Badge, Card, Field, FieldGrid, PageHead, SaveBar, Segmented, confirmDialog, formatDate, formatDuration, setTimezone, t, tn, toast,
 } from '@strata/ui';
-import { api } from '../api';
+import { api, expectRestart } from '../api';
 import { friendly } from '../errors';
 import { navigate } from '../router';
 import type { AppInfo } from './Library';
@@ -67,19 +67,7 @@ function useServer() {
   return { info, setInfo, reload };
 }
 
-/** Attend que le Core réponde de nouveau (après un redémarrage). */
-async function waitForCore() {
-  await new Promise((r) => setTimeout(r, 1500));
-  for (let i = 0; i < 60; i++) {
-    try {
-      await api('GET', '/api/health');
-      return true;
-    } catch {
-      await new Promise((r) => setTimeout(r, 1000));
-    }
-  }
-  return false;
-}
+
 
 function httpsLine(h: ServerInfo['https']) {
   if (h.mode === 'off') return <Badge>{t('HTTP only')}</Badge>;
@@ -103,7 +91,7 @@ export function Overview({ apps }: { apps: AppInfo[] | null }) {
     setRestarting(true);
     try {
       await api('POST', '/api/server/restart');
-      toast((await waitForCore()) ? t('The Core restarted') : t('The Core does not answer'), 'info');
+      expectRestart('restart');
     } catch (e) {
       toast(friendly(e), 'error');
     }

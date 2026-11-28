@@ -224,7 +224,7 @@ export function InputsCard({ cfg }: { cfg: HwConfig }) {
   const r = usePoll<{ inputs: InputStatus[] }>('/api/hardware/inputs');
   if (!r || r.inputs.length === 0) return null;
   return (
-    <Card icon={<Cable size={16} />} title={t('Shared inputs')} actions={<span className="st-muted">{t('Captured once by the Core, read by the apps')}</span>}>
+    <Card icon={<Cable size={16} />} title={t('Shared inputs')}>
       <div className="core-inputs">
         {r.inputs.map((i) => (
           <InputTile key={`${i.card}-${i.connector}`} i={i} cfg={cfg} />
@@ -247,7 +247,7 @@ export function OutputsCard({ cfg }: { cfg: HwConfig }) {
   const r = usePoll<{ outputs: OutputStatus[] }>('/api/hardware/outputs');
   if (!r || r.outputs.length === 0) return null;
   return (
-    <Card icon={<MonitorUp size={16} />} title={t('Outputs')} actions={<span className="st-muted">{t('What the apps send')}</span>}>
+    <Card icon={<MonitorUp size={16} />} title={t('Outputs')}>
       <div className="core-inputs">
         {r.outputs.map((o) => {
           const { wire, card } = wireOf(cfg, o.card, o.connector);
@@ -296,7 +296,6 @@ export function FlowsCard({ flows, state }: { flows: Flow[]; state?: FlowsState 
     <Card
       icon={<Waves size={16} />}
       title={t('Video flows')}
-      actions={<span className="st-muted">{engine?.active ? t('Received and sent by the Core (MTL), shared with the apps in MXL') : t('Received flows are joined only while this page is open')}</span>}
     >
       {engine?.problem && <p className="core-warn">{engine.problem}</p>}
       <div className="core-inputs">
