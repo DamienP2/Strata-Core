@@ -6,8 +6,13 @@
 //! - Une session par source, lancée à la première demande, arrêtée 15 s après la dernière (et
 //!   sans personne qui écoute).
 //! - L'écoute : du PCM 16 bits stéréo 48 kHz en flux HTTP continu (le navigateur le joue).
+//! - Surveillée en continu (`watch`) : la session ne s'arrête plus, son historique et son journal
+//!   continuent sans personne devant (jusqu'au redémarrage du Core ou à l'arrêt).
 pub mod audio;
+pub mod history;
 pub mod video;
+
+use history::{History, Level};
 
 use axum::{
     extract::{Query, State},
@@ -137,6 +142,9 @@ struct Session {
     group: Mutex<Option<Vec<usize>>>,
     listeners: Mutex<Vec<Listener>>,
     done: AtomicBool,
+    history: Mutex<History>,
+    /// Surveillée en continu : pas d'arrêt faute de regard.
+    pinned: AtomicBool,
 }
 
 #[derive(Default)]
@@ -145,7 +153,7 @@ pub struct Analyzer {
 }
 
 impl Analyzer {
-    fn session(&self, src: Source, mxl: Arc<Mxl>) -> Arc<Session> {
+    fn session(&self, src: Source, mxl: Arc<Mxl>, app: Shared) -> Arc<Session> {
         let mut map = self.sessions.lock().unwrap();
         map.retain(|_, s| !s.done.load(Ordering::Relaxed));
         if let Some(s) = map.get(&src.key).filter(|s| s.source == src) {
@@ -164,14 +172,25 @@ impl Analyzer {
             group: Mutex::new(None),
             listeners: Mutex::new(Vec::new()),
             done: AtomicBool::new(false),
+            history: Mutex::new(History::default()),
+            pinned: AtomicBool::new(false),
         });
         let s2 = s.clone();
         let _ = std::thread::Builder::new().name(format!("analyze-{}", src.key)).spawn(move || {
-            run(&s2, &mxl);
+            run(&s2, &mxl, &app);
             s2.done.store(true, Ordering::Relaxed);
         });
         map.insert(src.key, s.clone());
         s
+    }
+
+    /// Les sources surveillées en continu.
+    pub fn watched(&self) -> Vec<String> {
+        let map = self.sessions.lock().unwrap();
+        let mut v: Vec<String> =
+            map.iter().filter(|(_, s)| s.pinned.load(Ordering::Relaxed) && !s.done.load(Ordering::Relaxed)).map(|(k, _)| k.clone()).collect();
+        v.sort();
+        v
     }
 
     pub fn stop_all(&self) {
@@ -184,6 +203,9 @@ impl Analyzer {
 /// Une mesure du calage : l'éclair (l'index de son de son image) et le repère du son le plus
 /// proche, jusqu'à ±400 ms.
 const LIP_SPAN: u64 = 19_200;
+
+/// Au-delà, le calage est signalé dans le journal (ms).
+const LIP_TOLERANCE_MS: f64 = 5.0;
 
 /// Les repères du son d'un canal pour le calage : où le son se coupe (mire Calage : un son
 /// continu coupé à l'éclair) et où il reprend après un silence (mire Synchro AV : un bip à
@@ -257,8 +279,45 @@ pub fn listen_mix(frame: &[f32], solo: &[usize]) -> (f32, f32) {
     }
 }
 
-fn run(s: &Session, mxl: &Mxl) {
+/// Les mesures d'une seconde, accumulées entre deux échantillons de l'historique.
+#[derive(Default)]
+struct Second {
+    peak: Option<f32>,
+    clip: bool,
+    silent: Vec<bool>,
+}
+
+/// Le suivi IP d'un flux ST 2110 (les compteurs de la seconde d'avant).
+struct IpTrack {
+    id: String,
+    name: String,
+    lost: Option<u64>,
+    unrecovered: Option<u64>,
+}
+
+fn now_ms() -> i64 {
+    jiff::Timestamp::now().as_millisecond()
+}
+
+fn run(s: &Session, mxl: &Mxl, app: &Shared) {
     let src = &s.source;
+    let mut sec = Second::default();
+    let mut sampled = Instant::now();
+    let mut last_format: Option<String> = None;
+    let started = Instant::now();
+    let hw = HardwareConfig::load(&app.data_dir);
+    let mut ips: Vec<IpTrack> = src
+        .video
+        .iter()
+        .chain(src.audio.iter())
+        .chain(src.data.iter())
+        .filter_map(|n| n.strip_prefix("2110/"))
+        .filter_map(|id| hw.flows.iter().find(|f| f.id == id))
+        .map(|f| IpTrack { id: f.id.clone(), name: f.name.clone(), lost: None, unrecovered: None })
+        .collect();
+    let video_flow = src.video.as_deref().and_then(|n| n.strip_prefix("2110/")).map(str::to_string);
+    drop(hw);
+    s.history.lock().unwrap().event(now_ms(), Level::Info, "started", json!({ "source": src.label }));
     let vid = src.video.as_deref().map(strata_mxl::flow_id);
     let aids: Vec<strata_mxl::Uuid> = src.audio.iter().map(|a| strata_mxl::flow_id(a)).collect();
     let did = src.data.as_deref().map(strata_mxl::flow_id);
@@ -289,7 +348,7 @@ fn run(s: &Session, mxl: &Mxl) {
             l.retain(|x| !x.tx.is_closed());
             !l.is_empty()
         };
-        if idle && !listening {
+        if idle && !listening && !s.pinned.load(Ordering::Relaxed) {
             break;
         }
         // Les flux, revus chaque seconde.
@@ -479,6 +538,17 @@ fn run(s: &Session, mxl: &Mxl) {
             } else {
                 levels.clear();
             }
+            // Pour l'historique : la crête de la seconde, la saturation, les canaux muets.
+            for l in &levels {
+                sec.peak = Some(sec.peak.map_or(l.peak, |p| p.max(l.peak)));
+                sec.clip |= l.peak > -0.1;
+            }
+            if sec.silent.len() != levels.len() {
+                sec.silent = vec![true; levels.len()];
+            }
+            for (i, l) in levels.iter().enumerate() {
+                sec.silent[i] &= l.peak < -60.0;
+            }
             let format = vr.as_ref().map(|r| crate::streams::engine::format_name(&r.video));
             let frozen = still_since.map(|t| t.elapsed().as_secs_f32()).filter(|t| *t >= 2.0 && !scopes.as_ref().is_some_and(|s| s.black));
             let silent: Vec<bool> = levels.iter().map(|l| l.peak < -60.0).collect();
@@ -510,6 +580,95 @@ fn run(s: &Session, mxl: &Mxl) {
             });
             *s.snap.lock().unwrap() = snap;
         }
+        // L'historique et le journal, chaque seconde.
+        if sampled.elapsed() >= Duration::from_secs(1) {
+            sampled = Instant::now();
+            let t = now_ms();
+            let mut h = s.history.lock().unwrap();
+            let mut state = 0u32;
+            let mut values: Vec<(&'static str, Option<f32>)> = Vec::new();
+            // Laisse aux lecteurs le temps de s'ouvrir avant de crier à l'absence.
+            let warm = started.elapsed() >= Duration::from_secs(3);
+            let format = vr.as_ref().map(|r| crate::streams::engine::format_name(&r.video));
+            if let Some(f) = &format {
+                if last_format.as_ref().is_some_and(|l| l != f) {
+                    h.event(t, Level::Info, "format", json!({ "from": last_format, "to": f }));
+                }
+                last_format = Some(f.clone());
+            }
+            if src.video.is_some() {
+                let none = scopes.is_none();
+                let black = scopes.as_ref().is_some_and(|v| v.black);
+                let frozen = !black && still_since.is_some_and(|t| t.elapsed() >= Duration::from_secs(2));
+                let gamut = scopes.as_ref().map_or(0.0, |v| v.gamut);
+                if warm {
+                    h.watch(t, none, Level::Error, "noPicture", "noPictureEnd", json!({}));
+                }
+                h.watch(t, black, Level::Warn, "black", "blackEnd", json!({}));
+                h.watch(t, frozen, Level::Warn, "frozen", "frozenEnd", json!({}));
+                h.watch(t, gamut > 1.0, Level::Warn, "gamut", "gamutEnd", json!({ "pct": (gamut * 10.0).round() / 10.0 }));
+                state |= if none && warm { history::NO_PICTURE } else { 0 } | if black { history::BLACK } else { 0 } | if frozen { history::FROZEN } else { 0 };
+                values.push(("luma", scopes.as_ref().map(|v| v.luma)));
+            }
+            if !src.audio.is_empty() {
+                let none = meter.is_none();
+                if warm {
+                    h.watch(t, none, Level::Error, "noSound", "noSoundEnd", json!({}));
+                }
+                let silent: Vec<usize> = sec.silent.iter().enumerate().filter(|(_, x)| **x).map(|(i, _)| i + 1).collect();
+                h.watch(t, !silent.is_empty(), Level::Warn, "silence", "silenceEnd", json!({ "channels": silent }));
+                h.watch(t, sec.clip, Level::Warn, "clip", "clipEnd", json!({}));
+                state |= if none && warm { history::NO_SOUND } else { 0 }
+                    | if !silent.is_empty() { history::SILENCE } else { 0 }
+                    | if sec.clip { history::CLIP } else { 0 };
+                let l = meter.as_ref().map(|m| m.loudness());
+                values.push(("momentary", l.as_ref().and_then(|l| l.momentary).map(|x| x as f32)));
+                values.push(("shortTerm", l.as_ref().and_then(|l| l.short_term).map(|x| x as f32)));
+                values.push(("peak", sec.peak));
+            }
+            if src.video.is_some() && !src.audio.is_empty() {
+                let fresh = lip_seen.is_some_and(|t| t.elapsed() < Duration::from_secs(3));
+                let off = lip.back().copied().filter(|_| fresh);
+                // Deux mesures de suite hors tolérance (une seule : la mire qui se relance).
+                let out = fresh && lip.len() >= 2 && lip.iter().rev().take(2).all(|o| o.abs() > LIP_TOLERANCE_MS);
+                h.watch(t, out, Level::Warn, "lipsync", "lipsyncEnd", json!({ "ms": off.map(|o| (o * 10.0).round() / 10.0) }));
+                state |= if out { history::LIP } else { 0 };
+                values.push(("lip", off.map(|o| o as f32)));
+            }
+            if !ips.is_empty() {
+                let mut lost_s = 0u64;
+                let mut down: Vec<String> = Vec::new();
+                for f in ips.iter_mut() {
+                    let Some(io) = app.st2110.status_of(&f.id) else { continue };
+                    if !matches!(io.state, crate::hardware::st2110io::IoState::Running) {
+                        down.push(f.name.clone());
+                    }
+                    let d = f.lost.map_or(0, |p| io.lost.saturating_sub(p));
+                    let u = f.unrecovered.map_or(0, |p| io.unrecovered.saturating_sub(p));
+                    if u > 0 {
+                        h.event(t, Level::Error, "unrecovered", json!({ "flow": f.name, "n": u }));
+                    } else if d > 0 {
+                        h.event(t, Level::Warn, "loss", json!({ "flow": f.name, "n": d }));
+                    }
+                    lost_s += d.max(u);
+                    f.lost = Some(io.lost);
+                    f.unrecovered = Some(io.unrecovered);
+                    if Some(&f.id) == video_flow.as_ref() || (video_flow.is_none() && values.iter().all(|(k, _)| *k != "late")) {
+                        values.push(("late", io.rtp_late_us.map(|x| (x / 1000.0) as f32)));
+                    }
+                }
+                if warm {
+                    h.watch(t, !down.is_empty(), Level::Error, "flowDown", "flowDownEnd", json!({ "flows": down }));
+                }
+                let ptp = app.clock.read().ptp.clone();
+                h.watch(t, !ptp.locked, Level::Error, "ptpUnlocked", "ptpUnlockedEnd", json!({ "state": ptp.port_state }));
+                state |= if lost_s > 0 { history::LOSS } else { 0 } | if !ptp.locked { history::PTP } else { 0 };
+                values.push(("loss", Some(lost_s as f32)));
+                values.push(("ptp", ptp.offset_ns.map(|x| x as f32)));
+            }
+            h.sample(t / 1000, &values, state);
+            sec = Second::default();
+        }
         std::thread::sleep(Duration::from_millis(8));
     }
     for l in s.listeners.lock().unwrap().drain(..) {
@@ -526,6 +685,9 @@ pub fn routes() -> Router<Shared> {
         .route("/api/analyze/reset", post(reset))
         .route("/api/analyze/preview.jpg", get(preview))
         .route("/api/analyze/listen", get(listen))
+        .route("/api/analyze/history", get(history_of))
+        .route("/api/analyze/watch", post(watch))
+        .route("/api/analyze/events/clear", post(clear_events))
 }
 
 #[derive(Deserialize)]
@@ -536,6 +698,9 @@ struct Pick {
     /// Les canaux de la sonie : `1-2`, `1-6`, `3`.
     #[serde(default)]
     loud: String,
+    /// La surveillance continue : `1` la met, `0` l'enlève.
+    #[serde(default)]
+    on: String,
 }
 
 /// `1-2` → [0, 1] ; `3` → [2] ; `1,3` → [0, 2].
@@ -563,7 +728,7 @@ fn mxl(s: &crate::state::AppState) -> Result<Arc<Mxl>, (StatusCode, String)> {
 async fn list(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
     require(me.admin)?;
     let s2 = s.clone();
-    let v = blocking(move || json!({ "sources": sources(&s2), "mxl": crate::hardware::mxl_of(&s2).is_some() })).await?;
+    let v = blocking(move || json!({ "sources": sources(&s2), "mxl": crate::hardware::mxl_of(&s2).is_some(), "watched": s2.analyzer.watched() })).await?;
     Ok(Json(v))
 }
 
@@ -572,7 +737,7 @@ async fn state(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q): 
     let s2 = s.clone();
     let v = blocking(move || {
         let src = find(&s2, &q.source)?;
-        let session = s2.analyzer.session(src.clone(), mxl(&s2)?);
+        let session = s2.analyzer.session(src.clone(), mxl(&s2)?, s2.clone());
         let g = channels_of(&q.loud);
         if !g.is_empty() {
             *session.group.lock().unwrap() = Some(g);
@@ -618,12 +783,58 @@ fn ip_view(s: &crate::state::AppState, src: &Source) -> Value {
     json!({ "flows": flows, "ptp": s.clock.read().ptp, "redundant": hw.network.media_mode == crate::hardware::MediaMode::Redundant })
 }
 
+/// L'historique (10 min, une mesure par seconde) et le journal d'une source.
+async fn history_of(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q): Query<Pick>) -> ApiResult<Json<Value>> {
+    require(me.admin)?;
+    let s2 = s.clone();
+    let v = blocking(move || {
+        let src = find(&s2, &q.source)?;
+        let session = s2.analyzer.session(src, mxl(&s2)?, s2.clone());
+        let mut v = session.history.lock().unwrap().view(500);
+        v["watched"] = json!(session.pinned.load(Ordering::Relaxed));
+        Ok::<_, (StatusCode, String)>(v)
+    })
+    .await??;
+    Ok(Json(v))
+}
+
+/// Surveiller une source en continu (son journal continue sans personne devant), ou plus.
+async fn watch(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q): Query<Pick>) -> ApiResult<StatusCode> {
+    require(me.admin)?;
+    let s2 = s.clone();
+    let user = me.username.clone();
+    blocking(move || {
+        let src = find(&s2, &q.source)?;
+        let on = q.on == "1";
+        let session = s2.analyzer.session(src.clone(), mxl(&s2)?, s2.clone());
+        session.pinned.store(on, Ordering::Relaxed);
+        let level = Level::Info;
+        session.history.lock().unwrap().event(now_ms(), level, if on { "watchOn" } else { "watchOff" }, json!({ "user": user }));
+        tracing::info!("analyzer: {} {} by {user}", src.label, if on { "watched continuously" } else { "no longer watched" });
+        Ok::<_, (StatusCode, String)>(())
+    })
+    .await??;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn clear_events(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q): Query<Pick>) -> ApiResult<StatusCode> {
+    require(me.admin)?;
+    let s2 = s.clone();
+    blocking(move || {
+        let src = find(&s2, &q.source)?;
+        s2.analyzer.session(src, mxl(&s2)?, s2.clone()).history.lock().unwrap().clear_events();
+        Ok::<_, (StatusCode, String)>(())
+    })
+    .await??;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn reset(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q): Query<Pick>) -> ApiResult<StatusCode> {
     require(me.admin)?;
     let s2 = s.clone();
     blocking(move || {
         let src = find(&s2, &q.source)?;
-        s2.analyzer.session(src, mxl(&s2)?).reset.store(true, Ordering::Relaxed);
+        s2.analyzer.session(src, mxl(&s2)?, s2.clone()).reset.store(true, Ordering::Relaxed);
         Ok::<_, (StatusCode, String)>(())
     })
     .await??;
@@ -653,7 +864,7 @@ async fn listen(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q):
     let s2 = s.clone();
     blocking(move || {
         let src = find(&s2, &q.source)?;
-        let session = s2.analyzer.session(src, mxl(&s2)?);
+        let session = s2.analyzer.session(src, mxl(&s2)?, s2.clone());
         session.listeners.lock().unwrap().push(Listener { solo, tx });
         Ok::<_, (StatusCode, String)>(())
     })
