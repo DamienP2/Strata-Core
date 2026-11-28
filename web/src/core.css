@@ -298,3 +298,13 @@ button.core-hw-role.on { border-style: solid; background: color-mix(in srgb, var
 @media (max-width: 700px) { .core-ess-row, .core-ess-row.one { grid-template-columns: 1fr; } }
 .core-served { display: inline-flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent); text-decoration: none; }
 .core-served:hover { text-decoration: underline; }
+/* Réglages › Fonctions */
+.core-features { display: flex; flex-direction: column; }
+.core-feature { display: flex; flex-direction: column; gap: 6px; padding: 14px 0; border-top: 1px solid var(--line); }
+.core-feature:first-child { border-top: 0; padding-top: 0; }
+.core-feature.sub { padding-left: 28px; }
+.core-feature p { margin: 0; font-size: var(--fs-12); }
+.core-feature-head { display: flex; align-items: center; gap: 10px; }
+.core-feature-head .st-switch { flex: 1; }
+.core-feature-license { display: flex; align-items: center; gap: 8px; font-size: var(--fs-12); flex-wrap: wrap; }
+.core-feature-tools { margin-left: auto; display: flex; align-items: center; gap: 4px; }

@@ -520,7 +520,8 @@ pub async fn apply(s: &Shared) {
     else {
         return;
     };
-    let want = cfg.nmos.enabled.then(|| Key { port: cfg.nmos.port, iface, ip, host: host_name() });
+    // ST 2110 coupé (Réglages › Fonctions) : rien à annoncer.
+    let want = (cfg.nmos.enabled && s.features.on(crate::features::ST2110)).then(|| Key { port: cfg.nmos.port, iface, ip, host: host_name() });
     let allowed: Vec<_> = cfg.nmos.allowed.iter().filter_map(|a| crate::snmp::net_of(a)).collect();
     let origins: Vec<String> = cfg.nmos.origins.iter().map(|o| o.trim().trim_end_matches('/').to_ascii_lowercase()).filter(|o| !o.is_empty()).collect();
     let same = s.nmos.lock().run.as_ref().map(|r| r.key.clone()) == want;

@@ -192,7 +192,8 @@ fn ifaces_of(cfg: &HardwareConfig) -> Vec<Ipv4Addr> {
 /// Tient l'écoute (et l'annonce) en accord avec les réglages (bloquant, rapide).
 pub fn apply(s: &crate::state::Shared) {
     let cfg = HardwareConfig::load(&s.data_dir);
-    let want = Want { ifaces: ifaces_of(&cfg) };
+    // Dante coupé (Réglages › Fonctions) : ni écoute ni annonce.
+    let want = Want { ifaces: if s.features.on(crate::features::DANTE) { ifaces_of(&cfg) } else { Vec::new() } };
     let mut run = s.sap.run.lock().unwrap_or_else(|e| e.into_inner());
     if run.as_ref().is_some_and(|r| r.want == want) {
         return;
@@ -204,7 +205,8 @@ pub fn apply(s: &crate::state::Shared) {
         }
     }
     if want.ifaces.is_empty() {
-        *s.sap.error.lock().unwrap() = Some("no network interface to listen on (management or media port)".into());
+        *s.sap.error.lock().unwrap() =
+            s.features.on(crate::features::DANTE).then(|| "no network interface to listen on (management or media port)".to_string());
         return;
     }
     let stop = Arc::new(AtomicBool::new(false));

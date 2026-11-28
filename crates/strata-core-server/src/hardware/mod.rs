@@ -736,7 +736,15 @@ pub fn reconcile_inputs(s: &crate::state::AppState) {
         Some(Err(e)) => Err(e.clone()),
         None => Err("not loaded yet".to_string()),
     };
-    s.st2110.apply(&cfg, mtl, mxl_of(s));
+    // ST 2110 coupé (Réglages › Fonctions) : MTL fermé, aucun flux.
+    let st2110_cfg = if s.features.on(crate::features::ST2110) {
+        std::borrow::Cow::Borrowed(&cfg)
+    } else {
+        let mut c = cfg.clone();
+        c.network.media_io = MediaIo::Off;
+        std::borrow::Cow::Owned(c)
+    };
+    s.st2110.apply(&st2110_cfg, mtl, mxl_of(s));
     crate::streams::reconcile(s);
 }
 
@@ -1355,6 +1363,8 @@ async fn shared(State(s): State<Shared>, ConnectInfo(peer): ConnectInfo<SocketAd
             "mxl": mxl.as_ref().map(|m| json!({"domain": m.domain(), "version": m.version})),
             // Les flux réseau tenus par le Core : entrées à lire, sorties à écrire.
             "streams": crate::streams::api::shared(&s2),
+            // Les fonctions du Core actives (Réglages › Fonctions) : une appli n'offre que celles-là.
+            "features": crate::features::DEFS.iter().map(|d| (d.id, s2.features.on(d.id))).collect::<std::collections::BTreeMap<_, _>>(),
         })
     })
     .await?;

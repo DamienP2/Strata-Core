@@ -14,6 +14,7 @@ pub mod catalog;
 pub mod cli;
 pub mod cluster;
 pub mod config;
+pub mod features;
 pub mod groups;
 pub mod guard;
 pub mod hardware;

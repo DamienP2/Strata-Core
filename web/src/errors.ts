@@ -90,6 +90,8 @@ const SHAPED: [RegExp, string, string[]][] = [
   [/^cannot open the input: (.+)$/, 'cannot open the input: {why}', ['why']],
   [/^cannot share the input \((.+)\): (.+)$/, 'cannot share the input ({path}): {why}', ['path', 'why']],
   [/^the certificate is valid only from (.+)$/, 'The certificate is valid only from {date}', ['date']],
+  // Fonctions
+  [/^MTL is not loaded: (.+)$/, 'MTL is not loaded: {why}', ['why']],
 ];
 
 export function friendly(e: unknown): string {

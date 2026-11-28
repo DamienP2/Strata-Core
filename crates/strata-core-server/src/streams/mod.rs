@@ -407,7 +407,8 @@ pub fn house_video(hw: &crate::hardware::HardwareConfig) -> strata_mxl::Video {
 
 /// Tient les flux réseau en accord avec leurs réglages (bloquant).
 pub fn reconcile(s: &crate::state::AppState) {
-    let cfg = StreamsConfig::load(&s.data_dir);
+    // Coupés (Réglages › Fonctions) : rien ne tourne.
+    let cfg = if s.features.on(crate::features::STREAMS) { StreamsConfig::load(&s.data_dir) } else { StreamsConfig::default() };
     let mxl = match s.mxl.get() {
         Some(Ok(m)) => Ok(m.clone()),
         Some(Err(e)) => Err(e.clone()),
