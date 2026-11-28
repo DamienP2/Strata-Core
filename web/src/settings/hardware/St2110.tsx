@@ -12,6 +12,7 @@ import { usePoll } from '../../poll';
 import { HwSaveBar, useHardware } from './common';
 import { Preview } from './Inputs';
 import { MediaPortsCard, NmosCard, PortsLoad, nicOptions } from './Hardware';
+import { featureOn, loadFeatures, useFeatures } from '../Features';
 import { editHw, type Capacity, type Flow, type HwConfig, type NmosStatus } from './store';
 
 type Dir = 'input' | 'output';
@@ -74,6 +75,20 @@ function essenceName(f: Flow, all: Flow[]): string {
   if (f.essence === 'data') return 'ANC';
   const audios = all.filter((x) => x.essence === 'audio');
   return audios.length > 1 ? t('Audio {n}', { n: audios.indexOf(f) + 1 }) : t('Audio');
+}
+
+/** Les débits JPEG XS proposés, en bits par pixel (4:2:2 10 bits non compressé : 20). */
+const BPPS = [2, 3, 4, 6, 8, 10];
+
+/** « 4 bpp · 5:1 · 415 Mb/s » pour ce format (« 1080p50 »). */
+function bppLabel(bpp: number, format: string) {
+  const m = /^(\d+)([ip])([\d.]+)$/.exec(format);
+  const ratio = `${Math.round((20 / bpp) * 10) / 10}:1`;
+  if (!m) return `${bpp} bpp · ${ratio}`;
+  const h = Number(m[1]);
+  const w = h === 2160 ? 3840 : h === 720 ? 1280 : h === 576 ? 720 : h === 486 ? 720 : 1920;
+  const fps = Number(m[3]) / (m[2] === 'i' ? 2 : 1);
+  return `${bpp} bpp · ${ratio} · ${Math.round((w * h * fps * bpp) / 1e6)} Mb/s`;
 }
 
 function formatOf(f: Flow, house: string): string {
@@ -158,6 +173,7 @@ export function St2110Page() {
           group={editing.group}
           add={editing.add}
           redundant={redundant}
+          house={house}
           onClose={() => setEditing(null)}
         />
       )}
@@ -340,13 +356,14 @@ function EssenceRow({ f, all, io, input, redundant, house }: { f: Flow; all: Flo
       <span className="core-flux-kind">
         <b>{essenceName(f, all)}</b>
         <span className="st-muted">
-          {f.essence === 'video' ? '2110-20' : f.essence === 'audio' ? '2110-30' : '2110-40'}
+          {f.essence === 'video' ? (f.codec === 'jpegxs' ? '2110-22 · JPEG XS' : '2110-20') : f.essence === 'audio' ? '2110-30' : '2110-40'}
           {f.label ? ` · ${f.label}` : ''}
         </span>
       </span>
       <span className="st-mono">
         {io?.format && f.essence !== 'audio' ? io.format : formatOf(f, house)}
-        {!input && f.essence === 'video' && <span className="st-muted"> · {f.pacing || 'N'}</span>}
+        {f.essence === 'video' && f.codec === 'jpegxs' && <span className="st-muted"> · {f.bpp || 4} bpp</span>}
+        {!input && f.essence === 'video' && f.codec !== 'jpegxs' && <span className="st-muted"> · {f.pacing || 'N'}</span>}
       </span>
       <span className="core-flux-legs">
         {legs.map((l, i) => {
@@ -514,7 +531,7 @@ function nextFree(ip: string, taken: Set<string>): string {
   return ip;
 }
 
-function FlowEditor({ dir, draft, group, add, redundant, onClose }: { dir: Dir; draft: HwConfig; group: string | null; add?: Flow['essence']; redundant: boolean; onClose: () => void }) {
+function FlowEditor({ dir, draft, group, add, redundant, house, onClose }: { dir: Dir; draft: HwConfig; group: string | null; add?: Flow['essence']; redundant: boolean; house: string; onClose: () => void }) {
   const existing = group ? draft.flows.filter((f) => groupOf(f) === group).sort((a, b) => ORDER[a.essence] - ORDER[b.essence]) : [];
   const head = existing[0];
   const input = dir === 'input';
@@ -523,6 +540,14 @@ function FlowEditor({ dir, draft, group, add, redundant, onClose }: { dir: Dir; 
   const [format, setFormat] = useState(existing.find((f) => f.essence === 'video')?.format ?? head?.format ?? '');
   const [port, setPort] = useState(head?.port ?? 1);
   const [pacing, setPacing] = useState<NonNullable<Flow['pacing']>>(existing.find((f) => f.essence === 'video')?.pacing ?? '');
+  const [codec, setCodec] = useState<NonNullable<Flow['codec']>>(existing.find((f) => f.essence === 'video')?.codec ?? '');
+  const [bpp, setBpp] = useState(existing.find((f) => f.essence === 'video')?.bpp || 4);
+  // JPEG XS proposé si la fonction est active (ou déjà choisi pour ce flux).
+  const features = useFeatures((x) => x.list);
+  useEffect(() => {
+    if (!features) void loadFeatures();
+  }, [features]);
+  const jpegxsOffered = featureOn(features, 'jpegxs') && !!features || codec === 'jpegxs';
   const [nmosAddresses, setNmosAddresses] = useState(head?.nmosAddresses ?? false);
   const [list, setList] = useState<Ess[]>(() => {
     const l = head ? existing.map(essOf) : input ? [blankEss('video'), blankEss('audio')] : [blankEss('video'), blankEss('audio')];
@@ -556,7 +581,7 @@ function FlowEditor({ dir, draft, group, add, redundant, onClose }: { dir: Dir; 
     try {
       const res = await fetch('/api/hardware/sdp', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/sdp' }, body: text });
       if (!res.ok) throw new ApiError(res.status, await res.text());
-      const r = (await res.json()) as { media: { essence: Flow['essence']; format?: string | null; channels?: number; bits?: number; ptimeUs?: number }; legs: { group: string; port: number; source?: string | null }[]; payloadType: number };
+      const r = (await res.json()) as { media: { essence: Flow['essence']; format?: string | null; codec?: 'jpegxs'; bpp?: number; channels?: number; bits?: number; ptimeUs?: number }; legs: { group: string; port: number; source?: string | null }[]; payloadType: number };
       const e: Ess = {
         ...blankEss(r.media.essence),
         red: { ip: r.legs[0]?.group ?? '', port: String(r.legs[0]?.port ?? 5004) },
@@ -569,6 +594,10 @@ function FlowEditor({ dir, draft, group, add, redundant, onClose }: { dir: Dir; 
         ptimeUs: r.media.ptimeUs ?? 1000,
       };
       if (r.media.essence === 'video' && r.media.format) setFormat(r.media.format);
+      if (r.media.essence === 'video') {
+        setCodec(r.media.codec ?? '');
+        if (r.media.bpp) setBpp(r.media.bpp);
+      }
       // Remplace l'essence de même genre encore vide, sinon s'ajoute.
       const i = list.findIndex((x) => x.essence === r.media.essence && !x.red.ip);
       setList(i >= 0 ? list.map((x, k) => (k === i ? { ...e, id: x.id, base: x.base, label: x.label } : x)) : [...list, e].sort((a, b) => ORDER[a.essence] - ORDER[b.essence]));
@@ -622,7 +651,9 @@ function FlowEditor({ dir, draft, group, add, redundant, onClose }: { dir: Dir; 
       enabled,
       source: input ? e.source.trim() || null : null,
       sourceBlue: input ? e.sourceBlue.trim() || null : null,
-      pacing: !input && e.essence === 'video' ? pacing : '',
+      pacing: !input && e.essence === 'video' && codec !== 'jpegxs' ? pacing : '',
+      codec: e.essence === 'video' ? codec : '',
+      bpp: e.essence === 'video' && codec === 'jpegxs' ? bpp : 0,
       nmosAddresses: !input && nmosAddresses,
     }));
     editHw((x) => {
@@ -660,6 +691,25 @@ function FlowEditor({ dir, draft, group, add, redundant, onClose }: { dir: Dir; 
           <Dropdown value={format} options={formats} onChange={setFormat} />
         </Field>
       </FieldGrid>
+      {videos > 0 && jpegxsOffered && (
+        <FieldGrid two>
+          <Field label={t('Video')} group>
+            <Segmented<'' | 'jpegxs'>
+              value={codec}
+              onChange={setCodec}
+              options={[
+                { value: '', label: t('Uncompressed (2110-20)') },
+                { value: 'jpegxs', label: 'JPEG XS (2110-22)' },
+              ]}
+            />
+          </Field>
+          {codec === 'jpegxs' && (
+            <Field label={t('JPEG XS bit rate')} group>
+              <Dropdown value={String(bpp)} options={BPPS.map((b) => ({ value: String(b), label: bppLabel(b, format || house) }))} onChange={(x) => setBpp(Number(x))} />
+            </Field>
+          )}
+        </FieldGrid>
+      )}
       <FieldGrid two>
         <Switch checked={enabled} onChange={setEnabled} label={input ? t('Received by the Core') : t('Sent by the Core')} />
         {!redundant && (
@@ -721,7 +771,7 @@ function FlowEditor({ dir, draft, group, add, redundant, onClose }: { dir: Dir; 
                   />
                 </span>
               ) : (
-                <span className="st-muted">{e.essence === 'video' ? '2110-20' : '2110-40'}</span>
+                <span className="st-muted">{e.essence === 'video' ? (codec === 'jpegxs' ? '2110-22' : '2110-20') : '2110-40'}</span>
               )}
               {e.essence !== 'video' && <input className="core-ess-label" value={e.label} onChange={(x) => setEss(i, { label: x.target.value })} placeholder={t('name (optional)')} aria-label={t('Name of this essence')} />}
             </span>
@@ -758,7 +808,7 @@ function FlowEditor({ dir, draft, group, add, redundant, onClose }: { dir: Dir; 
       <details className="core-adv">
         <summary>{t('Advanced')}</summary>
         <div className="core-adv-body">
-          {!input && list.some((e) => e.essence === 'video') && (
+          {!input && codec !== 'jpegxs' && list.some((e) => e.essence === 'video') && (
             <Field label={t('Video pacing (ST 2110-21)')} group>
               <Segmented<'N' | 'NL' | 'W'> value={(pacing || 'N') as 'N' | 'NL' | 'W'} onChange={(v) => setPacing(v)} options={[{ value: 'N', label: 'N' }, { value: 'NL', label: 'NL' }, { value: 'W', label: 'W' }]} />
             </Field>

@@ -209,7 +209,13 @@ async fn open_mxl(s: &Shared) {
         Err(e) => Err(e),
     };
     match &mtl {
-        Ok(p) => tracing::info!("MTL loaded ({})", p.display()),
+        Ok(p) => {
+            tracing::info!("MTL loaded ({})", p.display());
+            // Le greffon JPEG XS (ST 2110-22), s'il est posé avec MTL : inscrit avant son ouverture.
+            if let Some(plugin) = strata_mtl::register_plugins(p, &s.data_dir) {
+                tracing::info!("JPEG XS plugin: {}", plugin.display());
+            }
+        }
         Err(e) => tracing::info!("no MTL ({e}): the ST 2110 flows are only set, not received or sent by the Core"),
     }
     let _ = s.mtl.set(mtl);

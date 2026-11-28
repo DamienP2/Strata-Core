@@ -211,6 +211,12 @@ Linux Foundation) : des flux en mémoire partagée, sur le serveur, sans passer 
   vides quand l'appli n'écrit pas. `io` de `/api/hardware/flows` dit ce qui passe (paquets reçus,
   perdus, et par réseau rouge / bleu). Réglé sur « Non », les applis reçoivent et envoient
   elles-mêmes, comme avant.
+- **JPEG XS (ST 2110-22)** : un flux vidéo peut être compressé (`codec: "jpegxs"`, `bpp` : bits par
+  pixel, 4 par défaut, soit 5:1 environ). Rien ne change pour l'appli : le flux MXL reste en v210,
+  le Core code et décode (greffon SVT-JPEG-XS de MTL). Proposé si la fonction est active.
+- **Fonctions du Core** : `features` de `/api/hardware/shared` dit lesquelles sont actives
+  (`st2110`, `jpegxs`, `ipmx`, `ipmx-privacy`, `hdcp`, `dante`, `ndi`, `streams`) ; une appli
+  n'offre que celles-là (réglées dans *Réglages › Fonctions*).
 - **Flux 2110 groupés** : un flux 2110 réunit une vidéo, des sons et des données annexes (champ
   `group` commun dans `/api/hardware/flows`). Chaque essence a son flux MXL, `2110/<id>` d'après
   l'`id` de l'essence : à la création, `<flux>` pour la vidéo, `<flux>-audio`, `<flux>-audio2`…

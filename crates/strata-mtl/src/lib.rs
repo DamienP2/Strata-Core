@@ -3,6 +3,8 @@
 //!
 //! - `libmtl.so` est chargée au lancement ([`load`]) : sans elle, le Core démarre quand même.
 //! - Les images sont en v210 (comme les flux MXL) ; en entrelacé, MTL donne et prend des trames.
+//! - ST 2110-22 (JPEG XS, par le greffon SVT-JPEG-XS de MTL) : [`Mtl::rx22`] et [`Mtl::tx22`]
+//!   donnent les mêmes images v210 ; la conversion vers les plans du greffon se fait ici.
 //! - Une instance MTL pour le serveur ([`Mtl::open`]), puis un récepteur ([`Rx`]) ou un émetteur
 //!   ([`Tx`]) par flux, sur une ou deux pattes (SMPTE 2022-7 : rouge et bleue).
 #[cfg(mtl_shim)]
@@ -87,6 +89,67 @@ mod ffi {
         pub fn smtl_tx_get(tx: *mut c_void, out: *mut Frame) -> c_int;
         pub fn smtl_tx_put(tx: *mut c_void, frame: *mut c_void, second_field: c_int) -> c_int;
         pub fn smtl_tx_close(tx: *mut c_void);
+        pub fn smtl_has_st22p() -> c_int;
+        pub fn smtl22_rx_open(
+            h: *mut c_void,
+            name: *const c_char,
+            n: c_int,
+            port_index: *const c_int,
+            ip: *const [u8; 4],
+            udp: *const u16,
+            sip: *const [u8; 4],
+            pt: u8,
+            v: Video,
+            err: *mut c_char,
+            errlen: c_int,
+        ) -> *mut c_void;
+        pub fn smtl22_rx_get(rx: *mut c_void, out: *mut Frame3) -> c_int;
+        pub fn smtl22_rx_put(rx: *mut c_void, frame: *mut c_void);
+        pub fn smtl22_rx_close(rx: *mut c_void);
+        pub fn smtl22_tx_open(
+            h: *mut c_void,
+            name: *const c_char,
+            n: c_int,
+            port_index: *const c_int,
+            ip: *const [u8; 4],
+            udp: *const u16,
+            pt: u8,
+            v: Video,
+            codestream_size: u64,
+            err: *mut c_char,
+            errlen: c_int,
+        ) -> *mut c_void;
+        pub fn smtl22_tx_get(tx: *mut c_void, out: *mut Frame3) -> c_int;
+        pub fn smtl22_tx_put(tx: *mut c_void, frame: *mut c_void, second_field: c_int) -> c_int;
+        pub fn smtl22_tx_close(tx: *mut c_void);
+    }
+
+    /// Une image en trois plans (Y, Cb, Cr ; 10 bits dans 16).
+    #[repr(C)]
+    pub struct Frame3 {
+        pub frame: *mut c_void,
+        pub data: [*mut u8; 3],
+        pub linesize: [u64; 3],
+        pub width: u32,
+        pub height: u32,
+        pub second_field: c_int,
+        pub complete: c_int,
+        pub timestamp: u64,
+    }
+
+    impl Frame3 {
+        pub fn empty() -> Frame3 {
+            Frame3 {
+                frame: std::ptr::null_mut(),
+                data: [std::ptr::null_mut(); 3],
+                linesize: [0; 3],
+                width: 0,
+                height: 0,
+                second_field: 0,
+                complete: 0,
+                timestamp: 0,
+            }
+        }
     }
 
     pub fn text(buf: &[c_char]) -> String {
@@ -437,21 +500,67 @@ pub struct Frame<'a> {
     raw: *mut c_void,
     #[cfg(mtl_shim)]
     owner: *mut c_void,
-    tx: bool,
+    kind: Kind,
     sent: bool,
+}
+
+/// D'où vient une image : rendue à la bonne session ; une image JPEG XS à envoyer est d'abord
+/// convertie de v210 vers les plans du greffon.
+enum Kind {
+    Rx,
+    Tx,
+    #[cfg_attr(not(mtl_shim), allow(dead_code))]
+    Rx22,
+    #[cfg_attr(not(mtl_shim), allow(dead_code))]
+    Tx22(Planes),
+}
+
+/// Les trois plans d'une image du greffon.
+#[cfg_attr(not(mtl_shim), allow(dead_code))]
+struct Planes {
+    ptr: [*mut u8; 3],
+    linesize: [usize; 3],
+    width: usize,
+    lines: usize,
+}
+
+impl Planes {
+    /// SAFETY: the planes are an MTL frame of `lines` rows of `linesize` bytes each, ours until
+    /// put back.
+    #[cfg_attr(not(mtl_shim), allow(dead_code))]
+    unsafe fn slices<'a>(&self) -> [&'a mut [u8]; 3] {
+        let l = |i: usize| std::slice::from_raw_parts_mut(self.ptr[i], self.linesize[i] * self.lines);
+        [l(0), l(1), l(2)]
+    }
 }
 
 impl Frame<'_> {
     /// Envoie l'image remplie (émetteur) ; en entrelacé, `second` : la trame du bas.
     pub fn send_field(mut self, second: bool) {
         self.sent = true;
+        self.put(second);
+    }
+
+    /// Rend l'image à sa session (envoyée, pour un émetteur).
+    fn put(&mut self, second: bool) {
         #[cfg(mtl_shim)]
-        // SAFETY: a frame taken from this sender, given back once.
+        // SAFETY: a frame taken from this session, given back once.
         unsafe {
-            ffi::smtl_tx_put(self.owner, self.raw, second as c_int);
+            match &self.kind {
+                Kind::Rx => ffi::smtl_rx_put(self.owner, self.raw),
+                Kind::Tx => {
+                    ffi::smtl_tx_put(self.owner, self.raw, second as c_int);
+                }
+                Kind::Rx22 => ffi::smtl22_rx_put(self.owner, self.raw),
+                Kind::Tx22(p) => {
+                    let [y, cb, cr] = p.slices();
+                    v210_to_planar(self.data, self.linesize, p.width, p.lines, [y, cb, cr], p.linesize);
+                    ffi::smtl22_tx_put(self.owner, self.raw, second as c_int);
+                }
+            }
         }
         #[cfg(not(mtl_shim))]
-        let _ = second;
+        let _ = (second, &self.kind);
     }
 }
 
@@ -460,21 +569,13 @@ impl Drop for Frame<'_> {
         if self.sent {
             return;
         }
-        #[cfg(mtl_shim)]
-        // SAFETY: a frame taken from this session, given back once.
-        unsafe {
-            if self.tx {
-                ffi::smtl_tx_put(self.owner, self.raw, self.second_field as c_int);
-            } else {
-                ffi::smtl_rx_put(self.owner, self.raw);
-            }
-        }
-        let _ = self.tx;
+        self.put(self.second_field);
     }
 }
 
 #[cfg(mtl_shim)]
 fn frame_of<'a>(f: ffi::Frame, owner: *mut c_void, tx: bool) -> Frame<'a> {
+    let kind = if tx { Kind::Tx } else { Kind::Rx };
     let len = f.linesize as usize * f.height as usize;
     Frame {
         // SAFETY: MTL hands a buffer of `height` rows of `linesize` bytes, ours until put back.
@@ -486,7 +587,7 @@ fn frame_of<'a>(f: ffi::Frame, owner: *mut c_void, tx: bool) -> Frame<'a> {
         complete: f.complete != 0,
         raw: f.frame,
         owner,
-        tx,
+        kind,
         sent: false,
     }
 }
@@ -587,6 +688,387 @@ impl Drop for Tx {
         unsafe {
             ffi::smtl_tx_close(self.h)
         };
+    }
+}
+
+// ---------- La vidéo compressée : ST 2110-22 (JPEG XS) ----------
+
+/// Le greffon JPEG XS de MTL (SVT-JPEG-XS), posé à côté de libmtl.
+pub const JPEGXS_PLUGIN: &str = "libst_plugin_st22_svt_jpeg_xs.so";
+
+/// Inscrit les greffons posés à côté de `libmtl` (JPEG XS) pour MTL : un registre écrit dans
+/// `dir`, donné à MTL par `KAHAWAI_CFG_PATH`. À faire avant [`Mtl::open`] (MTL le lit en
+/// s'ouvrant). Rend le greffon trouvé.
+pub fn register_plugins(libmtl: &Path, dir: &Path) -> Option<PathBuf> {
+    let plugin = libmtl.parent()?.join(JPEGXS_PLUGIN);
+    if !plugin.is_file() {
+        return None;
+    }
+    let cfg = dir.join("mtl-plugins.json");
+    let body = format!("{{\"plugins\": [{{\"enabled\": 1, \"name\": \"st22_svt_jpeg_xs\", \"path\": {:?}}}]}}\n", plugin.display().to_string());
+    std::fs::write(&cfg, body).ok()?;
+    std::env::set_var("KAHAWAI_CFG_PATH", &cfg);
+    Some(plugin)
+}
+
+/// Cette MTL fait-elle du ST 2110-22 ?
+pub fn has_st22p() -> bool {
+    #[cfg(mtl_shim)]
+    // SAFETY: reads a flag set when the library was loaded.
+    return unsafe { ffi::smtl_has_st22p() } != 0;
+    #[cfg(not(mtl_shim))]
+    false
+}
+
+/// Les octets d'une image JPEG XS (d'une trame en entrelacé) à `bpp` bits par pixel.
+pub fn codestream_size(v: &Video, bpp: f32) -> u64 {
+    let lines = if v.interlaced { v.height / 2 } else { v.height } as f64;
+    (bpp.max(0.5) as f64 * v.width as f64 * lines / 8.0).round() as u64
+}
+
+#[inline]
+fn put16(b: &mut [u8], i: usize, v: u32) {
+    b[2 * i..2 * i + 2].copy_from_slice(&(v as u16).to_le_bytes());
+}
+
+#[inline]
+fn get16(b: &[u8], i: usize) -> u32 {
+    u16::from_le_bytes([b[2 * i], b[2 * i + 1]]) as u32
+}
+
+/// Le k-ième échantillon de 10 bits d'une ligne v210 (Cb Y Cr Y…, trois par mot de 32 bits).
+#[inline]
+fn v210_sample(line: &[u8], k: usize) -> u32 {
+    let w = u32::from_le_bytes(line[4 * (k / 3)..4 * (k / 3) + 4].try_into().unwrap());
+    (w >> (10 * (k % 3))) & 0x3ff
+}
+
+#[inline]
+fn v210_set(line: &mut [u8], k: usize, v: u32) {
+    let at = 4 * (k / 3);
+    let mut w = u32::from_le_bytes(line[at..at + 4].try_into().unwrap());
+    let sh = 10 * (k % 3);
+    w = (w & !(0x3ff << sh)) | ((v & 0x3ff) << sh);
+    line[at..at + 4].copy_from_slice(&w.to_le_bytes());
+}
+
+/// Des lignes v210 (`stride` octets chacune) vers trois plans 4:2:2 (Y, Cb, Cr ; 10 bits dans 16,
+/// petit-boutiste), le format du greffon JPEG XS.
+pub fn v210_to_planar(src: &[u8], stride: usize, width: usize, lines: usize, planes: [&mut [u8]; 3], linesize: [usize; 3]) {
+    let [py, pb, pr] = planes;
+    let blocks = width / 6;
+    for row in 0..lines {
+        let s = &src[row * stride..row * stride + stride];
+        let y = &mut py[row * linesize[0]..];
+        let cb = &mut pb[row * linesize[1]..];
+        let cr = &mut pr[row * linesize[2]..];
+        // Six pixels (quatre mots) à la fois.
+        for b in 0..blocks {
+            let w: [u32; 4] = std::array::from_fn(|i| u32::from_le_bytes(s[16 * b + 4 * i..16 * b + 4 * i + 4].try_into().unwrap()));
+            let x = |i: usize| (w[i / 3] >> (10 * (i % 3))) & 0x3ff;
+            put16(cb, 3 * b, x(0));
+            put16(y, 6 * b, x(1));
+            put16(cr, 3 * b, x(2));
+            put16(y, 6 * b + 1, x(3));
+            put16(cb, 3 * b + 1, x(4));
+            put16(y, 6 * b + 2, x(5));
+            put16(cr, 3 * b + 1, x(6));
+            put16(y, 6 * b + 3, x(7));
+            put16(cb, 3 * b + 2, x(8));
+            put16(y, 6 * b + 4, x(9));
+            put16(cr, 3 * b + 2, x(10));
+            put16(y, 6 * b + 5, x(11));
+        }
+        // Le reste (largeur pas multiple de 6 : 1280), une paire de pixels à la fois.
+        for p in blocks * 3..width / 2 {
+            put16(cb, p, v210_sample(s, 4 * p));
+            put16(y, 2 * p, v210_sample(s, 4 * p + 1));
+            put16(cr, p, v210_sample(s, 4 * p + 2));
+            put16(y, 2 * p + 1, v210_sample(s, 4 * p + 3));
+        }
+    }
+}
+
+/// L'inverse : trois plans 4:2:2 10 bits vers des lignes v210.
+pub fn planar_to_v210(planes: [&[u8]; 3], linesize: [usize; 3], width: usize, lines: usize, dst: &mut [u8], stride: usize) {
+    let [py, pb, pr] = planes;
+    let blocks = width / 6;
+    for row in 0..lines {
+        let d = &mut dst[row * stride..row * stride + stride];
+        let y = &py[row * linesize[0]..];
+        let cb = &pb[row * linesize[1]..];
+        let cr = &pr[row * linesize[2]..];
+        for b in 0..blocks {
+            let s = [
+                get16(cb, 3 * b),
+                get16(y, 6 * b),
+                get16(cr, 3 * b),
+                get16(y, 6 * b + 1),
+                get16(cb, 3 * b + 1),
+                get16(y, 6 * b + 2),
+                get16(cr, 3 * b + 1),
+                get16(y, 6 * b + 3),
+                get16(cb, 3 * b + 2),
+                get16(y, 6 * b + 4),
+                get16(cr, 3 * b + 2),
+                get16(y, 6 * b + 5),
+            ];
+            for i in 0..4 {
+                let w = (s[3 * i] & 0x3ff) | (s[3 * i + 1] & 0x3ff) << 10 | (s[3 * i + 2] & 0x3ff) << 20;
+                d[16 * b + 4 * i..16 * b + 4 * i + 4].copy_from_slice(&w.to_le_bytes());
+            }
+        }
+        for p in blocks * 3..width / 2 {
+            v210_set(d, 4 * p, get16(cb, p));
+            v210_set(d, 4 * p + 1, get16(y, 2 * p));
+            v210_set(d, 4 * p + 2, get16(cr, p));
+            v210_set(d, 4 * p + 3, get16(y, 2 * p + 1));
+        }
+    }
+}
+
+/// Le pas d'une ligne v210 (multiple de 128 octets, comme MXL).
+fn v210_stride(width: u32) -> usize {
+    (width as usize).div_ceil(48) * 128
+}
+
+impl Mtl {
+    /// Reçoit un flux JPEG XS (ST 2110-22) : les images, décodées, en v210.
+    pub fn rx22(&self, name: &str, legs: &[Leg], payload_type: u8, v: &Video) -> Result<Rx22, String> {
+        let fps = st_fps(v).ok_or("MTL has no such frame rate")?;
+        #[cfg(mtl_shim)]
+        {
+            let (idx, ips, udps, sips) = legs_of(legs);
+            let n = CString::new(name).unwrap_or_default();
+            let mut err = [0 as c_char; 256];
+            let vv = ffi::Video { width: v.width, height: v.height, fps, interlaced: v.interlaced as c_int };
+            // SAFETY: arrays of `legs.len()` entries; `err` sized as passed.
+            let h = unsafe {
+                ffi::smtl22_rx_open(
+                    self.h,
+                    n.as_ptr(),
+                    legs.len() as c_int,
+                    idx.as_ptr(),
+                    ips.as_ptr(),
+                    udps.as_ptr(),
+                    sips.as_ptr(),
+                    payload_type,
+                    vv,
+                    err.as_mut_ptr(),
+                    err.len() as c_int,
+                )
+            };
+            if h.is_null() {
+                return Err(ffi::text(&err));
+            }
+            Ok(Rx22 { h, _name: n, staging: Vec::new(), frames: 0 })
+        }
+        #[cfg(not(mtl_shim))]
+        {
+            let _ = (name, legs, payload_type, fps);
+            Err(NOT_BUILT.into())
+        }
+    }
+
+    /// Envoie un flux JPEG XS à `bpp` bits par pixel (4:2:2 10 bits non compressé : 20).
+    pub fn tx22(&self, name: &str, legs: &[Leg], payload_type: u8, v: &Video, bpp: f32) -> Result<Tx22, String> {
+        let fps = st_fps(v).ok_or("MTL has no such frame rate")?;
+        #[cfg(mtl_shim)]
+        {
+            let (idx, ips, udps, _) = legs_of(legs);
+            let n = CString::new(name).unwrap_or_default();
+            let mut err = [0 as c_char; 256];
+            let vv = ffi::Video { width: v.width, height: v.height, fps, interlaced: v.interlaced as c_int };
+            // SAFETY: arrays of `legs.len()` entries; `err` sized as passed.
+            let h = unsafe {
+                ffi::smtl22_tx_open(
+                    self.h,
+                    n.as_ptr(),
+                    legs.len() as c_int,
+                    idx.as_ptr(),
+                    ips.as_ptr(),
+                    udps.as_ptr(),
+                    payload_type,
+                    vv,
+                    codestream_size(v, bpp),
+                    err.as_mut_ptr(),
+                    err.len() as c_int,
+                )
+            };
+            if h.is_null() {
+                return Err(ffi::text(&err));
+            }
+            Ok(Tx22 { h, _name: n, staging: Vec::new() })
+        }
+        #[cfg(not(mtl_shim))]
+        {
+            let _ = (name, legs, payload_type, fps, bpp);
+            Err(NOT_BUILT.into())
+        }
+    }
+}
+
+/// Un flux JPEG XS reçu.
+pub struct Rx22 {
+    #[cfg(mtl_shim)]
+    h: *mut c_void,
+    #[cfg(mtl_shim)]
+    _name: CString,
+    /// L'image décodée, remise en v210.
+    #[cfg_attr(not(mtl_shim), allow(dead_code))]
+    staging: Vec<u8>,
+    /// Images reçues entières (MTL ne compte pas les paquets du 2110-22).
+    frames: u64,
+}
+
+unsafe impl Send for Rx22 {}
+
+impl Rx22 {
+    /// La prochaine image, en v210 (200 ms au plus).
+    pub fn frame(&mut self) -> Option<Frame<'_>> {
+        #[cfg(mtl_shim)]
+        {
+            let mut f = ffi::Frame3::empty();
+            // SAFETY: open session; `f` is a valid out pointer.
+            if unsafe { ffi::smtl22_rx_get(self.h, &mut f) } != 1 {
+                return None;
+            }
+            let (w, lines) = (f.width as usize, f.height as usize);
+            let stride = v210_stride(f.width);
+            self.staging.resize(stride * lines, 0);
+            let ls = f.linesize.map(|x| x as usize);
+            // SAFETY: MTL hands three planes of `lines` rows of `linesize` bytes, ours until put back.
+            let planes: [&[u8]; 3] = std::array::from_fn(|i| unsafe { std::slice::from_raw_parts(f.data[i], ls[i] * lines) });
+            planar_to_v210(planes, ls, w, lines, &mut self.staging, stride);
+            if f.complete != 0 {
+                self.frames += 1;
+            }
+            Some(Frame {
+                data: &mut self.staging[..],
+                linesize: stride,
+                width: f.width,
+                height: f.height,
+                second_field: f.second_field != 0,
+                complete: f.complete != 0,
+                raw: f.frame,
+                owner: self.h,
+                kind: Kind::Rx22,
+                sent: false,
+            })
+        }
+        #[cfg(not(mtl_shim))]
+        None
+    }
+
+    /// Les compteurs : MTL ne compte pas les paquets du 2110-22, les images entières seulement
+    /// (pour chaque patte aussi : ce qui arrive, sans le détail par réseau).
+    pub fn stats(&self) -> RxStats {
+        RxStats { received: self.frames, legs: [(self.frames, 0); 2], ..Default::default() }
+    }
+}
+
+impl Drop for Rx22 {
+    fn drop(&mut self) {
+        #[cfg(mtl_shim)]
+        // SAFETY: opened by `rx22`, freed once.
+        unsafe {
+            ffi::smtl22_rx_close(self.h)
+        };
+    }
+}
+
+/// Un flux JPEG XS envoyé.
+pub struct Tx22 {
+    #[cfg(mtl_shim)]
+    h: *mut c_void,
+    #[cfg(mtl_shim)]
+    _name: CString,
+    /// L'image à remplir, en v210 ; convertie en l'envoyant.
+    #[cfg_attr(not(mtl_shim), allow(dead_code))]
+    staging: Vec<u8>,
+}
+
+unsafe impl Send for Tx22 {}
+
+impl Tx22 {
+    /// Une image à remplir en v210 (200 ms au plus), puis [`Frame::send_field`].
+    pub fn frame(&mut self) -> Option<Frame<'_>> {
+        #[cfg(mtl_shim)]
+        {
+            let mut f = ffi::Frame3::empty();
+            // SAFETY: open session; `f` is a valid out pointer.
+            if unsafe { ffi::smtl22_tx_get(self.h, &mut f) } != 1 {
+                return None;
+            }
+            let lines = f.height as usize;
+            let stride = v210_stride(f.width);
+            self.staging.resize(stride * lines, 0);
+            Some(Frame {
+                data: &mut self.staging[..],
+                linesize: stride,
+                width: f.width,
+                height: f.height,
+                second_field: f.second_field != 0,
+                complete: true,
+                raw: f.frame,
+                owner: self.h,
+                kind: Kind::Tx22(Planes { ptr: f.data, linesize: f.linesize.map(|x| x as usize), width: f.width as usize, lines }),
+                sent: false,
+            })
+        }
+        #[cfg(not(mtl_shim))]
+        None
+    }
+}
+
+impl Drop for Tx22 {
+    fn drop(&mut self) {
+        #[cfg(mtl_shim)]
+        // SAFETY: opened by `tx22`, freed once.
+        unsafe {
+            ffi::smtl22_tx_close(self.h)
+        };
+    }
+}
+
+/// Un émetteur vidéo, 2110-20 ou 2110-22 : une image v210 à remplir, puis envoyée.
+pub trait VideoTx: Send {
+    fn next_frame(&mut self) -> Option<Frame<'_>>;
+}
+
+impl VideoTx for Tx {
+    fn next_frame(&mut self) -> Option<Frame<'_>> {
+        self.next()
+    }
+}
+
+impl VideoTx for Tx22 {
+    fn next_frame(&mut self) -> Option<Frame<'_>> {
+        self.frame()
+    }
+}
+
+/// Un récepteur vidéo, 2110-20 ou 2110-22 : les images en v210, et ses compteurs.
+pub trait VideoRx: Send {
+    fn next_frame(&mut self) -> Option<Frame<'_>>;
+    fn counters(&self) -> RxStats;
+}
+
+impl VideoRx for Rx {
+    fn next_frame(&mut self) -> Option<Frame<'_>> {
+        self.next()
+    }
+    fn counters(&self) -> RxStats {
+        self.stats()
+    }
+}
+
+impl VideoRx for Rx22 {
+    fn next_frame(&mut self) -> Option<Frame<'_>> {
+        self.frame()
+    }
+    fn counters(&self) -> RxStats {
+        self.stats()
     }
 }
 
@@ -1161,6 +1643,46 @@ pub fn to_pcm(pcm: &[f32], out: &mut [u8], bits: u8) {
 
 #[cfg(test)]
 mod tests {
+
+    /// v210 → plans → v210 : identique, largeur multiple de 6 ou non (1280).
+    #[test]
+    fn planar_round_trip() {
+        for (w, lines) in [(1920usize, 3usize), (1280, 2), (720, 1)] {
+            let stride = v210_stride(w as u32);
+            let mut src = vec![0u8; stride * lines];
+            let mut seed = 12345u32;
+            for row in 0..lines {
+                for k in 0..w * 2 {
+                    seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+                    v210_set(&mut src[row * stride..], k, (seed >> 8) & 0x3ff);
+                }
+            }
+            let ls = [w * 2 + 64, w + 32, w + 32];
+            let (mut y, mut cb, mut cr) = (vec![0u8; ls[0] * lines], vec![0u8; ls[1] * lines], vec![0u8; ls[2] * lines]);
+            v210_to_planar(&src, stride, w, lines, [&mut y, &mut cb, &mut cr], ls);
+            // Le premier pixel : Cb0 Y0 Cr0 Y1.
+            assert_eq!(
+                (get16(&cb, 0), get16(&y, 0), get16(&cr, 0), get16(&y, 1)),
+                (v210_sample(&src, 0), v210_sample(&src, 1), v210_sample(&src, 2), v210_sample(&src, 3))
+            );
+            let mut back = vec![0u8; stride * lines];
+            planar_to_v210([&y, &cb, &cr], ls, w, lines, &mut back, stride);
+            for row in 0..lines {
+                for k in 0..w * 2 {
+                    assert_eq!(v210_sample(&back[row * stride..], k), v210_sample(&src[row * stride..], k), "w {w} row {row} sample {k}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn jpeg_xs_frame_size() {
+        let v = Video { width: 1920, height: 1080, rate: (50, 1), interlaced: false };
+        assert_eq!(codestream_size(&v, 2.0), 1920 * 1080 * 2 / 8);
+        let i = Video { interlaced: true, ..v };
+        assert_eq!(codestream_size(&i, 2.0), 1920 * 540 * 2 / 8);
+    }
+
     use super::*;
 
     #[test]

@@ -1144,4 +1144,6 @@ export const fr: Record<string, string> = {
   'MTL is not loaded yet': 'MTL n’est pas encore chargée',
   'the license file is empty or too big (1 MB at most)': 'le fichier de licence est vide ou trop gros (1 Mo au plus)',
   'MTL is not loaded: {why}': 'MTL n’est pas chargée : {why}',
+  'JPEG XS bit rate': 'Débit JPEG XS',
+  'Uncompressed (2110-20)': 'Non compressée (2110-20)',
 };

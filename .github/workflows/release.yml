@@ -89,9 +89,10 @@ jobs:
 
       - name: MTL et DPDK (ST 2110, embarqués dans l'archive du Core sous lib/mtl)
         run: |
-          sudo apt-get install -y -q meson ninja-build python3-pyelftools libnuma-dev libjson-c-dev libpcap-dev libssl-dev libxdp-dev libbpf-dev systemtap-sdt-dev pkg-config
+          sudo apt-get install -y -q meson ninja-build python3-pyelftools libnuma-dev libjson-c-dev libpcap-dev libssl-dev libxdp-dev libbpf-dev systemtap-sdt-dev pkg-config nasm cmake
           sudo scripts/build-mtl.sh /tmp/mtl-work /tmp/mtl-out
           ls /tmp/mtl-out/lib/mtl
+          test -f /tmp/mtl-out/lib/mtl/lib/libst_plugin_st22_svt_jpeg_xs.so
           # Pas de recherche d'AVX ici, contrairement à libmxl : DPDK (-Dplatform=generic, soit
           # -march=corei7) et MTL (-msse4.2) visent un x86-64 sans AVX, mais livrent exprès des
           # chemins AVX2 / AVX-512 choisis à l'exécution selon le processeur (pilotes ice/iavf,

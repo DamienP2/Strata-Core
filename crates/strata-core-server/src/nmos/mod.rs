@@ -275,6 +275,7 @@ pub(crate) fn model(s: &AppState, cfg: &HardwareConfig, saved: &Saved, api: Sock
         }
     };
     let base = format!("http://{api}");
+    let jpegxs = s.features.on(crate::features::JPEGXS);
     let ptp = s.clock.get().ptp;
     let clock = match ptp.grandmaster.as_deref().and_then(clock_id) {
         Some(id) if ptp.running => {
@@ -322,6 +323,8 @@ pub(crate) fn model(s: &AppState, cfg: &HardwareConfig, saved: &Saved, api: Sock
         let (format, media_types) = match f.essence {
             Essence::Audio => ("urn:x-nmos:format:audio", json!(["audio/L24", "audio/L16"])),
             Essence::Data => ("urn:x-nmos:format:data", json!(["video/smpte291"])),
+            // JPEG XS seulement si la fonction est active (Réglages › Fonctions).
+            Essence::Video if jpegxs => ("urn:x-nmos:format:video", json!(["video/raw", "video/jxsv"])),
             Essence::Video => ("urn:x-nmos:format:video", json!(["video/raw"])),
         };
         if !e.sender {
@@ -387,7 +390,14 @@ pub(crate) fn model(s: &AppState, cfg: &HardwareConfig, saved: &Saved, api: Sock
                 fl["source_id"] = json!(source_id);
                 fl["format"] = json!(format);
                 fl["grain_rate"] = rate;
-                fl["media_type"] = json!("video/raw");
+                match f.jpegxs() {
+                    Some(bpp) => {
+                        fl["media_type"] = json!("video/jxsv");
+                        fl["profile"] = json!("Main422.10");
+                        fl["bit_rate"] = json!(sdp::jxs_kbps(w, h, (n, d), bpp));
+                    }
+                    None => fl["media_type"] = json!("video/raw"),
+                }
                 fl["frame_width"] = json!(w);
                 fl["frame_height"] = json!(h);
                 fl["interlace_mode"] = json!(if interlaced { "interlaced_tff" } else { "progressive" });

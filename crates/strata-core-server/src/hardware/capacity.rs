@@ -37,6 +37,14 @@ pub fn video_mbps(w: u32, h: u32, (n, d): (u32, u32)) -> f64 {
     (frame + packets * VIDEO_OVERHEAD) * fps * 8.0 / 1e6
 }
 
+/// Le débit sur le fil d'une vidéo JPEG XS (ST 2110-22) à `bpp` bits par pixel, en Mb/s.
+pub fn jpegxs_mbps(w: u32, h: u32, (n, d): (u32, u32), bpp: f32) -> f64 {
+    let frame = w as f64 * h as f64 * bpp as f64 / 8.0;
+    let fps = n as f64 / d.max(1) as f64;
+    let packets = (frame / VIDEO_PAYLOAD).ceil();
+    (frame + packets * VIDEO_OVERHEAD) * fps * 8.0 / 1e6
+}
+
 /// Le débit sur le fil d'un son PCM à 48 kHz, en Mb/s.
 pub fn audio_mbps(channels: u16, bits: u8, ptime_us: u32) -> f64 {
     let ptime = ptime_us.max(125) as f64;
@@ -48,7 +56,10 @@ pub fn audio_mbps(channels: u16, bits: u8, ptime_us: u32) -> f64 {
 /// Ce que demande un flux, en Mb/s.
 pub fn flow_mbps(cfg: &HardwareConfig, f: &Flow) -> f64 {
     match f.essence {
-        Essence::Video => cfg.video_of(f).map_or(0.0, |(w, h, r, _)| video_mbps(w, h, r)),
+        Essence::Video => cfg.video_of(f).map_or(0.0, |(w, h, r, _)| match f.jpegxs() {
+            Some(bpp) => jpegxs_mbps(w, h, r, bpp),
+            None => video_mbps(w, h, r),
+        }),
         Essence::Audio => audio_mbps(f.channels, f.bits, f.ptime_us),
         // ST 2110-40 : quelques centaines de kb/s.
         Essence::Data => 0.5,

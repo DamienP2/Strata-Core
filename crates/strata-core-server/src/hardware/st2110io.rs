@@ -92,6 +92,8 @@ struct FlowPlan {
     payload_type: u8,
     kind: Kind,
     pacing: strata_mtl::Pacing,
+    /// Vidéo JPEG XS (ST 2110-22) : ses bits par pixel.
+    jpegxs: Option<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -208,6 +210,7 @@ fn plan(cfg: &HardwareConfig) -> Result<Option<Plan>, String> {
             payload_type: f.pt(),
             kind,
             pacing: f.mtl_pacing(),
+            jpegxs: f.jpegxs(),
         });
     }
     Ok(Some(Plan { ports, flows, tai_offset: cfg.ptp.tai_offset, bad }))
@@ -607,14 +610,18 @@ fn mxl_video(v: &strata_mtl::Video) -> strata_mxl::Video {
 
 /// Reçu : MTL → flux MXL `2110/<flux>`.
 fn receive(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: &AtomicBool, set: Setter) -> Result<(), String> {
-    let rx = mtl.rx(&f.name, &legs(f), f.payload_type, video)?;
+    // JPEG XS : décodé par le greffon, rendu en v210 comme le non compressé.
+    let mut rx: Box<dyn strata_mtl::VideoRx> = match f.jpegxs {
+        Some(_) => Box::new(mtl.rx22(&f.name, &legs(f), f.payload_type, video)?),
+        None => Box::new(mtl.rx(&f.name, &legs(f), f.payload_type, video)?),
+    };
     let id = strata_mxl::flow_id(&format!("2110/{}", f.id));
     let mut w = mxl.video_writer(id, &f.name, &mxl_video(video))?;
     set(&|s| s.format = Some(format_name(video)));
     let mut last = Instant::now();
     let mut frames = 0u64;
     while !stop.load(Ordering::Relaxed) {
-        let got = match rx.next() {
+        let got = match rx.next_frame() {
             Some(fr) => {
                 if fr.complete {
                     if video.interlaced {
@@ -629,7 +636,7 @@ fn receive(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: 
             None => false,
         };
         if last.elapsed() >= Duration::from_secs(1) || !got {
-            let st = rx.stats();
+            let st = rx.counters();
             set(&|s| {
                 s.state = if got { IoState::Running } else { IoState::Idle };
                 s.frames = frames;
@@ -644,7 +651,11 @@ fn receive(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: 
 
 /// Envoyé : flux MXL `2110/<flux>` (écrit par l'appli) → MTL ; du noir quand rien n'arrive.
 fn send(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: &AtomicBool, set: Setter) -> Result<(), String> {
-    let tx = mtl.tx(&f.name, &legs(f), f.payload_type, video, f.pacing)?;
+    // JPEG XS : l'image v210 est convertie et codée par le greffon en l'envoyant.
+    let mut tx: Box<dyn strata_mtl::VideoTx> = match f.jpegxs {
+        Some(bpp) => Box::new(mtl.tx22(&f.name, &legs(f), f.payload_type, video, bpp)?),
+        None => Box::new(mtl.tx(&f.name, &legs(f), f.payload_type, video, f.pacing)?),
+    };
     let id = strata_mxl::flow_id(&format!("2110/{}", f.id));
     let v = *video;
     set(&|s| s.format = Some(format_name(&v)));
@@ -691,7 +702,7 @@ fn send(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: &At
                 format_name(&v)
             ));
         }
-        let Some(mut out) = tx.next() else { continue };
+        let Some(mut out) = tx.next_frame() else { continue };
         let ls = out.linesize;
         if second {
             // La trame du bas, gardée avec celle du haut.

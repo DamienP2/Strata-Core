@@ -251,6 +251,12 @@ pub struct Flow {
     /// rallumer l'émission).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub nmos_addresses: bool,
+    /// Vidéo : vide, non compressée (ST 2110-20) ; « jpegxs » : JPEG XS (ST 2110-22).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub codec: String,
+    /// JPEG XS : bits par pixel (0 : 4, environ 5:1 ; le 4:2:2 10 bits non compressé en fait 20).
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub bpp: f32,
     /// Reçu : qui l'a connecté en dernier (« nmos », ou le compte qui l'a réglé ici), et quand
     /// (ms). Tenu par le Core : ce que la page envoie est ignoré.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -281,6 +287,8 @@ impl Default for Flow {
             source_blue: None,
             pacing: String::new(),
             nmos_addresses: false,
+            codec: String::new(),
+            bpp: 0.0,
             set_by: String::new(),
             set_at: 0,
         }
@@ -289,6 +297,10 @@ impl Default for Flow {
 
 fn is_zero(v: &i64) -> bool {
     *v == 0
+}
+
+fn is_zero_f32(v: &f32) -> bool {
+    *v == 0.0
 }
 
 fn yes() -> bool {
@@ -335,6 +347,11 @@ impl Flow {
         } else {
             format!("{} · {what} ({})", self.name, self.label)
         }
+    }
+
+    /// JPEG XS (ST 2110-22) : ses bits par pixel ; None : non compressé.
+    pub fn jpegxs(&self) -> Option<f32> {
+        (self.essence == Essence::Video && self.codec == "jpegxs").then_some(if self.bpp > 0.0 { self.bpp } else { 4.0 })
     }
 
     /// Le cadencement pour MTL.
@@ -584,6 +601,19 @@ impl HardwareConfig {
             if !["", "N", "NL", "W"].contains(&f.pacing.as_str()) {
                 return Err(format!("{}: the pacing is N, NL or W", f.name));
             }
+            if !["", "jpegxs"].contains(&f.codec.as_str()) {
+                return Err(format!("{}: the codec is jpegxs, or none (uncompressed)", f.name));
+            }
+            if f.essence != Essence::Video {
+                f.codec.clear();
+            }
+            f.bpp = if f.codec.is_empty() {
+                0.0
+            } else if f.bpp > 0.0 {
+                f.bpp.clamp(0.5, 16.0)
+            } else {
+                0.0
+            };
             if f.direction == Direction::Output {
                 f.source = None;
                 f.source_blue = None;
@@ -736,12 +766,19 @@ pub fn reconcile_inputs(s: &crate::state::AppState) {
         Some(Err(e)) => Err(e.clone()),
         None => Err("not loaded yet".to_string()),
     };
-    // ST 2110 coupé (Réglages › Fonctions) : MTL fermé, aucun flux.
-    let st2110_cfg = if s.features.on(crate::features::ST2110) {
+    // ST 2110 coupé (Réglages › Fonctions) : MTL fermé, aucun flux. JPEG XS coupé : ses flux
+    // arrêtés.
+    let (st2110, jpegxs) = (s.features.on(crate::features::ST2110), s.features.on(crate::features::JPEGXS));
+    let st2110_cfg = if st2110 && (jpegxs || cfg.flows.iter().all(|f| f.jpegxs().is_none())) {
         std::borrow::Cow::Borrowed(&cfg)
     } else {
         let mut c = cfg.clone();
-        c.network.media_io = MediaIo::Off;
+        if !st2110 {
+            c.network.media_io = MediaIo::Off;
+        }
+        for f in c.flows.iter_mut().filter(|f| f.jpegxs().is_some()) {
+            f.enabled = false;
+        }
         std::borrow::Cow::Owned(c)
     };
     s.st2110.apply(&st2110_cfg, mtl, mxl_of(s));
@@ -943,6 +980,7 @@ async fn read_sdp(CurrentUser(me): CurrentUser, body: String) -> ApiResult<Json<
     let legs: Vec<Value> = p.legs.iter().map(|l| json!({ "group": l.group.to_string(), "port": l.port, "source": l.source.map(|x| x.to_string()) })).collect();
     let media = match p.media {
         crate::nmos::sdp::Media::Video(v) => json!({ "essence": "video", "format": crate::nmos::sdp::format_name(v) }),
+        crate::nmos::sdp::Media::JpegXs(v, bpp) => json!({ "essence": "video", "format": crate::nmos::sdp::format_name(v), "codec": "jpegxs", "bpp": bpp }),
         crate::nmos::sdp::Media::Audio { channels, bits, ptime_us } => json!({ "essence": "audio", "channels": channels, "bits": bits, "ptimeUs": ptime_us }),
         crate::nmos::sdp::Media::Data { rate, interlaced } => {
             json!({ "essence": "data", "format": rate.map(|r| crate::nmos::sdp::format_name((1920, 1080, r, interlaced))) })

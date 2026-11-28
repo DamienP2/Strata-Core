@@ -23,6 +23,8 @@ pub enum Media {
         bits: u8,
         ptime_us: u32,
     },
+    /// Vidéo JPEG XS (ST 2110-22) : le format, et les bits par pixel (d'après `b=AS`, 0 sans).
+    JpegXs(VideoFormat, f32),
     /// Données annexes (ST 2110-40) : la cadence vidéo, si le SDP la donne, et entrelacée.
     Data {
         rate: Option<(u32, u32)>,
@@ -88,6 +90,20 @@ pub fn make(s: &SenderSdp) -> String {
                     if *interlaced { " interlace;" } else { "" }
                 ));
             }
+            Media::JpegXs((w, h, rate, interlaced), bpp) => {
+                let kbps = jxs_kbps(*w, *h, *rate, *bpp);
+                out.push_str(&format!(
+                    "m=video {port} RTP/AVP {pt}\r\nc=IN IP4 {group}/64\r\nb=AS:{kbps}\r\na=source-filter: incl IN IP4 {group} {source}\r\n"
+                ));
+                out.push_str(&format!("a=rtpmap:{pt} jxsv/90000\r\n"));
+                out.push_str(&format!(
+                    "a=fmtp:{pt} packetmode=0; profile=Main422.10; level={}; sublevel={}; depth=10; width={w}; height={h}; exactframerate={}; sampling=YCbCr-4:2:2; colorimetry=BT709; TCS=SDR; RANGE=NARROW; SSN=ST2110-22:2019; TP=2110TPN;{}\r\n",
+                    jxs_level(*w, *h, *rate),
+                    jxs_sublevel(*bpp),
+                    rate_text(*rate),
+                    if *interlaced { " interlace;" } else { "" }
+                ));
+            }
             Media::Audio { channels, bits, ptime_us } => {
                 out.push_str(&format!("m=audio {port} RTP/AVP {pt}\r\nc=IN IP4 {group}/64\r\na=source-filter: incl IN IP4 {group} {source}\r\n"));
                 out.push_str(&format!("a=rtpmap:{pt} L{bits}/48000/{channels}\r\n"));
@@ -133,6 +149,8 @@ pub fn parse(text: &str) -> Result<Sdp, String> {
         rtpmap: Option<String>,
         fmtp: Option<String>,
         ptime: Option<f64>,
+        /// `b=AS` : le débit, en kb/s.
+        kbps: Option<u64>,
     }
     let mut ms: Vec<M> = Vec::new();
     let ip = |s: &str| s.split('/').next().and_then(|a| a.trim().parse::<Ipv4Addr>().ok());
@@ -155,6 +173,7 @@ pub fn parse(text: &str) -> Result<Sdp, String> {
                     rtpmap: None,
                     fmtp: None,
                     ptime: None,
+                    kbps: None,
                 })
             }
             "c" => {
@@ -162,6 +181,11 @@ pub fn parse(text: &str) -> Result<Sdp, String> {
                 match ms.last_mut() {
                     Some(m) => m.c = a,
                     None => session_c = a,
+                }
+            }
+            "b" => {
+                if let (Some(m), Some(k)) = (ms.last_mut(), v.strip_prefix("AS:")) {
+                    m.kbps = k.trim().parse().ok();
                 }
             }
             "a" => {
@@ -188,15 +212,23 @@ pub fn parse(text: &str) -> Result<Sdp, String> {
     };
     let rtpmap = first.rtpmap.clone().unwrap_or_default();
     let encoding = rtpmap.split('/').next().unwrap_or("").to_ascii_lowercase();
+    let video = || -> Result<VideoFormat, String> {
+        let num = |k: &str| fmtp(first, k).and_then(|v| v.parse::<u32>().ok()).ok_or(format!("the SDP has no {k}"));
+        let rate = fmtp(first, "exactframerate").ok_or("the SDP has no exactframerate")?;
+        let rate = match rate.split_once('/') {
+            Some((n, d)) => (n.parse().map_err(|_| "bad exactframerate")?, d.parse().map_err(|_| "bad exactframerate")?),
+            None => (rate.parse().map_err(|_| "bad exactframerate")?, 1),
+        };
+        Ok((num("width")?, num("height")?, rate, fmtp(first, "interlace").is_some()))
+    };
     let media = match (first.kind.as_str(), encoding.as_str()) {
-        ("video", "raw") => {
-            let num = |k: &str| fmtp(first, k).and_then(|v| v.parse::<u32>().ok()).ok_or(format!("the SDP has no {k}"));
-            let rate = fmtp(first, "exactframerate").ok_or("the SDP has no exactframerate")?;
-            let rate = match rate.split_once('/') {
-                Some((n, d)) => (n.parse().map_err(|_| "bad exactframerate")?, d.parse().map_err(|_| "bad exactframerate")?),
-                None => (rate.parse().map_err(|_| "bad exactframerate")?, 1),
-            };
-            Media::Video((num("width")?, num("height")?, rate, fmtp(first, "interlace").is_some()))
+        ("video", "raw") => Media::Video(video()?),
+        ("video", "jxsv") => {
+            let v = video()?;
+            let (w, h, (n, d), _) = v;
+            let px = w as f64 * h as f64 * n as f64 / d.max(1) as f64;
+            let bpp = first.kbps.map_or(0.0, |k| ((k as f64 * 1000.0 / px) * 100.0).round() / 100.0) as f32;
+            Media::JpegXs(v, bpp)
         }
         ("audio", "l24" | "l16") => {
             let channels = rtpmap.split('/').nth(2).and_then(|c| c.parse().ok()).unwrap_or(1);
@@ -222,6 +254,37 @@ pub fn parse(text: &str) -> Result<Sdp, String> {
     Ok(Sdp { legs, media, payload_type: first.pt })
 }
 
+/// Le débit d'un flux JPEG XS (kb/s, `b=AS`).
+pub fn jxs_kbps(w: u32, h: u32, (n, d): (u32, u32), bpp: f32) -> u64 {
+    (w as f64 * h as f64 * n as f64 / d.max(1) as f64 * bpp as f64 / 1000.0).ceil() as u64
+}
+
+/// Le niveau JPEG XS (ISO/IEC 21122-2) d'après le débit de pixels : approché, le codeur choisit
+/// le sien (« auto »), le plus petit qui convient.
+fn jxs_level(w: u32, h: u32, (n, d): (u32, u32)) -> &'static str {
+    let px = w as f64 * h as f64 * n as f64 / d.max(1) as f64;
+    match px {
+        x if x <= 140e6 => "2k-1",
+        x if x <= 560e6 => "4k-1",
+        x if x <= 1120e6 => "4k-2",
+        x if x <= 2240e6 => "8k-1",
+        _ => "8k-2",
+    }
+}
+
+/// Le sous-niveau : le plus petit débit par pixel qui contient le nôtre.
+fn jxs_sublevel(bpp: f32) -> &'static str {
+    match bpp {
+        b if b <= 2.0 => "Sublev2bpp",
+        b if b <= 3.0 => "Sublev3bpp",
+        b if b <= 4.0 => "Sublev4bpp",
+        b if b <= 6.0 => "Sublev6bpp",
+        b if b <= 9.0 => "Sublev9bpp",
+        b if b <= 12.0 => "Sublev12bpp",
+        _ => "Full",
+    }
+}
+
 /// Le nom d'une vidéo pour les réglages (« 1080i50 », « 720p59.94 ») : en entrelacé, les trames
 /// par seconde.
 pub fn format_name((_, h, (n, d), interlaced): VideoFormat) -> String {
@@ -233,6 +296,24 @@ pub fn format_name((_, h, (n, d), interlaced): VideoFormat) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jpeg_xs_round_trip() {
+        let text = make(&SenderSdp {
+            name: "Cam",
+            session: 1,
+            version: 1,
+            legs: vec![("239.1.1.2".parse().unwrap(), 5004, "10.0.0.1".parse().unwrap())],
+            media: Media::JpegXs((1920, 1080, (50, 1), false), 4.0),
+            payload_type: 112,
+            refclk: "localmac=00-11-22-33-44-55".into(),
+        });
+        assert!(text.contains("a=rtpmap:112 jxsv/90000"));
+        assert!(text.contains("b=AS:414720"));
+        assert!(text.contains("sublevel=Sublev4bpp") && text.contains("level=2k-1"));
+        let p = parse(&text).unwrap();
+        assert_eq!(p.media, Media::JpegXs((1920, 1080, (50, 1), false), 4.0));
+    }
 
     #[test]
     fn video_round_trip() {

@@ -1,7 +1,7 @@
 // Le pont du Core vers Intel Media Transport Library (MTL) : ST 2110-20 (vidéo
-// non compressée, en v210), ST 2110-30 (son PCM) et ST 2110-40 (données
-// annexes) reçus et envoyés sur les ports média (E810 en DPDK, AF_XDP ou
-// socket du noyau).
+// non compressée, en v210), ST 2110-22 (vidéo compressée JPEG XS, par le greffon
+// SVT-JPEG-XS de MTL), ST 2110-30 (son PCM) et ST 2110-40 (données annexes)
+// reçus et envoyés sur les ports média (E810 en DPDK, AF_XDP ou socket du noyau).
 //
 // libmtl.so est chargée au lancement (dlopen) : le Core démarre sans elle. Les
 // en-têtes de MTL (vendored, include/) donnent les types ; seules les
@@ -55,10 +55,22 @@ F(st40p_tx_get_frame);
 F(st40p_tx_put_frame);
 F(st40p_tx_free);
 F(st40p_tx_set_block_timeout);
+F(st22p_rx_create);
+F(st22p_rx_get_frame);
+F(st22p_rx_put_frame);
+F(st22p_rx_free);
+F(st22p_rx_set_block_timeout);
+F(st22p_tx_create);
+F(st22p_tx_get_frame);
+F(st22p_tx_put_frame);
+F(st22p_tx_free);
+F(st22p_tx_set_block_timeout);
 #undef F
 // Les données (st40p) sont facultatives : une bibliothèque sans elles garde la
 // vidéo et le son.
 static int has_st40p;
+// Le ST 2110-22 (vidéo compressée) aussi.
+static int has_st22p;
 // Facultative : les compteurs d'un port (le débit mesuré, surtout en DPDK).
 static __typeof__(&mtl_get_port_stats) p_mtl_get_port_stats;
 
@@ -127,7 +139,20 @@ int smtl_load(const char *path, char *err, int errlen) {
     OPT(st40p_tx_put_frame);
     OPT(st40p_tx_free);
     OPT(st40p_tx_set_block_timeout);
+    OPT(st22p_rx_create);
+    OPT(st22p_rx_get_frame);
+    OPT(st22p_rx_put_frame);
+    OPT(st22p_rx_free);
+    OPT(st22p_rx_set_block_timeout);
+    OPT(st22p_tx_create);
+    OPT(st22p_tx_get_frame);
+    OPT(st22p_tx_put_frame);
+    OPT(st22p_tx_free);
+    OPT(st22p_tx_set_block_timeout);
 #undef OPT
+    has_st22p = p_st22p_rx_create && p_st22p_rx_get_frame && p_st22p_rx_put_frame && p_st22p_rx_free &&
+                p_st22p_rx_set_block_timeout && p_st22p_tx_create && p_st22p_tx_get_frame && p_st22p_tx_put_frame &&
+                p_st22p_tx_free && p_st22p_tx_set_block_timeout;
     has_st40p = p_st40p_rx_create && p_st40p_rx_get_frame && p_st40p_rx_put_frame && p_st40p_rx_free &&
                 p_st40p_rx_get_session_stats && p_st40p_rx_set_block_timeout && p_st40p_tx_create &&
                 p_st40p_tx_get_frame && p_st40p_tx_put_frame && p_st40p_tx_free && p_st40p_tx_set_block_timeout;
@@ -724,4 +749,152 @@ int smtl_dtx_send(void *tx, const smtl_anc *in, int n) {
 
 void smtl_dtx_close(void *tx) {
     p_st40p_tx_free((st40p_tx_handle)tx);
+}
+
+// ---------- La vidéo compressée : ST 2110-22 (JPEG XS) ----------
+
+// Une image en trois plans (Y, Cb, Cr : 4:2:2, 10 bits dans 16, petit-boutiste), celle que le
+// greffon JPEG XS prend et rend.
+typedef struct {
+    void *frame;
+    uint8_t *data[3];
+    uint64_t linesize[3];
+    uint32_t width, height;
+    int second_field;
+    int complete;
+    uint64_t timestamp;
+} smtl_frame3;
+
+int smtl_has_st22p(void) {
+    return has_st22p;
+}
+
+static void frame3_of(struct st_frame *f, smtl_frame3 *out) {
+    out->frame = f;
+    for (int i = 0; i < 3; i++) {
+        out->data[i] = (uint8_t *)f->addr[i];
+        out->linesize[i] = f->linesize[i];
+    }
+    out->width = f->width;
+    out->height = f->interlaced ? f->height / 2 : f->height;
+    out->second_field = f->second_field;
+    out->timestamp = f->timestamp;
+}
+
+// Reçoit un flux JPEG XS : décodé par le greffon en 4:2:2 10 bits planaire.
+void *smtl22_rx_open(void *h, const char *name, int n, const int *port_index, const uint8_t (*ip)[4],
+                     const uint16_t *udp, const uint8_t (*sip)[4], uint8_t pt, smtl_video v, char *err, int errlen) {
+    if (!has_st22p) {
+        set_err(err, errlen, "this MTL has no ST 2110-22");
+        return NULL;
+    }
+    smtl *s = (smtl *)h;
+    struct st22p_rx_ops ops;
+    memset(&ops, 0, sizeof(ops));
+    ops.name = name;
+    ops.port.num_port = (uint8_t)n;
+    for (int i = 0; i < n; i++) {
+        snprintf(ops.port.port[i], sizeof(ops.port.port[i]), "%s", s->ports[port_index[i]]);
+        memcpy(ops.port.ip_addr[i], ip[i], 4);
+        ops.port.udp_port[i] = udp[i];
+        if (sip && (sip[i][0] | sip[i][1] | sip[i][2] | sip[i][3])) {
+            memcpy(ops.port.mcast_sip_addr[i], sip[i], 4);
+        }
+    }
+    ops.port.payload_type = pt;
+    ops.width = v.width;
+    ops.height = v.height;
+    ops.fps = (enum st_fps)v.fps;
+    ops.interlaced = v.interlaced != 0;
+    ops.output_fmt = ST_FRAME_FMT_YUV422PLANAR10LE;
+    ops.pack_type = ST22_PACK_CODESTREAM;
+    ops.codec = ST22_CODEC_JPEGXS;
+    ops.device = ST_PLUGIN_DEVICE_AUTO;
+    ops.framebuff_cnt = 3;
+    ops.flags = ST22P_RX_FLAG_BLOCK_GET;
+    st22p_rx_handle rx = p_st22p_rx_create(s->mt, &ops);
+    if (!rx) {
+        set_err(err, errlen, "cannot receive this JPEG XS flow (plugin, address, format?)");
+        return NULL;
+    }
+    p_st22p_rx_set_block_timeout(rx, 200ull * 1000000ull);
+    return rx;
+}
+
+int smtl22_rx_get(void *rx, smtl_frame3 *out) {
+    struct st_frame *f = p_st22p_rx_get_frame((st22p_rx_handle)rx);
+    if (!f) {
+        return 0;
+    }
+    frame3_of(f, out);
+    out->complete = f->status == ST_FRAME_STATUS_COMPLETE || f->status == ST_FRAME_STATUS_RECONSTRUCTED;
+    return 1;
+}
+
+void smtl22_rx_put(void *rx, void *frame) {
+    p_st22p_rx_put_frame((st22p_rx_handle)rx, (struct st_frame *)frame);
+}
+
+void smtl22_rx_close(void *rx) {
+    p_st22p_rx_free((st22p_rx_handle)rx);
+}
+
+// Envoie un flux JPEG XS : `codestream_size` octets par image (par trame en entrelacé), le
+// débit voulu.
+void *smtl22_tx_open(void *h, const char *name, int n, const int *port_index, const uint8_t (*ip)[4],
+                     const uint16_t *udp, uint8_t pt, smtl_video v, uint64_t codestream_size, char *err, int errlen) {
+    if (!has_st22p) {
+        set_err(err, errlen, "this MTL has no ST 2110-22");
+        return NULL;
+    }
+    smtl *s = (smtl *)h;
+    struct st22p_tx_ops ops;
+    memset(&ops, 0, sizeof(ops));
+    ops.name = name;
+    ops.port.num_port = (uint8_t)n;
+    for (int i = 0; i < n; i++) {
+        snprintf(ops.port.port[i], sizeof(ops.port.port[i]), "%s", s->ports[port_index[i]]);
+        memcpy(ops.port.dip_addr[i], ip[i], 4);
+        ops.port.udp_port[i] = udp[i];
+    }
+    ops.port.payload_type = pt;
+    ops.width = v.width;
+    ops.height = v.height;
+    ops.fps = (enum st_fps)v.fps;
+    ops.interlaced = v.interlaced != 0;
+    ops.input_fmt = ST_FRAME_FMT_YUV422PLANAR10LE;
+    ops.pack_type = ST22_PACK_CODESTREAM;
+    ops.codec = ST22_CODEC_JPEGXS;
+    ops.device = ST_PLUGIN_DEVICE_AUTO;
+    ops.quality = ST22_QUALITY_MODE_QUALITY;
+    ops.codestream_size = (size_t)codestream_size;
+    ops.framebuff_cnt = 3;
+    ops.flags = ST22P_TX_FLAG_BLOCK_GET;
+    st22p_tx_handle tx = p_st22p_tx_create(s->mt, &ops);
+    if (!tx) {
+        set_err(err, errlen, "cannot send this JPEG XS flow (plugin, address, format?)");
+        return NULL;
+    }
+    p_st22p_tx_set_block_timeout(tx, 200ull * 1000000ull);
+    return tx;
+}
+
+int smtl22_tx_get(void *tx, smtl_frame3 *out) {
+    struct st_frame *f = p_st22p_tx_get_frame((st22p_tx_handle)tx);
+    if (!f) {
+        return 0;
+    }
+    frame3_of(f, out);
+    out->complete = 1;
+    return 1;
+}
+
+int smtl22_tx_put(void *tx, void *frame, int second_field) {
+    struct st_frame *f = (struct st_frame *)frame;
+    f->second_field = second_field != 0;
+    return p_st22p_tx_put_frame((st22p_tx_handle)tx, f);
+}
+
+void smtl22_tx_close(void *tx) {
+    p_st22p_tx_free((st22p_tx_handle)tx);
 }

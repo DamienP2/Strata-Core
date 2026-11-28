@@ -128,7 +128,13 @@ fn transport_file(s: &AppState, e: &End, cfg: &HardwareConfig) -> Reply {
             let (_, _, rate, interlaced) = cfg.video_of(f).unwrap_or((1920, 1080, (25, 1), true));
             sdp::Media::Data { rate: Some(rate), interlaced }
         }
-        Essence::Video => sdp::Media::Video(cfg.video_of(f).unwrap_or((1920, 1080, (25, 1), true))),
+        Essence::Video => {
+            let v = cfg.video_of(f).unwrap_or((1920, 1080, (25, 1), true));
+            match f.jpegxs() {
+                Some(bpp) => sdp::Media::JpegXs(v, bpp),
+                None => sdp::Media::Video(v),
+            }
+        }
     };
     let version = s.nmos.lock().versions.get(&e.id).and_then(|v| v.1.split(':').next().and_then(|x| x.parse().ok())).unwrap_or(1);
     let session = u64::from_be_bytes(e.id.as_bytes()[..8].try_into().unwrap_or_default()) >> 1;
@@ -289,7 +295,9 @@ fn stage(s: &AppState, sender: bool, id: &str, body: &Value) -> Result<(Uuid, Va
                 let p = sdp::parse(text).map_err(bad)?;
                 let fits = matches!(
                     (&p.media, e.flow.essence),
-                    (sdp::Media::Video(_), Essence::Video) | (sdp::Media::Audio { .. }, Essence::Audio) | (sdp::Media::Data { .. }, Essence::Data)
+                    (sdp::Media::Video(_) | sdp::Media::JpegXs(..), Essence::Video)
+                        | (sdp::Media::Audio { .. }, Essence::Audio)
+                        | (sdp::Media::Data { .. }, Essence::Data)
                 );
                 if !fits {
                     return Err(bad(format!("{} cannot receive this flow", e.flow.name)));
@@ -494,7 +502,16 @@ fn activate(s: &AppState, id: Uuid) -> Result<(), String> {
         let sdp_text = st["transport_file"]["data"].as_str().map(str::to_string);
         if let Some(p) = sdp_text.as_deref().and_then(|t| sdp::parse(t).ok()) {
             match p.media {
-                sdp::Media::Video(v) => flow.format = sdp::format_name(v),
+                sdp::Media::Video(v) => {
+                    flow.format = sdp::format_name(v);
+                    flow.codec.clear();
+                }
+                // JPEG XS : le récepteur suit (le décodeur ne demande que le format).
+                sdp::Media::JpegXs(v, bpp) => {
+                    flow.format = sdp::format_name(v);
+                    flow.codec = "jpegxs".into();
+                    flow.bpp = bpp;
+                }
                 sdp::Media::Audio { channels, bits, ptime_us } => {
                     flow.channels = channels;
                     flow.bits = bits;

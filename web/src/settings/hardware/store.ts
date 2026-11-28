@@ -95,6 +95,10 @@ export interface Flow {
   sourceBlue?: string | null;
   /** Envoyé (vidéo) : cadencement ST 2110-21, N (défaut), NL ou W. */
   pacing?: '' | 'N' | 'NL' | 'W';
+  /** Vidéo : vide, non compressée (ST 2110-20) ; « jpegxs » : JPEG XS (ST 2110-22). */
+  codec?: '' | 'jpegxs';
+  /** JPEG XS : bits par pixel (0 : 4). */
+  bpp?: number;
   /** Envoyé : un contrôleur NMOS peut aussi en choisir les adresses. */
   nmosAddresses?: boolean;
   /** Reçu : qui l'a connecté en dernier (« nmos » ou un compte), et quand (ms). Tenu par le Core. */
