@@ -1045,4 +1045,14 @@ export const fr: Record<string, string> = {
   'Cannot write there: {why}': 'Impossible d’écrire là-bas : {why}',
   'Cannot read this folder: {why}': 'Impossible de lire ce dossier : {why}',
   'cannot make the folder there: {why}': 'Impossible de créer le dossier là-bas : {why}',
+  // Bibliothèque › applis Strata
+  'Strata apps': 'Applis Strata',
+  'Ask GitHub again': 'Redemander à GitHub',
+  'Refresh': 'Actualiser',
+  'Asking GitHub…': 'Demande à GitHub…',
+  'Installed {v}': 'Installée {v}',
+  'Installed {v} · {n} available': 'Installée {v} · {n} disponible',
+  'Installing…': 'Installation…',
+  'Install {v}': 'Installer {v}',
+  'No release yet': 'Pas encore de release',
 };

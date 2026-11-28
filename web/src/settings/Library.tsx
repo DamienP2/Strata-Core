@@ -1,6 +1,6 @@
 // Réglages › Applis : la Bibliothèque (toutes les applis du serveur) et la page de chaque appli.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowUpRight, Cloud, LayoutGrid, PackagePlus, Power, RotateCw, ScrollText, Server } from 'lucide-react';
+import { ArrowUpRight, Cloud, Download, LayoutGrid, PackagePlus, Power, RefreshCw, RotateCw, ScrollText, Server, Store } from 'lucide-react';
 import { Badge, Card, Empty, Field, FieldGrid, PageHead, Switch, formatDuration, openAppTab, t, tn, toast } from '@strata/ui';
 import { api } from '../api';
 import { friendly, pollError } from '../errors';
@@ -192,7 +192,97 @@ export function Library({ apps, jobs, setActive, reload, dismiss }: {
           })}
         </div>
       )}
+      <Catalog jobs={jobs} reload={reload} />
     </>
+  );
+}
+
+interface CatalogApp {
+  repo: string;
+  name: string;
+  icon: string;
+  description: string;
+  app: string | null;
+  /** La dernière version qui accepte ce Core. */
+  version: string | null;
+  /** Pourquoi il n'y a rien à installer. */
+  error: string | null;
+  /** La version installée ici. */
+  installed: string | null;
+  active: boolean;
+}
+
+/** Le catalogue des applis Strata : ce qui peut s'installer d'un clic. */
+function Catalog({ jobs, reload }: { jobs: Job[]; reload: () => Promise<void> }) {
+  const [list, setList] = useState<CatalogApp[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(async (refresh = false) => {
+    setBusy(true);
+    try {
+      setList((await api<{ apps: CatalogApp[] }>('GET', `/api/apps/catalog${refresh ? '?refresh=true' : ''}`)).apps);
+    } catch (e) {
+      toast(friendly(e), 'error');
+    }
+    setBusy(false);
+  }, []);
+  // Relu à l'ouverture, et quand une installation se termine.
+  const done = jobs.filter((j) => !running(j)).length;
+  useEffect(() => {
+    void load();
+  }, [load, done]);
+  const install = async (c: CatalogApp) => {
+    try {
+      await api('POST', '/api/apps/install', { repo: c.repo });
+      await reload();
+    } catch (e) {
+      toast(friendly(e), 'error');
+    }
+  };
+  return (
+    <Card
+      icon={<Store size={16} />}
+      title={t('Strata apps')}
+      actions={
+        <button type="button" className="st-btn small" disabled={busy} onClick={() => void load(true)} data-tip={t('Ask GitHub again')}>
+          <RefreshCw size={13} className={busy ? 'spin' : undefined} /> {t('Refresh')}
+        </button>
+      }
+    >
+      {list === null ? (
+        <p className="st-muted core-note">{t('Asking GitHub…')}</p>
+      ) : (
+        <div className="core-catalog">
+          {list.map((c) => {
+            const Icon = appIcon(c.icon);
+            const job = jobs.find((j) => j.repo.toLowerCase() === c.repo.toLowerCase() && running(j));
+            const newer = !!(c.installed && c.version && c.version !== c.installed);
+            return (
+              <div key={c.repo} className="core-catalog-item">
+                <span className="core-app-icon">
+                  <Icon size={18} />
+                </span>
+                <div className="core-catalog-text">
+                  <strong>{c.name}</strong>
+                  {c.description && <span className="st-muted">{c.description}</span>}
+                  <span className="st-mono st-muted core-catalog-repo">{c.repo}</span>
+                </div>
+                <div className="core-catalog-state">
+                  {c.installed ? (
+                    <Badge tone="ok">{newer ? t('Installed {v} · {n} available', { v: c.installed, n: c.version ?? '' }) : t('Installed {v}', { v: c.installed })}</Badge>
+                  ) : c.version ? (
+                    <button type="button" className="st-btn small primary" disabled={!!job} onClick={() => void install(c)}>
+                      <Download size={13} /> {job ? t('Installing…') : t('Install {v}', { v: c.version })}
+                    </button>
+                  ) : (
+                    <span className="st-muted core-catalog-why">{!c.error || / has no Strata release$/.test(c.error) ? t('No release yet') : friendly(new Error(c.error))}</span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
   );
 }
 

@@ -392,6 +392,12 @@ cacher : l'appli refuse elle-même ce qui n'est pas permis.
 - Son interface, construite avec `@strata/ui` (le paquet `strata-ui-<version>.tgz` des releases du
   Core).
 
-## Ce qui viendra
+## Le catalogue de la Bibliothèque
 
-- Une liste des applis Strata dans la Bibliothèque, quand chacune publiera des releases à ce format.
+La Bibliothèque montre les applis Strata connues du Core (`crates/strata-core-server/catalog.json` :
+dépôt, nom, icône) avec, pour chacune, la description du dépôt sur GitHub, sa dernière release qui
+accepte ce Core, et si elle est déjà installée ; « Installer » passe par l'installation habituelle.
+Une appli apparaît comme installable dès que son dépôt publie une release au format décrit plus haut.
+GitHub est relu toutes les heures (bouton « Actualiser » pour le faire tout de suite). Une nouvelle
+appli : l'ajouter à `catalog.json` (elle arrive avec la version suivante du Core) ; en attendant,
+« Installer une appli » accepte n'importe quel dépôt.

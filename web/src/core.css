@@ -250,3 +250,14 @@ button.core-hw-role.on { border-style: solid; background: color-mix(in srgb, var
 .core-storage-dir { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text-1); cursor: pointer; text-align: left; }
 .core-storage-dir:hover { background: var(--hover, color-mix(in srgb, var(--text-1) 6%, transparent)); }
 .core-grow { flex: 1; }
+
+/* Bibliothèque › applis Strata */
+.core-catalog { display: flex; flex-direction: column; }
+.core-catalog-item { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.core-catalog-item:first-child { border-top: 0; }
+.core-catalog-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.core-catalog-text > span { font-size: var(--fs-12, 12px); overflow: hidden; text-overflow: ellipsis; }
+.core-catalog-repo { font-size: 11px; }
+.core-catalog-state { flex: none; display: flex; justify-content: flex-end; max-width: 45%; text-align: right; }
+.core-catalog-why { font-size: var(--fs-12, 12px); }
+@media (max-width: 640px) { .core-catalog-item { flex-wrap: wrap; } .core-catalog-state { max-width: none; width: 100%; justify-content: flex-start; padding-left: 48px; } }

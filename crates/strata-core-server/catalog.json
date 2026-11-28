@@ -1,0 +1,10 @@
+[
+  { "repo": "DamienP2/Strata-Cut", "name": "LiveCut", "icon": "scissors", "summary": "Clips from live sources: cut, export, send" },
+  { "repo": "DamienP2/Strata-Studio", "name": "Studio", "icon": "clapperboard", "summary": "" },
+  { "repo": "DamienP2/Strata-Multiview", "name": "Multiview", "icon": "layout-grid", "summary": "" },
+  { "repo": "DamienP2/Strata-Network", "name": "Network", "icon": "network", "summary": "" },
+  { "repo": "DamienP2/StrataMedia", "name": "Media", "icon": "film", "summary": "" },
+  { "repo": "DamienP2/StrataCall", "name": "Call", "icon": "phone", "summary": "" },
+  { "repo": "DamienP2/Strata-Newsroom", "name": "Newsroom", "icon": "newspaper", "summary": "" },
+  { "repo": "DamienP2/Strata-Arkyo", "name": "Arkyo", "icon": "archive", "summary": "" }
+]

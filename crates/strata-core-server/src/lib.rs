@@ -10,6 +10,7 @@ pub mod api;
 pub mod apps;
 pub mod auth;
 pub mod backup;
+pub mod catalog;
 pub mod cli;
 pub mod cluster;
 pub mod config;
