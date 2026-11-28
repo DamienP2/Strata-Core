@@ -54,6 +54,9 @@ pub struct IoStatus {
     pub unrecovered: u64,
     /// Reçu, par patte (rouge, bleue) : paquets reçus, manquants.
     pub legs: Vec<LegIo>,
+    /// Reçu : l'avance moyenne de l'horodatage RTP sur l'arrivée (µs, la latence de l'émetteur) ;
+    /// None : l'émetteur n'est pas sur la même horloge (posé à l'arrivée).
+    pub rtp_late_us: Option<f64>,
     pub error: Option<String>,
 }
 
@@ -579,15 +582,25 @@ pub(crate) struct RtpTime {
     shift: Option<i64>,
     /// Les horodatages refusés de suite : au-delà de 50, le décalage est réappris.
     misses: u32,
+    /// L'avance moyenne de l'horodatage sur l'arrivée (ticks), lissée.
+    late: Option<f64>,
 }
 
 impl RtpTime {
     pub(crate) fn new(clock: u32) -> RtpTime {
-        RtpTime { clock: clock as i64, shift: None, misses: 0 }
+        RtpTime { clock: clock as i64, shift: None, misses: 0, late: None }
     }
 
     /// L'instant (ticks TAI) d'un horodatage RTP, `now` : maintenant en ticks. None : pas la même
     /// horloge (l'écart n'est pas de quelques ms à quelques secondes entières près).
+    /// L'avance moyenne de l'horodatage sur l'arrivée, en µs (None : pas la même horloge).
+    pub(crate) fn late_us(&self) -> Option<f64> {
+        if self.misses > 0 {
+            return None;
+        }
+        self.late.map(|l| l * 1e6 / self.clock as f64)
+    }
+
     pub(crate) fn ticks(&mut self, rtp: u32, now: u64) -> Option<u64> {
         // L'horodatage complet le plus proche de maintenant (RTP n'en garde que 32 bits).
         let d = rtp.wrapping_sub(now as u32) as i32 as i64;
@@ -605,6 +618,7 @@ impl RtpTime {
             return None;
         }
         self.misses = 0;
+        self.late = Some(self.late.map_or(late as f64, |l| l * 0.95 + late as f64 * 0.05));
         Some((now as i64 + d - shift) as u64)
     }
 }
@@ -634,10 +648,12 @@ fn receive_audio(f: &FlowPlan, a: &strata_mtl::Audio, mtl: &Mtl, mxl: &Mxl, stop
         };
         if last.elapsed() >= Duration::from_secs(1) || !got {
             let st = rx.stats();
+            let late = clock.late_us();
             set(&|s| {
                 s.state = if got { IoState::Running } else { IoState::Idle };
                 s.frames = blocks;
                 s.count(st, f.legs.len());
+                s.rtp_late_us = late;
                 s.error = None;
             });
             last = Instant::now();
@@ -911,10 +927,12 @@ fn receive(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: 
         };
         if last.elapsed() >= Duration::from_secs(1) || !got {
             let st = rx.counters();
+            let late = clock.late_us();
             set(&|s| {
                 s.state = if got { IoState::Running } else { IoState::Idle };
                 s.frames = frames;
                 s.count(st, f.legs.len());
+                s.rtp_late_us = late;
                 s.error = None;
             });
             last = Instant::now();

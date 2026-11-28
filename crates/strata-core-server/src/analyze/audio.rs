@@ -130,6 +130,8 @@ pub struct Meter {
     since_short: usize,
     tp: TruePeak,
     tp_max: f32,
+    /// Les derniers échantillons de la paire mesurée (spectre, goniomètre).
+    pair: std::collections::VecDeque<(f32, f32)>,
     // Phase de la paire 1-2.
     lr: f64,
     ll: f64,
@@ -155,11 +157,55 @@ impl Meter {
             short: Vec::new(),
             since_short: 0,
             tp_max: 0.0,
+            pair: Default::default(),
             lr: 0.0,
             ll: 0.0,
             rr: 0.0,
             phase: None,
         }
+    }
+
+    /// Les canaux mesurés (sonie, crête vraie, spectre, goniomètre), 0 = le premier.
+    pub fn group(&self) -> &[usize] {
+        &self.group
+    }
+
+    /// D'autres canaux mesurés : la sonie repart de zéro.
+    pub fn set_group(&mut self, group: Vec<usize>) {
+        let channels = self.channels;
+        *self = Meter::new(channels, group);
+    }
+
+    /// Le spectre de la paire mesurée : 31 bandes d'un tiers d'octave (20 Hz à 20 kHz), en dB
+    /// sous un sinus à pleine échelle.
+    pub fn spectrum(&self) -> Vec<f32> {
+        const N: usize = 2048;
+        if self.pair.len() < N {
+            return Vec::new();
+        }
+        let mut re: Vec<f32> = Vec::with_capacity(N);
+        for (i, (l, r)) in self.pair.iter().skip(self.pair.len() - N).enumerate() {
+            let w = 0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / (N - 1) as f32).cos();
+            re.push((l + r) * 0.5 * w);
+        }
+        let mut im = vec![0f32; N];
+        fft(&mut re, &mut im);
+        let full = (N as f32 / 4.0).powi(2) * 1.5;
+        (0..31)
+            .map(|k| {
+                let fc = 1000.0 * 2f32.powf((k as f32 - 17.0) / 3.0);
+                let (lo, hi) = (fc / 2f32.powf(1.0 / 6.0), fc * 2f32.powf(1.0 / 6.0));
+                let (a, b) = (((lo * N as f32 / 48_000.0).floor() as usize).max(1), ((hi * N as f32 / 48_000.0).ceil() as usize).min(N / 2));
+                let p: f32 = (a..b.max(a + 1)).map(|i| re[i] * re[i] + im[i] * im[i]).sum();
+                (10.0 * (p / full).max(1e-12).log10()).max(-90.0)
+            })
+            .collect()
+    }
+
+    /// Le goniomètre : 256 instants de la paire mesurée (gauche, droite).
+    pub fn gonio(&self) -> Vec<[f32; 2]> {
+        let step = (self.pair.len() / 256).max(1);
+        self.pair.iter().step_by(step).map(|(l, r)| [(l * 1000.0).round() / 1000.0, (r * 1000.0).round() / 1000.0]).collect()
     }
 
     /// Remet la sonie intégrée, la plage et la crête vraie à zéro.
@@ -191,6 +237,16 @@ impl Meter {
             self.block_n += 1;
             if self.block_n == 4_800 {
                 self.close_block();
+            }
+            // La paire mesurée (un seul canal : aux deux côtés).
+            let (pl, pr) = match self.group.as_slice() {
+                [] => (frame[0], frame[0]),
+                [a] => (frame[*a], frame[*a]),
+                [a, b, ..] => (frame[*a], frame[*b]),
+            };
+            self.pair.push_back((pl, pr));
+            if self.pair.len() > 4096 {
+                self.pair.pop_front();
             }
             if ch >= 2 {
                 let (l, r) = (frame[0] as f64, frame[1] as f64);
@@ -271,6 +327,42 @@ impl Meter {
     }
 }
 
+/// Une FFT complexe en place (radix 2, `re.len()` puissance de deux).
+pub fn fft(re: &mut [f32], im: &mut [f32]) {
+    let n = re.len();
+    let mut j = 0;
+    for i in 1..n {
+        let mut bit = n >> 1;
+        while j & bit != 0 {
+            j ^= bit;
+            bit >>= 1;
+        }
+        j |= bit;
+        if i < j {
+            re.swap(i, j);
+            im.swap(i, j);
+        }
+    }
+    let mut len = 2;
+    while len <= n {
+        let ang = -2.0 * std::f32::consts::PI / len as f32;
+        let (wr, wi) = (ang.cos(), ang.sin());
+        for start in (0..n).step_by(len) {
+            let (mut cr, mut ci) = (1f32, 0f32);
+            for k in 0..len / 2 {
+                let (a, b) = (start + k, start + k + len / 2);
+                let (tr, ti) = (re[b] * cr - im[b] * ci, re[b] * ci + im[b] * cr);
+                re[b] = re[a] - tr;
+                im[b] = im[a] - ti;
+                re[a] += tr;
+                im[a] += ti;
+                (cr, ci) = (cr * wr - ci * wi, cr * wi + ci * wr);
+            }
+        }
+        len <<= 1;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,5 +395,17 @@ mod tests {
         assert!((tp + 18.0).abs() < 0.3, "{tp}");
         m.reset();
         assert!(m.loudness().integrated.is_none());
+    }
+
+    #[test]
+    fn spectrum_of_a_tone() {
+        let mut m = Meter::new(2, vec![0, 1]);
+        m.push(&sine(4_096, 1000.0, 1.0, 2));
+        let sp = m.spectrum();
+        assert_eq!(sp.len(), 31);
+        // La bande de 1 kHz (la 18e) près de 0 dB, les autres bien plus bas.
+        assert!(sp[17] > -2.0 && sp[17] < 1.0, "{}", sp[17]);
+        assert!(sp[5] < -40.0 && sp[28] < -40.0, "{:?}", sp);
+        assert_eq!(m.gonio().len(), 256);
     }
 }

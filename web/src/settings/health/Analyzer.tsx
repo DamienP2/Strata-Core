@@ -34,11 +34,25 @@ interface State {
     levels: Level[];
     loudness: { momentary?: number | null; shortTerm?: number | null; integrated?: number | null; lra?: number | null; truePeak?: number | null; channels: number[] };
     phase?: number | null;
+    spectrum: number[];
+    gonio: [number, number][];
     silent: boolean[];
     clipping: boolean[];
   } | null;
   lipsync?: { offset?: number | null; history: number[]; detected: boolean };
   data?: { timecode?: string | null; captions: boolean; afd?: number | null; scte104?: string | null };
+  ip?: {
+    redundant: boolean;
+    ptp: { running: boolean; message?: string | null; domain: number; portState?: string | null; grandmaster?: string | null; offsetNs?: number | null; jitterNs?: number | null; locked: boolean };
+    flows: {
+      id: string;
+      name: string;
+      essence: 'video' | 'audio' | 'data';
+      red: string;
+      blue?: string | null;
+      io?: { state: string; format?: string | null; frames: number; packets: number; lost: number; unrecovered: number; legs: { packets: number; lost: number }[]; rtpLateUs?: number | null; error?: string | null } | null;
+    }[];
+  };
 }
 
 const KIND: Record<Source['kind'], string> = { sdi: 'SDI', '2110': 'ST 2110', audio: 'Sound only', stream: 'Network stream', ndi: 'NDI', mxl: 'MXL flow' };
@@ -50,9 +64,13 @@ export function Analyzer() {
   const [key, setKey] = useState<string>('');
   const sources = list?.sources ?? [];
   const src = sources.find((s) => s.key === key) ?? sources[0];
-  const st = usePoll<State>(src ? `/api/analyze/state?source=${enc(src.key)}` : null, 250);
+  const [loud, setLoud] = useState('');
+  const st = usePoll<State>(src ? `/api/analyze/state?source=${enc(src.key)}&loud=${enc(loud)}` : null, 250);
   const [solo, setSolo] = useState<number[]>([]);
-  useEffect(() => setSolo([]), [src?.key]);
+  useEffect(() => {
+    setSolo([]);
+    setLoud('');
+  }, [src?.key]);
   if (!list) return null;
   if (!list.mxl) return <p className="core-warn">{t('MXL is not available: the analyzer needs it.')}</p>;
   if (!src) return <Empty icon={Headphones} text={t('No source on this server')} />;
@@ -88,6 +106,17 @@ export function Analyzer() {
               </Card>
               <Card title={t('Vectorscope')}>
                 <Scope data={v?.vector} w={64} h={64} />
+              </Card>
+            </div>
+          )}
+          {st?.ip && <IpCard ip={st.ip} />}
+          {a && a.spectrum.length > 0 && (
+            <div className="core-an-scopes">
+              <Card title={t('Spectrum · channels {list}', { list: a.loudness.channels.join('-') })}>
+                <Spectrum bands={a.spectrum} />
+              </Card>
+              <Card title={t('Goniometer · channels {list}', { list: a.loudness.channels.join('-') })}>
+                <Gonio points={a.gonio} />
               </Card>
             </div>
           )}
@@ -132,7 +161,10 @@ export function Analyzer() {
                 <Big label={t('Integrated')} value={num(a.loudness.integrated)} unit="LUFS" />
                 <Big label={t('Range (LRA)')} value={num(a.loudness.lra)} unit="LU" small />
                 <Big label={t('True peak')} value={num(a.loudness.truePeak)} unit="dBTP" small />
-                <span className="st-muted core-an-note">{t('Channels {list}', { list: a.loudness.channels.join('-') })}</span>
+                <label className="core-an-group">
+                  <span className="st-muted">{t('Measured on')}</span>
+                  <Dropdown value={loud || a.loudness.channels.join('-')} options={groups(a.levels.length)} onChange={setLoud} />
+                </label>
               </div>
             </Card>
           )}
@@ -169,6 +201,107 @@ export function Analyzer() {
         </div>
       </div>
     </>
+  );
+}
+
+/** Les groupes de canaux proposés pour la sonie : les paires, le 5.1, chaque canal seul. */
+function groups(n: number) {
+  const v: { value: string; label: string }[] = [];
+  for (let c = 1; c + 1 <= n; c += 2) v.push({ value: `${c}-${c + 1}`, label: t('Channels {list} (stereo)', { list: `${c}-${c + 1}` }) });
+  if (n >= 6) v.push({ value: '1-6', label: t('Channels 1-6 (5.1)') });
+  for (let c = 1; c <= n; c++) v.push({ value: String(c), label: t('Channel {n} (mono)', { n: c }) });
+  return v;
+}
+
+const us = (v: number | null | undefined) => (v == null ? '—' : v >= 1000 ? `${num(v / 1000, 2)} ms` : `${num(v, 0)} µs`);
+
+/** Le détail IP d'une source ST 2110 : chaque flux, par réseau, et l'horloge PTP. */
+function IpCard({ ip }: { ip: NonNullable<State['ip']> }) {
+  const p = ip.ptp;
+  return (
+    <>
+      <Card title={t('PTP clock (ST 2059-2)')} actions={p.locked ? <Badge tone="ok">{t('Locked')}</Badge> : p.running ? <Badge tone="warn">{p.portState ?? t('Not locked')}</Badge> : <Badge tone="warn">{t('PTP not running')}</Badge>}>
+        <div className="core-an-loud">
+          <Big label={t('Offset from the master')} value={p.offsetNs == null ? '—' : `${p.offsetNs >= 0 ? '+' : ''}${num(p.offsetNs, 0)}`} unit="ns" />
+          <Big label={t('Jitter')} value={num(p.jitterNs, 0)} unit="ns" />
+          <Big label={t('Domain')} value={String(p.domain)} unit={p.portState ?? ''} />
+        </div>
+        <p className="st-muted core-an-note">
+          {t('Grandmaster')} : <span className="st-mono">{p.grandmaster ?? '—'}</span>
+          {p.message ? ` · ${friendly(p.message)}` : ''}
+        </p>
+      </Card>
+      <Card title={ip.redundant ? t('RTP packets per network (SMPTE 2022-7)') : t('RTP packets')}>
+        <div className="core-an-table">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">{t('Flow')}</th>
+                <th scope="col">{t('Packets')}</th>
+                <th scope="col">{ip.redundant ? t('Lost red') : t('Lost')}</th>
+                {ip.redundant && <th scope="col">{t('Lost blue')}</th>}
+                {ip.redundant && <th scope="col">{t('Lost after 2022-7')}</th>}
+                <th scope="col">{t('RTP → arrival')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ip.flows.map((f) => {
+                const io = f.io;
+                return (
+                  <tr key={f.id}>
+                    <td>
+                      {f.name}
+                      <span className="st-muted st-mono"> · {f.red}</span>
+                      {io?.error && <span className="core-warn"> {friendly(io.error)}</span>}
+                    </td>
+                    <td>{io ? io.packets.toLocaleString() : '—'}</td>
+                    <td>{io ? (ip.redundant ? io.legs[0]?.lost ?? 0 : io.lost).toLocaleString() : '—'}</td>
+                    {ip.redundant && <td>{io ? (io.legs[1]?.lost ?? 0).toLocaleString() : '—'}</td>}
+                    {ip.redundant && <td>{io ? io.unrecovered.toLocaleString() : '—'}</td>}
+                    <td title={t('The RTP timestamp ahead of the arrival: the latency of the sender. —: not on the same clock (placed at arrival).')}>{us(io?.rtpLateUs)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <p className="st-muted core-an-note">{t('Received: picture and sound placed at the instant of their RTP timestamp (PTP), as they were taken.')}</p>
+      </Card>
+    </>
+  );
+}
+
+/** Le spectre : 31 bandes d'un tiers d'octave, −90 à 0 dB. */
+function Spectrum({ bands }: { bands: number[] }) {
+  return (
+    <svg className="core-an-spectrum" viewBox="0 0 310 130" role="img" aria-label={t('Spectrum from 20 Hz to 20 kHz')}>
+      <path d="M0 125H310" stroke="var(--line-2)" />
+      {bands.map((db, i) => {
+        const h = Math.max(1, ((db + 90) / 90) * 115);
+        return <rect key={i} x={i * 10 + 1} y={125 - h} width={8} height={h} fill="var(--accent)" />;
+      })}
+      <text x="2" y="10" fill="var(--text-3)" fontSize="9">20 Hz</text>
+      <text x="270" y="10" fill="var(--text-3)" fontSize="9">20 kHz</text>
+    </svg>
+  );
+}
+
+/** Le goniomètre : gauche et droite tournés de 45° (mono : vertical). */
+function Gonio({ points }: { points: [number, number][] }) {
+  const pts = points
+    .map(([l, r]) => {
+      const m = (l + r) / Math.SQRT2;
+      const sd = (r - l) / Math.SQRT2;
+      return `${70 + Math.max(-1, Math.min(1, sd * 2)) * 60},${70 - Math.max(-1, Math.min(1, m * 2)) * 60}`;
+    })
+    .join(' ');
+  return (
+    <svg className="core-an-gonio" viewBox="0 0 140 140" role="img" aria-label={t('Goniometer')}>
+      <path d="M70 6V134M6 70H134M20 20L120 120M120 20L20 120" stroke="var(--line)" />
+      <text x="16" y="14" fill="var(--text-3)" fontSize="9">L</text>
+      <text x="118" y="14" fill="var(--text-3)" fontSize="9">R</text>
+      {pts && <polyline points={pts} fill="none" stroke="var(--pvw)" strokeWidth="1" strokeOpacity="0.8" />}
+    </svg>
   );
 }
 

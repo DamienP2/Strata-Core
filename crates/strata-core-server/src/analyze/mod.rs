@@ -115,6 +115,8 @@ pub fn sources(s: &crate::state::AppState) -> Vec<Source> {
     for g in testgen.generators.iter().filter(|g| g.target == "mxl") {
         v.push(plain(format!("testgen/{}", g.id), g.name.clone(), "mxl", "out", format!("testgen/{}", g.id)));
     }
+    // Ce qui est reçu d'abord (ce qu'on vérifie le plus souvent).
+    v.sort_by_key(|s| s.way != "in");
     v
 }
 
@@ -131,6 +133,8 @@ struct Session {
     seen: Mutex<Instant>,
     snap: Mutex<Value>,
     reset: AtomicBool,
+    /// Les canaux de la sonie demandés (0 = le premier) ; None : 1-2 (ou 1).
+    group: Mutex<Option<Vec<usize>>>,
     listeners: Mutex<Vec<Listener>>,
     done: AtomicBool,
 }
@@ -157,6 +161,7 @@ impl Analyzer {
             seen: Mutex::new(Instant::now()),
             snap: Mutex::new(json!({ "starting": true })),
             reset: AtomicBool::new(false),
+            group: Mutex::new(None),
             listeners: Mutex::new(Vec::new()),
             done: AtomicBool::new(false),
         });
@@ -266,6 +271,12 @@ fn run(s: &Session, mxl: &Mxl) {
                 pos = None;
             } else if meter.as_ref().is_none_or(|m| m.channels != total) {
                 meter = Some(audio::Meter::new(total, if total >= 2 { vec![0, 1] } else { vec![0] }));
+            }
+        }
+        if let (Some(m), Some(g)) = (meter.as_mut(), s.group.lock().unwrap().clone()) {
+            let g: Vec<usize> = g.into_iter().filter(|c| *c < m.channels).collect();
+            if !g.is_empty() && g != m.group() {
+                m.set_group(g);
             }
         }
         if s.reset.swap(false, Ordering::Relaxed) {
@@ -428,6 +439,8 @@ fn run(s: &Session, mxl: &Mxl) {
                     "levels": levels,
                     "loudness": m.loudness(),
                     "phase": m.phase,
+                    "spectrum": m.spectrum(),
+                    "gonio": m.gonio(),
                     "silent": silent,
                     "clipping": levels.iter().map(|l| l.peak > -0.1).collect::<Vec<_>>(),
                 })),
@@ -468,6 +481,23 @@ struct Pick {
     source: String,
     #[serde(default)]
     solo: String,
+    /// Les canaux de la sonie : `1-2`, `1-6`, `3`.
+    #[serde(default)]
+    loud: String,
+}
+
+/// `1-2` → [0, 1] ; `3` → [2] ; `1,3` → [0, 2].
+fn channels_of(s: &str) -> Vec<usize> {
+    let mut v = Vec::new();
+    for part in s.split(',') {
+        let mut it = part.split('-').filter_map(|x| x.trim().parse::<usize>().ok());
+        match (it.next(), it.next()) {
+            (Some(a), Some(b)) if a >= 1 && b >= a && b <= 64 => v.extend(a - 1..b),
+            (Some(a), None) if (1..=64).contains(&a) => v.push(a - 1),
+            _ => {}
+        }
+    }
+    v
 }
 
 fn find(s: &crate::state::AppState, key: &str) -> Result<Source, (StatusCode, String)> {
@@ -491,8 +521,15 @@ async fn state(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q): 
     let v = blocking(move || {
         let src = find(&s2, &q.source)?;
         let session = s2.analyzer.session(src.clone(), mxl(&s2)?);
+        let g = channels_of(&q.loud);
+        if !g.is_empty() {
+            *session.group.lock().unwrap() = Some(g);
+        }
         let mut v = session.snap.lock().unwrap().clone();
         v["source"] = json!(src);
+        if src.kind == "2110" || src.kind == "audio" {
+            v["ip"] = ip_view(&s2, &src);
+        }
         // Le timecode d'une entrée SDI : celui que la capture lit.
         if src.kind == "sdi" && src.way == "in" {
             let tc = s2.captures.list().into_iter().find(|c| format!("sdi/{}/{}", c.card, c.connector) == src.key).and_then(|c| c.timecode);
@@ -504,6 +541,29 @@ async fn state(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q): 
     })
     .await??;
     Ok(Json(v))
+}
+
+/// Le détail IP d'une source ST 2110 : chaque flux du groupe (paquets, pertes par réseau,
+/// latence de l'émetteur), et l'horloge PTP du serveur.
+fn ip_view(s: &crate::state::AppState, src: &Source) -> Value {
+    let hw = HardwareConfig::load(&s.data_dir);
+    let names: Vec<&String> = src.video.iter().chain(src.audio.iter()).chain(src.data.iter()).collect();
+    let flows: Vec<Value> = names
+        .iter()
+        .filter_map(|n| n.strip_prefix("2110/"))
+        .filter_map(|id| hw.flows.iter().find(|f| f.id == id))
+        .map(|f| {
+            json!({
+                "id": f.id,
+                "name": f.name,
+                "essence": f.essence,
+                "red": f.red.to_string(),
+                "blue": f.blue.map(|b| b.to_string()),
+                "io": s.st2110.status_of(&f.id),
+            })
+        })
+        .collect();
+    json!({ "flows": flows, "ptp": s.clock.read().ptp, "redundant": hw.network.media_mode == crate::hardware::MediaMode::Redundant })
 }
 
 async fn reset(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q): Query<Pick>) -> ApiResult<StatusCode> {
@@ -553,6 +613,15 @@ async fn listen(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q):
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn channel_lists() {
+        assert_eq!(channels_of("1-2"), [0, 1]);
+        assert_eq!(channels_of("3"), [2]);
+        assert_eq!(channels_of("1-6"), [0, 1, 2, 3, 4, 5]);
+        assert_eq!(channels_of("1,4"), [0, 3]);
+        assert!(channels_of("x").is_empty() && channels_of("0").is_empty());
+    }
 
     #[test]
     fn the_mix_follows_the_solos() {
