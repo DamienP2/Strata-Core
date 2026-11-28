@@ -784,7 +784,7 @@ async fn flows(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResu
             .map(|f| {
                 let mut v = match f.direction {
                     // Tenu par le Core (MTL) : ce qui arrive ou part vraiment.
-                    _ if s2.st2110.active() && f.essence != Essence::Data => json!({ "io": s2.st2110.status_of(&f.id) }),
+                    _ if s2.st2110.active() => json!({ "io": s2.st2110.status_of(&f.id) }),
                     Direction::Output => match mxl_of(&s2) {
                         Some(m) => published_mxl(&m, out_flow(&format!("2110/{}", f.id))),
                         None => published(&strata_share::flow_path(&f.id), &s2),

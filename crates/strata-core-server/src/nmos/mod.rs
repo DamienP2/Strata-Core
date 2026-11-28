@@ -179,7 +179,6 @@ pub(crate) fn ends(cfg: &HardwareConfig, node: Uuid) -> Vec<End> {
     let ips = cfg.media_ips();
     cfg.flows
         .iter()
-        .filter(|f| f.essence != Essence::Data)
         .map(|f| {
             let sender = f.direction == Direction::Output;
             let ifaces = match r.media_mode {
@@ -320,7 +319,8 @@ pub(crate) fn model(s: &AppState, cfg: &HardwareConfig, saved: &Saved, api: Sock
         let bindings: Vec<&String> = e.ifaces.iter().map(|(n, _)| n).collect();
         let (format, media_types) = match f.essence {
             Essence::Audio => ("urn:x-nmos:format:audio", json!(["audio/L24", "audio/L16"])),
-            _ => ("urn:x-nmos:format:video", json!(["video/raw"])),
+            Essence::Data => ("urn:x-nmos:format:data", json!(["video/smpte291"])),
+            Essence::Video => ("urn:x-nmos:format:video", json!(["video/raw"])),
         };
         if !e.sender {
             receivers.push(json!({
@@ -354,6 +354,22 @@ pub(crate) fn model(s: &AppState, cfg: &HardwareConfig, saved: &Saved, api: Sock
                 fl["media_type"] = json!(format!("audio/L{}", f.bits));
                 fl["sample_rate"] = json!({ "numerator": 48000 });
                 fl["bit_depth"] = json!(f.bits);
+                flows.push(fl);
+            }
+            Essence::Data => {
+                let (_, _, (n, d), _) = cfg.video_of(f).unwrap_or((1920, 1080, (25, 1), true));
+                let rate = json!({ "numerator": n, "denominator": d });
+                let mut src = common(source_id);
+                src["format"] = json!(format);
+                src["clock_name"] = json!("clk0");
+                src["caps"] = json!({});
+                src["grain_rate"] = rate.clone();
+                sources.push(src);
+                let mut fl = common(flow_id);
+                fl["source_id"] = json!(source_id);
+                fl["format"] = json!(format);
+                fl["grain_rate"] = rate;
+                fl["media_type"] = json!("video/smpte291");
                 flows.push(fl);
             }
             _ => {

@@ -886,4 +886,6 @@ export const fr: Record<string, string> = {
   '{n} GB': '{n} Go',
   '{n} MB': '{n} Mo',
   '{n} KB': '{n} Ko',
+  'Video format (the timing of the data)': 'Format vidéo (le rythme des données)',
+  'no data from the apps': 'aucune donnée des applis',
 };

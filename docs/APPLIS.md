@@ -204,9 +204,19 @@ Linux Foundation) : des flux en mémoire partagée, sur le serveur, sans passer 
   envoie les sortants : l'appli ne touche jamais le réseau, elle lit et écrit `mxlFlow` du flux
   comme pour le SDI. Vidéo (2110-20) : v210, cadencée ST 2110-21, du noir quand l'appli n'écrit
   pas. Son (2110-30) : un flux audio MXL (float32 48 kHz, `channels` canaux), en L24 ou L16 sur le
-  réseau (`bits`, paquets de `ptimeUs`), du silence quand l'appli n'écrit pas. `io` de
-  `/api/hardware/flows` dit ce qui passe (paquets reçus, perdus). Réglé sur « Non », les applis
-  reçoivent et envoient elles-mêmes, comme avant.
+  réseau (`bits`, paquets de `ptimeUs`), du silence quand l'appli n'écrit pas. Données annexes
+  (2110-40 : timecode ATC, sous-titres, SCTE-104…) : un flux de données MXL `video/smpte291`, un
+  grain par image (par trame en entrelacé, comme la vidéo), au rythme de `format` ; des blocs
+  vides quand l'appli n'écrit pas. `io` de `/api/hardware/flows` dit ce qui passe (paquets reçus,
+  perdus). Réglé sur « Non », les applis reçoivent et envoient elles-mêmes, comme avant.
+- **Données annexes** (`strata_mxl::anc`) : un grain porte la charge RFC 8331 à partir du champ
+  *Length* (le format de MXL) ; `anc::encode` / `anc::decode` la font et la lisent (paquets ST 291 :
+  ligne, DID, SDID, mots sur 8 bits ; parité et somme de contrôle calculées), `atc_packet` et
+  `atc_timecode` pour le timecode. Écrire : `mxl.data_writer(id, nom, cadence)` puis
+  `write(&paquets, champ)` (champ F : 0 progressif, 2 / 3 première / seconde trame) ; calé sur
+  une image : `write_at(video.last_index().unwrap(), …)`, le flux de données à la cadence des
+  grains vidéo. Lire : `mxl.data_reader(id)` puis `next_grain()`, dans l'ordre. Essais :
+  `strata-core test timecode 2110/<flux>`, `strata-core test data 2110/<flux>`.
 - Une appli peut aussi lire le flux qu'une autre écrit (Multiview qui montre le programme de
   LiveCut), sans rien demander au Core.
 - **Format** : vidéo v210 (YCbCr 4:2:2 10 bits, BT.709), un grain par image ; en entrelacé, un grain

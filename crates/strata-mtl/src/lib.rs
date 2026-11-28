@@ -798,6 +798,276 @@ impl Drop for ATx {
     }
 }
 
+// ---------- Les données annexes : ST 2110-40 ----------
+
+/// Un paquet ANC (SMPTE ST 291) : les mots sur 8 bits (MTL calcule parité et somme de contrôle).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Anc {
+    pub c: bool,
+    pub line: u16,
+    pub offset: u16,
+    pub s: bool,
+    pub stream: u8,
+    pub did: u8,
+    pub sdid: u8,
+    pub udw: Vec<u8>,
+}
+
+/// Les paquets d'un bloc (20 au plus).
+pub const ANC_MAX: usize = 20;
+
+#[cfg(mtl_shim)]
+mod dffi {
+    use super::*;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Anc {
+        pub c: u16,
+        pub line: u16,
+        pub offset: u16,
+        pub s: u16,
+        pub stream: u16,
+        pub did: u16,
+        pub sdid: u16,
+        pub size: u16,
+        pub udw: [u8; 255],
+    }
+
+    pub const EMPTY: Anc = Anc { c: 0, line: 0, offset: 0, s: 0, stream: 0, did: 0, sdid: 0, size: 0, udw: [0; 255] };
+
+    extern "C" {
+        pub fn smtl_drx_open(
+            h: *mut c_void,
+            name: *const c_char,
+            n: c_int,
+            port_index: *const c_int,
+            ip: *const [u8; 4],
+            udp: *const u16,
+            pt: u8,
+            interlaced: c_int,
+            err: *mut c_char,
+            errlen: c_int,
+        ) -> *mut c_void;
+        pub fn smtl_drx_get(rx: *mut c_void, out: *mut Anc, max: c_int, field: *mut c_int) -> c_int;
+        pub fn smtl_drx_stats(rx: *mut c_void, received: *mut u64, lost: *mut u64);
+        pub fn smtl_drx_close(rx: *mut c_void);
+        pub fn smtl_dtx_open(
+            h: *mut c_void,
+            name: *const c_char,
+            n: c_int,
+            port_index: *const c_int,
+            ip: *const [u8; 4],
+            udp: *const u16,
+            pt: u8,
+            fps: c_int,
+            interlaced: c_int,
+            err: *mut c_char,
+            errlen: c_int,
+        ) -> *mut c_void;
+        pub fn smtl_dtx_send(tx: *mut c_void, packets: *const Anc, n: c_int) -> c_int;
+        pub fn smtl_dtx_close(tx: *mut c_void);
+    }
+}
+
+impl Mtl {
+    /// Reçoit un flux de données.
+    pub fn drx(&self, name: &str, legs: &[Leg], payload_type: u8, interlaced: bool) -> Result<DRx, String> {
+        #[cfg(mtl_shim)]
+        {
+            let (idx, ips, udps) = legs_of(legs);
+            let n = CString::new(name).unwrap_or_default();
+            let mut err = [0 as c_char; 256];
+            // SAFETY: arrays of `legs.len()` entries; `err` sized as passed.
+            let h = unsafe {
+                dffi::smtl_drx_open(
+                    self.h,
+                    n.as_ptr(),
+                    legs.len() as c_int,
+                    idx.as_ptr(),
+                    ips.as_ptr(),
+                    udps.as_ptr(),
+                    payload_type,
+                    interlaced as c_int,
+                    err.as_mut_ptr(),
+                    err.len() as c_int,
+                )
+            };
+            if h.is_null() {
+                return Err(ffi::text(&err));
+            }
+            Ok(DRx { h, _name: n, buf: std::sync::Mutex::new(vec![dffi::EMPTY; ANC_MAX]) })
+        }
+        #[cfg(not(mtl_shim))]
+        {
+            let _ = (name, legs, payload_type, interlaced);
+            Err(NOT_BUILT.into())
+        }
+    }
+
+    /// Envoie un flux de données, au rythme de la vidéo `v` (une salve par trame en entrelacé).
+    pub fn dtx(&self, name: &str, legs: &[Leg], payload_type: u8, v: &Video) -> Result<DTx, String> {
+        #[cfg(mtl_shim)]
+        {
+            let fps = st_fps(v).ok_or("ST 2110-40: unsupported frame rate")?;
+            let (idx, ips, udps) = legs_of(legs);
+            let n = CString::new(name).unwrap_or_default();
+            let mut err = [0 as c_char; 256];
+            // SAFETY: arrays of `legs.len()` entries; `err` sized as passed.
+            let h = unsafe {
+                dffi::smtl_dtx_open(
+                    self.h,
+                    n.as_ptr(),
+                    legs.len() as c_int,
+                    idx.as_ptr(),
+                    ips.as_ptr(),
+                    udps.as_ptr(),
+                    payload_type,
+                    fps,
+                    v.interlaced as c_int,
+                    err.as_mut_ptr(),
+                    err.len() as c_int,
+                )
+            };
+            if h.is_null() {
+                return Err(ffi::text(&err));
+            }
+            Ok(DTx { h, _name: n, buf: std::sync::Mutex::new(Vec::with_capacity(ANC_MAX)) })
+        }
+        #[cfg(not(mtl_shim))]
+        {
+            let _ = (name, legs, payload_type, v);
+            Err(NOT_BUILT.into())
+        }
+    }
+}
+
+/// Un flux de données reçu.
+pub struct DRx {
+    #[cfg(mtl_shim)]
+    h: *mut c_void,
+    #[cfg(mtl_shim)]
+    _name: CString,
+    #[cfg(mtl_shim)]
+    buf: std::sync::Mutex<Vec<dffi::Anc>>,
+}
+
+unsafe impl Send for DRx {}
+unsafe impl Sync for DRx {}
+
+impl DRx {
+    /// Le prochain bloc (200 ms au plus) : ses paquets et son champ F (0 progressif, 2 première
+    /// trame, 3 seconde).
+    pub fn next(&self) -> Option<(Vec<Anc>, u8)> {
+        #[cfg(mtl_shim)]
+        {
+            let mut buf = self.buf.lock().unwrap_or_else(|e| e.into_inner());
+            let mut field: c_int = 0;
+            // SAFETY: open session; `buf` holds ANC_MAX entries.
+            let n = unsafe { dffi::smtl_drx_get(self.h, buf.as_mut_ptr(), ANC_MAX as c_int, &mut field) };
+            if n < 0 {
+                return None;
+            }
+            let out = buf[..n as usize]
+                .iter()
+                .map(|a| Anc {
+                    c: a.c != 0,
+                    line: a.line,
+                    offset: a.offset,
+                    s: a.s != 0,
+                    stream: a.stream as u8,
+                    did: a.did as u8,
+                    sdid: a.sdid as u8,
+                    udw: a.udw[..(a.size as usize).min(255)].to_vec(),
+                })
+                .collect();
+            Some((out, field as u8))
+        }
+        #[cfg(not(mtl_shim))]
+        None
+    }
+
+    /// Paquets reçus, perdus.
+    pub fn stats(&self) -> (u64, u64) {
+        #[cfg(mtl_shim)]
+        {
+            let (mut r, mut l) = (0u64, 0u64);
+            // SAFETY: open session; valid out pointers.
+            unsafe { dffi::smtl_drx_stats(self.h, &mut r, &mut l) };
+            (r, l)
+        }
+        #[cfg(not(mtl_shim))]
+        (0, 0)
+    }
+}
+
+impl Drop for DRx {
+    fn drop(&mut self) {
+        #[cfg(mtl_shim)]
+        // SAFETY: opened by `drx`, freed once.
+        unsafe {
+            dffi::smtl_drx_close(self.h)
+        };
+    }
+}
+
+/// Un flux de données envoyé.
+pub struct DTx {
+    #[cfg(mtl_shim)]
+    h: *mut c_void,
+    #[cfg(mtl_shim)]
+    _name: CString,
+    #[cfg(mtl_shim)]
+    buf: std::sync::Mutex<Vec<dffi::Anc>>,
+}
+
+unsafe impl Send for DTx {}
+unsafe impl Sync for DTx {}
+
+impl DTx {
+    /// Attend un bloc libre (200 ms au plus) et l'envoie avec ces paquets (20 au plus ; aucun :
+    /// un bloc vide). Vrai s'il est parti. MTL cadence l'envoi : appelé en boucle, il donne le
+    /// rythme (une fois par image, par trame en entrelacé).
+    pub fn send(&self, packets: &[Anc]) -> bool {
+        #[cfg(mtl_shim)]
+        {
+            let mut buf = self.buf.lock().unwrap_or_else(|e| e.into_inner());
+            buf.clear();
+            for p in packets.iter().take(ANC_MAX) {
+                let mut a = dffi::EMPTY;
+                a.c = p.c as u16;
+                a.line = p.line;
+                a.offset = p.offset;
+                a.s = p.s as u16;
+                a.stream = p.stream as u16;
+                a.did = p.did as u16;
+                a.sdid = p.sdid as u16;
+                let n = p.udw.len().min(255);
+                a.size = n as u16;
+                a.udw[..n].copy_from_slice(&p.udw[..n]);
+                buf.push(a);
+            }
+            // SAFETY: open session; `buf` holds `buf.len()` entries.
+            unsafe { dffi::smtl_dtx_send(self.h, buf.as_ptr(), buf.len() as c_int) == 0 }
+        }
+        #[cfg(not(mtl_shim))]
+        {
+            let _ = packets;
+            false
+        }
+    }
+}
+
+impl Drop for DTx {
+    fn drop(&mut self) {
+        #[cfg(mtl_shim)]
+        // SAFETY: opened by `dtx`, freed once.
+        unsafe {
+            dffi::smtl_dtx_close(self.h)
+        };
+    }
+}
+
 /// PCM du réseau (gros-boutien, signé, entrelacé) → float.
 pub fn from_pcm(data: &[u8], bits: u8) -> Vec<f32> {
     match bits {

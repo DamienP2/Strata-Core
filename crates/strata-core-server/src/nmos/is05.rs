@@ -121,7 +121,11 @@ fn transport_file(s: &AppState, e: &End, cfg: &HardwareConfig) -> Reply {
         (0..e.ifaces.len()).filter_map(|i| leg_addr(e, i).map(|a| (*a.ip(), a.port(), e.ifaces[i].1.unwrap_or(Ipv4Addr::UNSPECIFIED)))).collect();
     let media = match f.essence {
         Essence::Audio => sdp::Media::Audio { channels: f.channels, bits: f.bits, ptime_us: f.ptime_us },
-        _ => sdp::Media::Video(cfg.video_of(f).unwrap_or((1920, 1080, (25, 1), true))),
+        Essence::Data => {
+            let (_, _, rate, interlaced) = cfg.video_of(f).unwrap_or((1920, 1080, (25, 1), true));
+            sdp::Media::Data { rate: Some(rate), interlaced }
+        }
+        Essence::Video => sdp::Media::Video(cfg.video_of(f).unwrap_or((1920, 1080, (25, 1), true))),
     };
     let version = s.nmos.lock().versions.get(&e.id).and_then(|v| v.1.split(':').next().and_then(|x| x.parse().ok())).unwrap_or(1);
     let session = u64::from_be_bytes(e.id.as_bytes()[..8].try_into().unwrap_or_default()) >> 1;
@@ -269,7 +273,10 @@ fn stage(s: &AppState, sender: bool, id: &str, body: &Value) -> Result<(Uuid, Va
                     return Err(bad("transport_file.type must be application/sdp".into()));
                 }
                 let p = sdp::parse(text).map_err(bad)?;
-                let fits = matches!((&p.media, e.flow.essence), (sdp::Media::Video(_), Essence::Video) | (sdp::Media::Audio { .. }, Essence::Audio));
+                let fits = matches!(
+                    (&p.media, e.flow.essence),
+                    (sdp::Media::Video(_), Essence::Video) | (sdp::Media::Audio { .. }, Essence::Audio) | (sdp::Media::Data { .. }, Essence::Data)
+                );
                 if !fits {
                     return Err(bad(format!("{} cannot receive this flow", e.flow.name)));
                 }
@@ -459,7 +466,12 @@ fn activate(s: &AppState, id: Uuid) -> Result<(), String> {
                     flow.bits = bits;
                     flow.ptime_us = ptime_us;
                 }
-                sdp::Media::Other(_) => {}
+                // La cadence de l'émetteur, la taille d'image gardée (elle ne compte pas ici).
+                sdp::Media::Data { rate: Some(r), interlaced } => {
+                    let (w, h, _, _) = crate::hardware::parse_format(&flow.format).unwrap_or((1920, 1080, r, interlaced));
+                    flow.format = sdp::format_name((w, h, r, interlaced));
+                }
+                sdp::Media::Data { rate: None, .. } | sdp::Media::Other(_) => {}
             }
         }
         link.peer = st["sender_id"].as_str().and_then(|x| x.parse().ok());

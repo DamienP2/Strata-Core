@@ -661,8 +661,8 @@ function FlowEditor({ flow, redundant, onClose, onSave }: { flow: Flow; redundan
           <Segmented<Flow['essence']> value={f.essence} onChange={(v) => set('essence', v)} options={(['video', 'audio', 'data'] as const).map((e) => ({ value: e, label: t(ESSENCE[e]) }))} />
         </Field>
       </FieldGrid>
-      {f.essence === 'video' && (
-        <Field label={t('Video format')} group>
+      {f.essence !== 'audio' && (
+        <Field label={f.essence === 'data' ? t('Video format (the timing of the data)') : t('Video format')} group>
           <Dropdown
             value={f.format ?? ''}
             options={[
@@ -819,7 +819,7 @@ export function St2110Page() {
                   <td>
                     {(() => {
                       const x = ioOf(f.id);
-                      if (f.essence === 'data' || f.enabled === false) return <span className="st-muted">—</span>;
+                      if (f.enabled === false) return <span className="st-muted">—</span>;
                       if (!x) return <Badge>{t('Opening…')}</Badge>;
                       if (x.state === 'error') return <span title={x.error ? friendly(x.error) : undefined}><Badge tone="bad">{t('Error')}</Badge></span>;
                       if (x.state === 'running')
@@ -829,7 +829,11 @@ export function St2110Page() {
                             {f.direction === 'input' && x.lost > 0 ? <span className="st-muted"> {tn(x.lost, '{n} packet lost', '{n} packets lost')}</span> : null}
                           </span>
                         );
-                      return <Badge tone="warn">{f.direction === 'input' ? t('Nothing received') : f.essence === 'audio' ? t('silence on the output') : t('black on the output')}</Badge>;
+                      return (
+                        <Badge tone="warn">
+                          {f.direction === 'input' ? t('Nothing received') : f.essence === 'audio' ? t('silence on the output') : f.essence === 'data' ? t('no data from the apps') : t('black on the output')}
+                        </Badge>
+                      );
                     })()}
                   </td>
                 )}

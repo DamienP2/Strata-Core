@@ -66,7 +66,8 @@ pub fn wanted(cfg: &HardwareConfig) -> Wanted {
     let r = &cfg.network;
     // Les flux coupés ne comptent pas (ni hugepages ni ports retirés au noyau pour rien).
     let video: Vec<_> = cfg.flows.iter().filter(|f| f.enabled && f.essence == Essence::Video).collect();
-    let audio = cfg.flows.iter().any(|f| f.enabled && f.essence == Essence::Audio);
+    // Le son et les données : peu de mémoire, la base y suffit.
+    let audio = cfg.flows.iter().any(|f| f.enabled && f.essence != Essence::Video);
     if r.media_io == MediaIo::Off || (video.is_empty() && !audio) {
         return Wanted::default();
     }

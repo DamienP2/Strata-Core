@@ -1,6 +1,7 @@
 // Le pont du Core vers Intel Media Transport Library (MTL) : ST 2110-20 (vidéo
-// non compressée, en v210) et ST 2110-30 (son PCM) reçus et envoyés sur les
-// ports média (E810 en DPDK, AF_XDP ou socket du noyau).
+// non compressée, en v210), ST 2110-30 (son PCM) et ST 2110-40 (données
+// annexes) reçus et envoyés sur les ports média (E810 en DPDK, AF_XDP ou
+// socket du noyau).
 //
 // libmtl.so est chargée au lancement (dlopen) : le Core démarre sans elle. Les
 // en-têtes de MTL (vendored, include/) donnent les types ; seules les
@@ -12,6 +13,7 @@
 #include <time.h>
 
 #include "st30_pipeline_api.h"
+#include "st40_pipeline_api.h"
 #include "st_pipeline_api.h"
 
 static void *lib;
@@ -42,7 +44,21 @@ F(st30p_tx_put_frame);
 F(st30p_tx_free);
 F(st30p_tx_set_block_timeout);
 F(st30_calculate_framebuff_size);
+F(st40p_rx_create);
+F(st40p_rx_get_frame);
+F(st40p_rx_put_frame);
+F(st40p_rx_free);
+F(st40p_rx_get_session_stats);
+F(st40p_rx_set_block_timeout);
+F(st40p_tx_create);
+F(st40p_tx_get_frame);
+F(st40p_tx_put_frame);
+F(st40p_tx_free);
+F(st40p_tx_set_block_timeout);
 #undef F
+// Les données (st40p) sont facultatives : une bibliothèque sans elles garde la
+// vidéo et le son.
+static int has_st40p;
 // Facultative : les compteurs d'un port (le débit mesuré, surtout en DPDK).
 static __typeof__(&mtl_get_port_stats) p_mtl_get_port_stats;
 
@@ -99,6 +115,22 @@ int smtl_load(const char *path, char *err, int errlen) {
     SYM(st30p_tx_set_block_timeout);
     SYM(st30_calculate_framebuff_size);
     p_mtl_get_port_stats = (__typeof__(p_mtl_get_port_stats))dlsym(lib, "mtl_get_port_stats");
+#define OPT(name) p_##name = (__typeof__(p_##name))dlsym(lib, #name)
+    OPT(st40p_rx_create);
+    OPT(st40p_rx_get_frame);
+    OPT(st40p_rx_put_frame);
+    OPT(st40p_rx_free);
+    OPT(st40p_rx_get_session_stats);
+    OPT(st40p_rx_set_block_timeout);
+    OPT(st40p_tx_create);
+    OPT(st40p_tx_get_frame);
+    OPT(st40p_tx_put_frame);
+    OPT(st40p_tx_free);
+    OPT(st40p_tx_set_block_timeout);
+#undef OPT
+    has_st40p = p_st40p_rx_create && p_st40p_rx_get_frame && p_st40p_rx_put_frame && p_st40p_rx_free &&
+                p_st40p_rx_get_session_stats && p_st40p_rx_set_block_timeout && p_st40p_tx_create &&
+                p_st40p_tx_get_frame && p_st40p_tx_put_frame && p_st40p_tx_free && p_st40p_tx_set_block_timeout;
     return 0;
 fail:
     // Une version qui ne convient pas : refermée, et la suivante essayée en entier (aucune
@@ -501,4 +533,164 @@ int smtl_atx_put(void *tx, void *frame) {
 
 void smtl_atx_close(void *tx) {
     p_st30p_tx_free((st30p_tx_handle)tx);
+}
+
+// ---------- Données annexes : ST 2110-40 ----------
+
+// Un paquet ANC (mots sur 8 bits : MTL calcule parité et somme de contrôle).
+typedef struct {
+    uint16_t c, line, offset, s, stream, did, sdid, size;
+    uint8_t udw[255];
+} smtl_anc;
+
+#define UDW_MAX (ST40_MAX_META * 255)
+
+static int data_open_check(char *err, int errlen) {
+    if (!has_st40p) {
+        set_err(err, errlen, "this MTL has no ST 2110-40 (st40p)");
+        return -1;
+    }
+    return 0;
+}
+
+// Reçoit un flux de données (le format, entrelacé ou non, se lit dans les paquets).
+void *smtl_drx_open(void *h, const char *name, int n, const int *port_index, const uint8_t (*ip)[4],
+                    const uint16_t *udp, uint8_t pt, int interlaced, char *err, int errlen) {
+    smtl *s = (smtl *)h;
+    if (data_open_check(err, errlen)) {
+        return NULL;
+    }
+    struct st40p_rx_ops ops;
+    memset(&ops, 0, sizeof(ops));
+    ops.name = name;
+    ops.port.num_port = (uint8_t)n;
+    for (int i = 0; i < n; i++) {
+        snprintf(ops.port.port[i], sizeof(ops.port.port[i]), "%s", s->ports[port_index[i]]);
+        memcpy(ops.port.ip_addr[i], ip[i], 4);
+        ops.port.udp_port[i] = udp[i];
+    }
+    ops.port.payload_type = pt;
+    ops.interlaced = interlaced != 0;
+    ops.framebuff_cnt = 4;
+    ops.max_udw_buff_size = UDW_MAX;
+    ops.flags = ST40P_RX_FLAG_BLOCK_GET;
+    st40p_rx_handle rx = p_st40p_rx_create(s->mt, &ops);
+    if (!rx) {
+        set_err(err, errlen, "cannot receive this ST 2110-40 flow (address?)");
+        return NULL;
+    }
+    p_st40p_rx_set_block_timeout(rx, 200ull * 1000000ull);
+    return rx;
+}
+
+// Les paquets du prochain bloc reçu (attend 200 ms au plus), copiés dans `out`
+// (`max` au plus) : leur nombre, ou -1 sans bloc. `field` : 0 progressif, 2 ou 3.
+int smtl_drx_get(void *rx, smtl_anc *out, int max, int *field) {
+    struct st40_frame_info *f = p_st40p_rx_get_frame((st40p_rx_handle)rx);
+    if (!f) {
+        return -1;
+    }
+    int n = 0;
+    for (uint32_t i = 0; i < f->meta_num && n < max; i++) {
+        struct st40_meta *m = &f->meta[i];
+        smtl_anc *a = &out[n];
+        a->c = m->c;
+        a->line = m->line_number;
+        a->offset = m->hori_offset;
+        a->s = m->s;
+        a->stream = m->stream_num;
+        a->did = m->did & 0xFF;
+        a->sdid = m->sdid & 0xFF;
+        uint32_t size = m->udw_size > 255 ? 255 : m->udw_size;
+        if ((uint64_t)m->udw_offset + size > f->udw_buffer_fill) {
+            continue;
+        }
+        a->size = (uint16_t)size;
+        memcpy(a->udw, f->udw_buff_addr + m->udw_offset, size);
+        n++;
+    }
+    *field = f->interlaced ? (f->second_field ? 3 : 2) : 0;
+    p_st40p_rx_put_frame((st40p_rx_handle)rx, f);
+    return n;
+}
+
+void smtl_drx_stats(void *rx, uint64_t *received, uint64_t *lost) {
+    struct st40_rx_user_stats st;
+    memset(&st, 0, sizeof(st));
+    if (p_st40p_rx_get_session_stats((st40p_rx_handle)rx, &st) == 0) {
+        *received = st.common.stat_pkts_received;
+        *lost = st.common.stat_lost_packets;
+    }
+}
+
+void smtl_drx_close(void *rx) {
+    p_st40p_rx_free((st40p_rx_handle)rx);
+}
+
+// Envoie un flux de données, `fps` (enum st_fps) celle des trames en entrelacé :
+// un bloc par période, MTL donne le rythme.
+void *smtl_dtx_open(void *h, const char *name, int n, const int *port_index, const uint8_t (*ip)[4],
+                    const uint16_t *udp, uint8_t pt, int fps, int interlaced, char *err, int errlen) {
+    smtl *s = (smtl *)h;
+    if (data_open_check(err, errlen)) {
+        return NULL;
+    }
+    struct st40p_tx_ops ops;
+    memset(&ops, 0, sizeof(ops));
+    ops.name = name;
+    ops.port.num_port = (uint8_t)n;
+    for (int i = 0; i < n; i++) {
+        snprintf(ops.port.port[i], sizeof(ops.port.port[i]), "%s", s->ports[port_index[i]]);
+        memcpy(ops.port.dip_addr[i], ip[i], 4);
+        ops.port.udp_port[i] = udp[i];
+    }
+    ops.port.payload_type = pt;
+    ops.fps = (enum st_fps)fps;
+    ops.interlaced = interlaced != 0;
+    ops.framebuff_cnt = 3;
+    ops.max_udw_buff_size = UDW_MAX;
+    ops.flags = ST40P_TX_FLAG_BLOCK_GET;
+    st40p_tx_handle tx = p_st40p_tx_create(s->mt, &ops);
+    if (!tx) {
+        set_err(err, errlen, "cannot send this ST 2110-40 flow (address?)");
+        return NULL;
+    }
+    p_st40p_tx_set_block_timeout(tx, 200ull * 1000000ull);
+    return tx;
+}
+
+// Attend un bloc libre (200 ms au plus) et l'envoie avec ces `n` paquets
+// (ST40_MAX_META au plus) : 0, ou -1.
+int smtl_dtx_send(void *tx, const smtl_anc *in, int n) {
+    struct st40_frame_info *f = p_st40p_tx_get_frame((st40p_tx_handle)tx);
+    if (!f) {
+        return -1;
+    }
+    uint32_t fill = 0;
+    uint32_t k = 0;
+    for (int i = 0; i < n && k < ST40_MAX_META; i++) {
+        const smtl_anc *a = &in[i];
+        if (fill + a->size > f->udw_buffer_size) {
+            break;
+        }
+        struct st40_meta *m = &f->meta[k++];
+        m->c = a->c;
+        m->line_number = a->line;
+        m->hori_offset = a->offset;
+        m->s = a->s;
+        m->stream_num = a->stream;
+        m->did = a->did;
+        m->sdid = a->sdid;
+        m->udw_size = a->size;
+        m->udw_offset = (uint16_t)fill;
+        memcpy(f->udw_buff_addr + fill, a->udw, a->size);
+        fill += a->size;
+    }
+    f->meta_num = k;
+    f->udw_buffer_fill = fill;
+    return p_st40p_tx_put_frame((st40p_tx_handle)tx, f);
+}
+
+void smtl_dtx_close(void *tx) {
+    p_st40p_tx_free((st40p_tx_handle)tx);
 }

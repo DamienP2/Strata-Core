@@ -23,6 +23,11 @@ pub enum Media {
         bits: u8,
         ptime_us: u32,
     },
+    /// Données annexes (ST 2110-40) : la cadence vidéo, si le SDP la donne, et entrelacée.
+    Data {
+        rate: Option<(u32, u32)>,
+        interlaced: bool,
+    },
     Other(String),
 }
 
@@ -89,6 +94,20 @@ pub fn make(s: &SenderSdp) -> String {
                 out.push_str(&format!("a=fmtp:{pt} channel-order={}\r\n", channel_order(*channels)));
                 let ms = *ptime_us as f64 / 1000.0;
                 out.push_str(&format!("a=ptime:{ms}\r\na=maxptime:{ms}\r\n"));
+            }
+            Media::Data { rate, interlaced } => {
+                out.push_str(&format!("m=video {port} RTP/AVP {pt}\r\nc=IN IP4 {group}/64\r\na=source-filter: incl IN IP4 {group} {source}\r\n"));
+                out.push_str(&format!("a=rtpmap:{pt} smpte291/90000\r\n"));
+                let mut fmtp: Vec<String> = Vec::new();
+                if let Some(r) = rate {
+                    fmtp.push(format!("exactframerate={}", rate_text(*r)));
+                }
+                if *interlaced {
+                    fmtp.push("interlace".into());
+                }
+                if !fmtp.is_empty() {
+                    out.push_str(&format!("a=fmtp:{pt} {}\r\n", fmtp.join("; ")));
+                }
             }
             Media::Other(_) => {}
         }
@@ -184,6 +203,13 @@ pub fn parse(text: &str) -> Result<Sdp, String> {
             let bits = if encoding == "l24" { 24 } else { 16 };
             Media::Audio { channels, bits, ptime_us: (first.ptime.unwrap_or(1.0) * 1000.0).round() as u32 }
         }
+        ("video", "smpte291") => {
+            let rate = fmtp(first, "exactframerate").and_then(|r| match r.split_once('/') {
+                Some((n, d)) => Some((n.parse().ok()?, d.parse().ok()?)),
+                None => Some((r.parse().ok()?, 1)),
+            });
+            Media::Data { rate, interlaced: fmtp(first, "interlace").is_some() }
+        }
         (kind, enc) => Media::Other(format!("{kind}/{enc}")),
     };
     let legs = ms
@@ -236,5 +262,23 @@ mod tests {
         assert_eq!(p.media, Media::Audio { channels: 8, bits: 24, ptime_us: 125 });
         assert_eq!(p.legs, vec![SdpLeg { group: "239.69.0.12".parse().unwrap(), port: 5004, source: Some("192.168.10.5".parse().unwrap()) }]);
         assert_eq!(p.payload_type, 98);
+    }
+
+    #[test]
+    fn ancillary_data() {
+        let s = SenderSdp {
+            name: "ANC",
+            session: 1,
+            version: 1,
+            legs: vec![(Ipv4Addr::new(239, 10, 40, 1), 5004, Ipv4Addr::new(10, 0, 0, 2))],
+            media: Media::Data { rate: Some((25, 1)), interlaced: true },
+            payload_type: 100,
+            refclk: "ptp=IEEE1588-2008:traceable".into(),
+        };
+        let text = make(&s);
+        assert!(text.contains("a=rtpmap:100 smpte291/90000") && text.contains("exactframerate=25; interlace"), "{text}");
+        let p = parse(&text).unwrap();
+        assert_eq!(p.media, Media::Data { rate: Some((25, 1)), interlaced: true });
+        assert_eq!((p.legs[0].group, p.legs[0].port, p.payload_type), (Ipv4Addr::new(239, 10, 40, 1), 5004, 100));
     }
 }

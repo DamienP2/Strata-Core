@@ -78,6 +78,8 @@ struct FlowPlan {
 enum Kind {
     Video(strata_mtl::Video),
     Audio(strata_mtl::Audio),
+    /// Données annexes (2110-40), au rythme de cette vidéo.
+    Data(strata_mtl::Video),
 }
 
 struct Running {
@@ -140,7 +142,7 @@ fn plan(cfg: &HardwareConfig) -> Result<Option<Plan>, String> {
     if r.media_io == MediaIo::Off {
         return Ok(None);
     }
-    let video: Vec<_> = cfg.flows.iter().filter(|f| f.enabled && matches!(f.essence, Essence::Video | Essence::Audio)).collect();
+    let video: Vec<_> = cfg.flows.iter().filter(|f| f.enabled).collect();
     if video.is_empty() && r.media1.is_empty() {
         return Ok(None);
     }
@@ -166,7 +168,12 @@ fn plan(cfg: &HardwareConfig) -> Result<Option<Plan>, String> {
                 bad.push((f.id.clone(), format!("unknown format {}", f.format)));
                 continue;
             };
-            Kind::Video(strata_mtl::Video { width, height, rate, interlaced })
+            let v = strata_mtl::Video { width, height, rate, interlaced };
+            if f.essence == Essence::Data {
+                Kind::Data(v)
+            } else {
+                Kind::Video(v)
+            }
         };
         let legs = match (r.media_mode, f.blue) {
             (MediaMode::Redundant, Some(b)) => vec![(0, *f.red.ip(), f.red.port()), (1, *b.ip(), b.port())],
@@ -425,6 +432,100 @@ fn send_audio(f: &FlowPlan, a: &strata_mtl::Audio, mtl: &Mtl, mxl: &Mxl, stop: &
     Ok(())
 }
 
+/// La cadence des grains de données MXL : une par trame en entrelacé (comme les grains vidéo).
+fn data_rate(v: &strata_mtl::Video) -> (u32, u32) {
+    if v.interlaced {
+        (v.rate.0 * 2, v.rate.1)
+    } else {
+        v.rate
+    }
+}
+
+fn to_mxl(a: strata_mtl::Anc) -> strata_mxl::anc::Packet {
+    strata_mxl::anc::Packet { c: a.c, line: a.line, offset: a.offset, s: a.s, stream: a.stream, did: a.did, sdid: a.sdid, udw: a.udw }
+}
+
+fn to_mtl(p: strata_mxl::anc::Packet) -> strata_mtl::Anc {
+    strata_mtl::Anc { c: p.c, line: p.line, offset: p.offset, s: p.s, stream: p.stream, did: p.did, sdid: p.sdid, udw: p.udw }
+}
+
+/// Données reçues : MTL → flux de données MXL `2110/<flux>` (un grain par bloc reçu).
+fn receive_data(f: &FlowPlan, v: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: &AtomicBool, set: Setter) -> Result<(), String> {
+    let rx = mtl.drx(&f.name, &legs(f), 0, v.interlaced)?;
+    let id = strata_mxl::flow_id(&format!("2110/{}", f.id));
+    let mut w = mxl.data_writer(id, &f.name, data_rate(v))?;
+    set(&|s| s.format = Some(format!("ANC · {}", format_name(v))));
+    let mut last = Instant::now();
+    let mut blocks = 0u64;
+    while !stop.load(Ordering::Relaxed) {
+        let got = match rx.next() {
+            Some((packets, field)) => {
+                w.write(&packets.into_iter().map(to_mxl).collect::<Vec<_>>(), field)?;
+                blocks += 1;
+                true
+            }
+            None => false,
+        };
+        if last.elapsed() >= Duration::from_secs(1) || !got {
+            let (packets, lost) = rx.stats();
+            set(&|s| {
+                s.state = if got { IoState::Running } else { IoState::Idle };
+                s.frames = blocks;
+                s.packets = packets;
+                s.lost = lost;
+                s.error = None;
+            });
+            last = Instant::now();
+        }
+    }
+    Ok(())
+}
+
+/// Données envoyées : flux de données MXL `2110/<flux>` (écrit par l'appli) → MTL, un bloc par
+/// image (par trame en entrelacé), vide sans elle. MTL cadence l'envoi.
+fn send_data(f: &FlowPlan, v: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: &AtomicBool, set: Setter) -> Result<(), String> {
+    let tx = mtl.dtx(&f.name, &legs(f), f.payload_type, v)?;
+    let id = strata_mxl::flow_id(&format!("2110/{}", f.id));
+    set(&|s| s.format = Some(format!("ANC · {}", format_name(v))));
+    let mut reader: Option<strata_mxl::DataReader> = None;
+    let (mut blocks, mut heard) = (0u64, 0u64);
+    let mut tick = Instant::now();
+    let mut checked: Option<Instant> = None;
+    while !stop.load(Ordering::Relaxed) {
+        if checked.is_none_or(|t| t.elapsed() >= Duration::from_millis(500)) {
+            checked = Some(Instant::now());
+            if mxl.is_active(id) {
+                if reader.is_none() {
+                    reader = mxl.data_reader(id).ok();
+                }
+            } else {
+                reader = None;
+            }
+        }
+        let packets: Vec<strata_mtl::Anc> = match reader.as_mut().and_then(|r| r.next_grain()) {
+            Some((p, _)) => {
+                heard += 1;
+                p.into_iter().map(to_mtl).collect()
+            }
+            None => Vec::new(),
+        };
+        if tx.send(&packets) {
+            blocks += 1;
+        }
+        if tick.elapsed() >= Duration::from_secs(1) {
+            tick = Instant::now();
+            let on = heard > 0;
+            set(&|s| {
+                s.state = if on { IoState::Running } else { IoState::Idle };
+                s.frames = blocks;
+                s.error = None;
+            });
+            heard = 0;
+        }
+    }
+    Ok(())
+}
+
 fn halt(r: Running) {
     for f in r.flows.values() {
         f.stop.store(true, Ordering::Relaxed);
@@ -447,6 +548,8 @@ fn spawn_flow(f: &FlowPlan, mtl: &Arc<Mtl>, mxl: &Arc<Mxl>, stop: &Arc<AtomicBoo
                 (Kind::Video(v), false) => send(&f, v, &mtl, &mxl, &stop, &set),
                 (Kind::Audio(a), true) => receive_audio(&f, a, &mtl, &mxl, &stop, &set),
                 (Kind::Audio(a), false) => send_audio(&f, a, &mtl, &mxl, &stop, &set),
+                (Kind::Data(v), true) => receive_data(&f, v, &mtl, &mxl, &stop, &set),
+                (Kind::Data(v), false) => send_data(&f, v, &mtl, &mxl, &stop, &set),
             };
             if let Err(e) = r {
                 tracing::warn!("ST 2110 flow {}: {e}", f.name);

@@ -14,6 +14,8 @@ sudo -u strata strata-core test bars 2110/<flux> --format 1080i50 # mire sur un 
 sudo -u strata strata-core test tone 2110/<flux> --channels 8     # bip sur un flux de son envoyé
 sudo -u strata strata-core test level sdi/<carte>/<connecteur>    # niveau du son d'une entrée
 sudo -u strata strata-core test level 2110/<flux>                 # niveau d'un flux de son reçu
+sudo -u strata strata-core test timecode 2110/<flux>              # timecode ATC sur un flux de données envoyé
+sudo -u strata strata-core test data 2110/<flux>                  # paquets ANC d'un flux de données reçu
 ```
 
 `<carte>` est l'identifiant de la carte (*Matériel › Cartes SDI*, ou `cards[].id` de
@@ -64,6 +66,8 @@ ensemble.
 | 4.5 | Flux vidéo envoyé ; `test bars 2110/<flux>` ; le recevoir sur un appareil ou un analyseur | Image juste, cadencement 2110-21 accepté (pas d'erreur de buffer côté récepteur) |
 | 4.6 | Flux de son envoyé (L24 1 ms, 8 canaux) ; `test tone 2110/<flux> --channels 8` | Reçu par un appareil AES67/2110-30 à -21 RMS |
 | 4.7 | Flux de son reçu ; `test level 2110/<flux>` | Le niveau de la source |
+| 4.7b | Flux de données envoyé (2110-40, format 1080i50) ; `test timecode 2110/<flux>` ; le recevoir sur un appareil ou un analyseur | Le timecode ATC (l'heure du serveur) lu par le récepteur |
+| 4.7c | Flux de données reçu (un appareil qui envoie du timecode ou des sous-titres) ; `test data 2110/<flux>` | Les paquets (DID/SDID) une fois par image, le timecode s'il y en a |
 | 4.8 | *ST 2110 › Ports média* | Débit mesuré proche de ce que demandent les flux ; place restante crédible ; alerte au-delà de 90 % |
 | 4.9 | Couper un flux, en ajouter un | Les autres flux ne bougent pas (pas d'image perdue) |
 

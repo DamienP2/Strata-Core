@@ -28,6 +28,21 @@ pub enum TestCmd {
         #[arg(long, default_value_t = 2)]
         channels: u32,
     },
+    /// Un timecode (ATC, ST 12-2, l'heure du serveur) dans un flux de données 2110-40 envoyé :
+    /// `2110/<flux>`.
+    Timecode {
+        target: String,
+        /// La cadence vidéo du flux : 1080i50, 1080p25…
+        #[arg(long, default_value = "1080i50")]
+        format: String,
+    },
+    /// Les paquets de données (ANC) reçus, une ligne par seconde : `2110/<flux>` (flux de données
+    /// reçu) ou l'identifiant MXL.
+    Data {
+        target: String,
+        #[arg(long, default_value_t = 10)]
+        seconds: u64,
+    },
     /// Le niveau du son d'une entrée, canal par canal, deux fois par seconde :
     /// `sdi/<carte>/<connecteur>`, `2110/<flux>` (flux de son reçu) ou l'identifiant MXL.
     Level {
@@ -69,6 +84,15 @@ pub fn run(c: TestCmd) -> anyhow::Result<()> {
         TestCmd::Tone { target, channels } => {
             let (_, aid) = flows(&target, true).map_err(|e| anyhow::anyhow!(e))?;
             tone(&mxl, aid, channels.clamp(1, 16)).map_err(|e| anyhow::anyhow!(e))
+        }
+        TestCmd::Timecode { target, format } => {
+            let (_, _, rate, interlaced) = crate::hardware::parse_format(&format).ok_or_else(|| anyhow::anyhow!("format inconnu : {format}"))?;
+            let (id, _) = flows(&target, true).map_err(|e| anyhow::anyhow!(e))?;
+            timecode(&mxl, id, rate, interlaced).map_err(|e| anyhow::anyhow!(e))
+        }
+        TestCmd::Data { target, seconds } => {
+            let (id, _) = flows(&target, false).map_err(|e| anyhow::anyhow!(e))?;
+            data(&mxl, id, seconds).map_err(|e| anyhow::anyhow!(e))
         }
         TestCmd::Level { target, seconds } => {
             let (_, aid) = flows(&target, false).map_err(|e| anyhow::anyhow!(e))?;
@@ -182,6 +206,72 @@ fn level(mxl: &Mxl, aid: Uuid, seconds: u64) -> Result<(), String> {
             _ => "rien d'écrit".to_string(),
         };
         println!("{:>5.1} s  {line}", start.elapsed().as_secs_f32());
+    }
+    Ok(())
+}
+
+/// Le timecode de l'heure du serveur (heure locale), en images.
+fn wall_timecode(rate: (u32, u32)) -> (u8, u8, u8, u8) {
+    let now = jiff::Timestamp::now().to_zoned_datetime(jiff::tz::TimeZone::system());
+    let fps = (rate.0 as f64 / rate.1.max(1) as f64).round().max(1.0) as u64;
+    let frame = (now.subsec_nanosecond().max(0) as u64 * fps / 1_000_000_000) as u8;
+    (now.hour() as u8, now.minute() as u8, now.second() as u8, frame)
+}
+
+fn timecode(mxl: &Mxl, id: Uuid, rate: (u32, u32), interlaced: bool) -> Result<(), String> {
+    let grains = if interlaced { (rate.0 * 2, rate.1) } else { rate };
+    let mut w = mxl.data_writer(id, "Timecode (strata-core test)", grains)?;
+    println!("Timecode ATC (heure du serveur) sur {id}. Ctrl-C pour arrêter.");
+    let (num, den) = (grains.0.max(1) as u64, grains.1.max(1) as u64);
+    let start = Instant::now();
+    for n in 0u64.. {
+        let (h, m, s, f) = wall_timecode(rate);
+        let field = if interlaced { 2 + (n % 2) as u8 } else { 0 };
+        // En entrelacé, le timecode dans la première trame seulement.
+        let packets = if field == 3 { vec![] } else { vec![strata_mxl::anc::atc_packet(h, m, s, f, false)] };
+        w.write(&packets, field)?;
+        if n % num.div_ceil(den) == 0 {
+            println!("{h:02}:{m:02}:{s:02}:{f:02}");
+        }
+        let due = start + Duration::from_nanos((n + 1) * 1_000_000_000 * den / num);
+        std::thread::sleep(due.saturating_duration_since(Instant::now()));
+    }
+    Ok(())
+}
+
+fn data(mxl: &Mxl, id: Uuid, seconds: u64) -> Result<(), String> {
+    let mut r = mxl.data_reader(id).map_err(|e| format!("{e} (rien n'écrit ce flux ?)"))?;
+    let (num, den) = r.rate();
+    println!("Données de {id} : {:.2} grains/s.", num as f64 / den.max(1) as f64);
+    let start = Instant::now();
+    let mut tick = Instant::now();
+    let (mut grains, mut packets) = (0u64, std::collections::BTreeMap::<(u8, u8), u64>::new());
+    let mut tc = None;
+    while seconds == 0 || start.elapsed() < Duration::from_secs(seconds) {
+        match r.next_grain() {
+            Some((ps, _)) => {
+                grains += 1;
+                for p in &ps {
+                    *packets.entry((p.did, p.sdid)).or_default() += 1;
+                    if let Some(t) = strata_mxl::anc::atc_timecode(p) {
+                        tc = Some(t);
+                    }
+                }
+            }
+            None => std::thread::sleep(Duration::from_millis(5)),
+        }
+        if tick.elapsed() >= Duration::from_secs(1) {
+            tick = Instant::now();
+            let list: Vec<String> = packets.iter().map(|((d, s), n)| format!("{d:02X}/{s:02X} ×{n}")).collect();
+            let tc = tc.map(|(h, m, s, f, _)| format!("  TC {h:02}:{m:02}:{s:02}:{f:02}")).unwrap_or_default();
+            println!(
+                "{:>5.1} s  {grains} grains  {}{tc}",
+                start.elapsed().as_secs_f32(),
+                if list.is_empty() { "aucun paquet".into() } else { list.join("  ") }
+            );
+            grains = 0;
+            packets.clear();
+        }
     }
     Ok(())
 }

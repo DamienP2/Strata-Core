@@ -12,6 +12,8 @@
 //!   maintenant », pas « la suivante ».
 //! - Chaque flux a un identifiant stable (UUID v5) : `sdi/<carte>/<n>` pour une entrée SDI, que
 //!   les applis retrouvent d'un démarrage à l'autre.
+pub mod anc;
+
 use std::{
     path::{Path, PathBuf},
     time::Duration,
@@ -232,6 +234,12 @@ pub struct VideoWriter {
 impl VideoWriter {
     pub fn video(&self) -> Video {
         self.video
+    }
+
+    /// L'index du dernier grain écrit (en entrelacé, celui de la dernière trame) : là où poser les
+    /// données annexes de cette image (`DataWriter::write_at`, flux de données à la même cadence).
+    pub fn last_index(&self) -> Option<u64> {
+        self.last
     }
 
     /// De combien de grains l'écrivain est en avance sur maintenant (MXL ne garde que 200 ms :
@@ -648,6 +656,130 @@ pub fn v210_to_uyvy(src: &[u8], dst: &mut [u8], width: usize) {
     }
 }
 
+/// Un flux de données annexes (ANC) : un grain `video/smpte291` (RFC 8331) par image, ou par trame
+/// en entrelacé (`rate` est alors la cadence des trames : 50 pour du 1080i50).
+pub fn data_flow_def(id: Uuid, label: &str, rate: (u32, u32)) -> String {
+    serde_json::json!({
+        "description": label,
+        "id": id.to_string(),
+        "tags": { "urn:x-nmos:tag:grouphint/v1.0": [format!("Strata:{label}")] },
+        "format": "urn:x-nmos:format:data",
+        "label": label,
+        "parents": [],
+        "media_type": "video/smpte291",
+        "grain_rate": { "numerator": rate.0, "denominator": rate.1.max(1) }
+    })
+    .to_string()
+}
+
+impl Mxl {
+    /// Crée (ou reprend) le flux de données `id`, à `rate` grains par seconde.
+    pub fn data_writer(&self, id: Uuid, label: &str, rate: (u32, u32)) -> Result<DataWriter, String> {
+        // Un ancien flux de ce nom, sans écrivain : effacé (il pouvait être à une autre cadence).
+        if !self.is_active(id) {
+            self.collect();
+        }
+        let def = data_flow_def(id, label, rate);
+        let (w, info, _) = self.inst.create_flow_writer(&def, None).map_err(|e| format!("cannot create the MXL flow {id}: {e}"))?;
+        let actual = info.common().grain_rate().map_err(|e| e.to_string())?;
+        if (actual.numerator as u64) * rate.1.max(1) as u64 != (rate.0 as u64) * actual.denominator.max(1) as u64 {
+            return Err(format!("the MXL flow {id} is still open at another rate by another writer"));
+        }
+        let grains = w.to_grain_writer().map_err(|e| e.to_string())?;
+        Ok(DataWriter { inst: self.inst.clone(), grains, rate: actual, last: None })
+    }
+
+    /// Ouvre le flux de données `id` en lecture.
+    pub fn data_reader(&self, id: Uuid) -> Result<DataReader, String> {
+        let def = self.inst.get_flow_def(&id.to_string()).map_err(|e| format!("no MXL flow {id}: {e}"))?;
+        let v: serde_json::Value = serde_json::from_str(&def).map_err(|e| e.to_string())?;
+        if v["media_type"] != "video/smpte291" {
+            return Err(format!("the MXL flow {id} is not ancillary data (video/smpte291)"));
+        }
+        let r = self.inst.create_flow_reader(&id.to_string()).map_err(|e| format!("cannot read the MXL flow {id}: {e}"))?;
+        let grains = r.to_grain_reader().map_err(|e| e.to_string())?;
+        let rate = grains.get_config_info().map_err(|e| e.to_string())?.common().grain_rate().map_err(|e| e.to_string())?;
+        Ok(DataReader { inst: self.inst.clone(), grains, rate, next: None })
+    }
+}
+
+/// L'écrivain d'un flux de données.
+pub struct DataWriter {
+    inst: mxl::MxlInstance,
+    grains: mxl::GrainWriter,
+    rate: mxl::Rational,
+    last: Option<u64>,
+}
+
+impl DataWriter {
+    /// Les grains par seconde.
+    pub fn rate(&self) -> (u32, u32) {
+        (self.rate.numerator as u32, self.rate.denominator as u32)
+    }
+
+    /// Les paquets d'une image (ou d'une trame : `field` 2 ou 3), à l'instant présent.
+    pub fn write(&mut self, packets: &[anc::Packet], field: anc::Field) -> Result<(), String> {
+        let now = self.inst.get_current_index(&self.rate);
+        let index = match self.last {
+            Some(l) if now <= l => l + 1,
+            _ => now,
+        };
+        self.write_at(index, packets, field)
+    }
+
+    /// Les paquets du grain `index` (celui d'une image : `VideoWriter::last_index`, à la même
+    /// cadence).
+    pub fn write_at(&mut self, index: u64, packets: &[anc::Packet], field: anc::Field) -> Result<(), String> {
+        let payload = anc::encode(packets, field);
+        let mut g = self.grains.open_grain(index).map_err(|e| format!("cannot open MXL grain {index}: {e}"))?;
+        let slices = g.total_slices();
+        let dst = g.payload_mut();
+        if payload.len() > dst.len() {
+            return Err(format!("too much ancillary data for one grain ({} bytes)", payload.len()));
+        }
+        dst[..payload.len()].copy_from_slice(&payload);
+        dst[payload.len()..].fill(0);
+        g.commit(slices).map_err(|e| format!("cannot commit MXL grain {index}: {e}"))?;
+        self.last = Some(index);
+        Ok(())
+    }
+}
+
+/// Le lecteur d'un flux de données : les grains dans l'ordre, sans en sauter (sauf s'il prend plus
+/// de 3 grains de retard : il repart du dernier écrit).
+pub struct DataReader {
+    inst: mxl::MxlInstance,
+    grains: mxl::GrainReader,
+    rate: mxl::Rational,
+    next: Option<u64>,
+}
+
+impl DataReader {
+    /// Les grains par seconde.
+    pub fn rate(&self) -> (u32, u32) {
+        (self.rate.numerator as u32, self.rate.denominator as u32)
+    }
+
+    /// Le grain suivant, s'il est écrit : ses paquets et son champ F. None sinon (rien de neuf,
+    /// ou un grain mal formé).
+    pub fn next_grain(&mut self) -> Option<(Vec<anc::Packet>, anc::Field)> {
+        let head = self.grains.get_runtime_info().ok()?.headIndex;
+        // Un écrivain qui ne bouge plus (plus d'une seconde) : rien.
+        let now = self.inst.get_current_index(&self.rate);
+        if now.saturating_sub(head) as u128 * (self.rate.denominator.max(1) as u128) > self.rate.numerator as u128 {
+            return None;
+        }
+        let i = match self.next {
+            Some(n) if n <= head && head - n <= 3 => n,
+            Some(n) if n == head + 1 => return None,
+            _ => head,
+        };
+        let g = self.grains.get_grain_non_blocking(i).ok().filter(|g| g.index == i)?;
+        self.next = Some(i + 1);
+        anc::decode(g.payload)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -674,6 +806,33 @@ mod tests {
         let def = video_flow_def(flow_id("sdi/x/1"), "SDI 1", &v);
         assert_eq!(Video::from_flow_def(&def), Some(v));
         assert!(def.contains("interlaced_tff") && def.contains("video/v210"));
+    }
+
+    /// Avec la vraie bibliothèque (voir plus bas).
+    #[test]
+    #[ignore]
+    fn writes_and_reads_ancillary_data() {
+        let dir = std::env::temp_dir().join(format!("strata-mxl-anc-{}", std::process::id()));
+        let mxl = Mxl::open_at(&dir).unwrap();
+        let id = flow_id("test/anc");
+        let mut w = mxl.data_writer(id, "ANC", (50, 1)).unwrap();
+        let mut r = mxl.data_reader(id).unwrap();
+        assert_eq!(r.rate(), (50, 1));
+        assert!(r.next_grain().is_none(), "nothing written yet");
+        for f in 0..4u8 {
+            w.write(&[anc::atc_packet(1, 2, 3, f, false)], 2 + f % 2).unwrap();
+        }
+        // Le dernier écrit (le lecteur part de la tête), puis rien de neuf.
+        let (ps, field) = r.next_grain().unwrap();
+        assert_eq!((anc::atc_timecode(&ps[0]), field), (Some((1, 2, 3, 3, false)), 3));
+        assert!(r.next_grain().is_none());
+        // Ensuite, dans l'ordre.
+        for f in 4..6u8 {
+            w.write(&[anc::atc_packet(1, 2, 3, f, false)], 2).unwrap();
+        }
+        assert_eq!(anc::atc_timecode(&r.next_grain().unwrap().0[0]).unwrap().3, 4);
+        assert_eq!(anc::atc_timecode(&r.next_grain().unwrap().0[0]).unwrap().3, 5);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Avec la vraie bibliothèque : `STRATA_MXL_LIB=…/libmxl.so cargo test -p strata-mxl -- --ignored`.
