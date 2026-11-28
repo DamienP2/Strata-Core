@@ -751,8 +751,32 @@ pub fn encoder_args(c: &OutputCfg, feed: &Video, target: &Video, encoder: &str, 
     a.push(format!("{}x{}", feed.width, feed.height));
     a.push("-framerate".into());
     a.push(format!("{}/{}", feed.rate.0, feed.rate.1.max(1)));
-    a.extend(["-thread_queue_size", "64", "-i", "pipe:0"].map(String::from));
-    a.extend(["-f", "f32le", "-ar", "48000", "-ac", "2", "-thread_queue_size", "512", "-i", "pipe:3", "-map", "0:v", "-map", "1:a"].map(String::from));
+    // Les formats sont donnés : ffmpeg ouvre ses deux entrées sans les analyser (sinon il lit
+    // l'image un moment avant de lire le son, et du son se perd au démarrage).
+    a.extend(["-probesize", "32", "-analyzeduration", "0", "-thread_queue_size", "64", "-i", "pipe:0"].map(String::from));
+    a.extend(
+        [
+            "-f",
+            "f32le",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            "-probesize",
+            "32",
+            "-analyzeduration",
+            "0",
+            "-thread_queue_size",
+            "512",
+            "-i",
+            "pipe:3",
+            "-map",
+            "0:v",
+            "-map",
+            "1:a",
+        ]
+        .map(String::from),
+    );
     let rate = format!("{}/{}", target.rate.0, target.rate.1.max(1));
     // Le v210 lu (10 bits) passe tout de suite en 8 bits 4:2:2 : le désentrelacement et la mise à
     // l'échelle travaillent en 8 bits, comme l'encodeur (H.264 8 bits).
@@ -996,7 +1020,8 @@ fn feed_encoder(
     });
     // L'image et le son, écrits par deux fils : ffmpeg lit ses deux entrées à son rythme.
     let (vtx, vrx) = mpsc::sync_channel::<Arc<Vec<u8>>>(3);
-    let (atx, arx) = mpsc::sync_channel::<Vec<u8>>(16);
+    // Le son : de quoi tenir le démarrage (ffmpeg lit l'image d'abord, le son ensuite).
+    let (atx, arx) = mpsc::sync_channel::<Vec<u8>>(256);
     let vwriter = std::thread::spawn(move || {
         let mut w = stdin;
         while let Ok(f) = vrx.recv() {
@@ -1020,6 +1045,10 @@ fn feed_encoder(
     let mut last_live = Instant::now() - Duration::from_secs(10);
     let mut areader: Option<strata_mxl::AudioReader> = None;
     let (mut acc, mut frames, mut missing) = (0u64, 0u64, 0u64);
+    // Le son suit l'image : le prochain échantillon à envoyer, recalé sur l'instant de chaque
+    // nouvelle image (là où l'appli a posé son son) ; sans image nouvelle, il continue.
+    let mut audio_at: Option<u64> = None;
+    let mut abuf: Vec<f32> = Vec::new();
     let mut next = Instant::now();
     let mut tick = Instant::now();
     let mut checked = Instant::now() - Duration::from_secs(1);
@@ -1073,6 +1102,7 @@ fn feed_encoder(
         if let Some(img) = fresh_frame {
             last = img;
             last_live = Instant::now();
+            audio_at = reader.as_ref().and_then(|r| r.last_frame_audio_index()).or(audio_at);
         } else if last_live.elapsed() > Duration::from_secs(1) {
             last = black.clone();
         }
@@ -1083,7 +1113,23 @@ fn feed_encoder(
         acc %= feed.rate.0.max(1) as u64;
         let pcm = areader.as_mut().and_then(|r| {
             let ch = r.channels.max(1);
-            r.next_interleaved(n).map(|s| if ch == 2 { s } else { (0..n).flat_map(|k| [s[k * ch], s[k * ch + (ch > 1) as usize]]).collect() })
+            let s = match audio_at {
+                // Le son de l'image : écrit juste après elle, on lui laisse quelques ms.
+                Some(at) => {
+                    let mut ok = r.read_at(at, n, &mut abuf);
+                    for _ in 0..4 {
+                        if ok {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(2));
+                        ok = r.read_at(at, n, &mut abuf);
+                    }
+                    audio_at = Some(at + n as u64);
+                    ok.then(|| abuf.clone())
+                }
+                None => r.next_interleaved(n),
+            }?;
+            Some(if ch == 2 { s } else { (0..n).flat_map(|k| [s[k * ch], s[k * ch + (ch > 1) as usize]]).collect() })
         });
         if pcm.is_none() && areader.is_some() {
             missing += 1;

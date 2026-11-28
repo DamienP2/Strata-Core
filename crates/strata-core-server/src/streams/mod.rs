@@ -208,6 +208,13 @@ pub struct OutputCfg {
     pub key: String,
     /// Les réglages propres au protocole.
     pub opts: ProtoOpts,
+    /// HTML5 : l'adresse de la page, `/output/<path>` (lettres, chiffres, - ou _, en parties
+    /// séparées par /) ; vide : l'identifiant.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub path: String,
+    /// HTML5 : le fond de la page (couleur CSS) ; vide : transparent.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub background: String,
     /// L'ancien format (plusieurs destinations par sortie) : lu, puis découpé en sorties.
     #[serde(skip_serializing)]
     pub destinations: Vec<Destination>,
@@ -229,6 +236,8 @@ impl Default for OutputCfg {
             url: String::new(),
             key: String::new(),
             opts: ProtoOpts::default(),
+            path: String::new(),
+            background: String::new(),
             destinations: Vec::new(),
             app: None,
         }
@@ -343,6 +352,7 @@ impl StreamsConfig {
                 return Err(format!("{}: relay port {} is already used", i.name, i.relay_port));
             }
         }
+        let mut paths = std::collections::HashSet::new();
         for o in &mut self.outputs {
             o.id = o.id.trim().to_ascii_lowercase();
             o.name = o.name.trim().to_string();
@@ -367,6 +377,27 @@ impl StreamsConfig {
             }
             let label = o.name.clone();
             o.opts.check(&label)?;
+            if o.url == "html5" {
+                o.path = o.path.trim().trim_matches('/').to_string();
+                if o.path.is_empty() {
+                    o.path = o.id.clone();
+                }
+                let ok =
+                    o.path.len() <= 128 && o.path.split('/').all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+                if !ok {
+                    return Err(format!("{}: HTML5 output address: letters, digits, - or _ only", o.name));
+                }
+                if !paths.insert(o.path.to_ascii_lowercase()) {
+                    return Err(format!("{}: HTML5 output address already used: `{}`", o.name, o.path));
+                }
+                o.background = o.background.trim().to_string();
+                if o.background.len() > 64 || o.background.chars().any(|c| !(c.is_ascii_alphanumeric() || "#(),.% ".contains(c))) {
+                    return Err(format!("{}: the background is a CSS colour (#000000, transparent…)", o.name));
+                }
+            } else {
+                o.path.clear();
+                o.background.clear();
+            }
         }
         // Les relais sans port : les suivants libres.
         let mut next = RELAY_BASE;

@@ -299,9 +299,11 @@ POST $STRATA_CORE_URL/api/streams/app/outputs/programme-web
   Core en fait une destination par adresse.
 - Adresses : `rtmp://` et `rtmps://` (la clé s'ajoute à l'adresse), `srt://` (la clé part en
   `streamid`), `udp://`, `rtp://`, `rist://` (MPEG-TS), `hls` : servi par le Core sur
-  `/hls/<sortie>/index.m3u8`, et `html5` : un lecteur web servi par le Core sur `/live/<sortie>/`
-  (MP4 fragmenté à moins d'une seconde du direct, à la cadence de la sortie ; le flux seul :
-  `/live/<sortie>/stream.mp4`). La page peut être mise dans celle d'un autre site (iframe).
+  `/hls/<sortie>/index.m3u8`, et `html5` : une page web sans rien autour, comme les sorties HTML5
+  de Strata Graphics, pour une source navigateur (OBS, vMix, CasparCG…), sur `/output/<path>`
+  (`path`, l'identifiant par défaut ; `background` : son fond, transparent par défaut ;
+  `?scale=1`, `?bg=`, `?debug` dans l'adresse). Moins d'une seconde du direct, à la cadence de la
+  sortie, image et son calés.
 - Les administrateurs voient et changent ces sorties dans les réglages, comme les autres.
 
 ## Lire une entrée SDI sans MXL

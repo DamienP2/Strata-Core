@@ -90,6 +90,9 @@ interface Output {
   url: string;
   key: string;
   opts?: ProtoOpts;
+  /** HTML5 : l'adresse de la page (`/output/<path>`) et son fond (vide : transparent). */
+  path?: string;
+  background?: string;
   app?: string | null;
   mxlFlow?: string;
   /** L'adresse d'un flux servi par le Core (HLS, HTML5). */
@@ -113,7 +116,7 @@ type Net = 'srt' | 'rtmp' | 'rtmps' | 'rtsp' | 'https' | 'udp' | 'rtp' | 'rist';
 type Kind = Net | 'hls' | 'html5';
 const SERVED: Kind[] = ['hls', 'html5'];
 const NET_LABEL: Record<Net, string> = { srt: 'SRT', rtmp: 'RTMP', rtmps: 'RTMPS', rtsp: 'RTSP', https: 'HLS', udp: 'UDP (TS)', rtp: 'RTP (TS)', rist: 'RIST' };
-const kindLabel = (k: Kind) => (k === 'hls' ? t('HLS served by the Core') : k === 'html5' ? t('HTML5 (web player)') : NET_LABEL[k]);
+const kindLabel = (k: Kind) => (k === 'hls' ? t('HLS served by the Core') : k === 'html5' ? t('HTML5 (browser source)') : NET_LABEL[k]);
 const PLACEHOLDER: Record<Net, [string, string]> = {
   srt: ['srt://10.0.0.12:9000  ·  srt://:9000', 'srt://cdn.example:9000'],
   rtmp: ['rtmp://server/live/stream  ·  rtmp://0.0.0.0:1935/live/cam', 'rtmp://a.rtmp.youtube.com/live2'],
@@ -298,9 +301,12 @@ const OUT_FORMATS = ['1080p25', '1080p50', '1080p59.94', '720p50', '720p59.94', 
 function clean(v: StreamsView) {
   return {
     inputs: v.inputs.map(({ id, name, url, enabled, format, relay, relayPort }) => ({ id, name, url, enabled, format, relay, relayPort })),
-    outputs: v.outputs.map(({ id, name, enabled, source, format, videoKbps, audioKbps, encoder, url, key, opts, app }) => ({ id, name, enabled, source, format, videoKbps, audioKbps, encoder, url, key, opts, app })),
+    outputs: v.outputs.map(({ id, name, enabled, source, format, videoKbps, audioKbps, encoder, url, key, opts, path, background, app }) => ({ id, name, enabled, source, format, videoKbps, audioKbps, encoder, url, key, opts, path, background, app })),
   };
 }
+
+/** L'identifiant que prendra une destination nommée ainsi (sans les autres) : l'adresse proposée. */
+const slugOf = (name: string) => slug(name, []);
 
 /** Un identifiant d'après le nom : « Caméra 2 » → « camera-2 ». */
 function slug(name: string, taken: string[]): string {
@@ -649,10 +655,27 @@ function OutputEditor({ value, sources, busy, onClose, onSave }: { value: Output
         onUrl={(u) => set('url', u)}
         onOpts={(o) => set('opts', o)}
         extra={
-          (v.url.startsWith('rtmp') || v.key) && (
-            <Field label={t('Stream key')}>
-              <input className="st-mono" type="password" autoComplete="off" value={v.key} onFocus={(e) => v.key === MASK && e.target.select()} onChange={(e) => set('key', e.target.value)} />
-            </Field>
+          v.url === 'html5' ? (
+            <FieldGrid two>
+              <Field label={t('Web address')}>
+                <div className="core-path">
+                  <span className="st-mono st-muted">/output/</span>
+                  <input className="st-mono" value={v.path ?? ''} placeholder={value.id || slugOf(v.name) || 'programme'} onChange={(e) => set('path', e.target.value.replace(/[^A-Za-z0-9_\-/]/g, ''))} />
+                </div>
+              </Field>
+              <Field label={t('Background')} group>
+                <div className="core-bg">
+                  <Switch checked={!v.background} onChange={(x) => set('background', x ? '' : '#000000')} label={t('Transparent')} />
+                  {!!v.background && <input type="color" value={/^#[0-9a-fA-F]{6}$/.test(v.background) ? v.background : '#000000'} onChange={(e) => set('background', e.target.value)} aria-label={t('Background')} />}
+                </div>
+              </Field>
+            </FieldGrid>
+          ) : (
+            (v.url.startsWith('rtmp') || v.key) && (
+              <Field label={t('Stream key')}>
+                <input className="st-mono" type="password" autoComplete="off" value={v.key} onFocus={(e) => v.key === MASK && e.target.select()} onChange={(e) => set('key', e.target.value)} />
+              </Field>
+            )
           )
         }
       />

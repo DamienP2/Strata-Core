@@ -308,3 +308,7 @@ button.core-hw-role.on { border-style: solid; background: color-mix(in srgb, var
 .core-feature-head .st-switch { flex: 1; }
 .core-feature-license { display: flex; align-items: center; gap: 8px; font-size: var(--fs-12); flex-wrap: wrap; }
 .core-feature-tools { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.core-path { display: flex; align-items: center; gap: 4px; }
+.core-path input { flex: 1; min-width: 0; }
+.core-bg { display: flex; align-items: center; gap: 12px; min-height: 32px; }
+.core-bg input[type="color"] { width: 40px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; }

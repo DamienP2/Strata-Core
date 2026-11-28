@@ -91,6 +91,9 @@ const SHAPED: [RegExp, string, string[]][] = [
   [/^cannot share the input \((.+)\): (.+)$/, 'cannot share the input ({path}): {why}', ['path', 'why']],
   [/^the certificate is valid only from (.+)$/, 'The certificate is valid only from {date}', ['date']],
   // Fonctions
+  [/^(.+): HTML5 output address: letters, digits, - or _ only$/, '{name}: HTML5 output address: letters, digits, - or _ only', ['name']],
+  [/^(.+): HTML5 output address already used: `(.+)`$/, '{name}: HTML5 output address already used: `{path}`', ['name', 'path']],
+  [/^(.+): the background is a CSS colour \(#000000, transparent…\)$/, '{name}: the background is a CSS colour (#000000, transparent…)', ['name']],
   [/^MTL is not loaded: (.+)$/, 'MTL is not loaded: {why}', ['why']],
 ];
 

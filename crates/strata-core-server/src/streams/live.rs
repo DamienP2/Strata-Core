@@ -1,10 +1,11 @@
-//! La destination HTML5 : le flux d'une sortie lu par un navigateur, sans lecteur à installer.
+//! La destination HTML5 : une page web, comme les sorties HTML5 de Strata Graphics, pour une
+//! source navigateur (OBS, vMix, CasparCG…), à l'adresse choisie (`/output/<adresse>`).
 //!
 //! ffmpeg remet le TS de l'encodeur en MP4 fragmenté (H.264 + AAC, un fragment toutes les 250 ms
 //! environ) ; le Core garde l'en-tête (`ftyp` + `moov`) et diffuse les fragments à chaque
-//! spectateur : `GET /live/<sortie>` (la page du lecteur), `GET /live/<sortie>/stream.mp4` (le
-//! flux). Un spectateur qui arrive reçoit l'en-tête puis part du prochain fragment qui commence
-//! par une image clé ; un spectateur en retard saute jusqu'à la suivante. Latence : moins d'une
+//! page : `GET /output/<adresse>` (la page), `GET /live/<sortie>/stream.mp4` (le flux). Un
+//! spectateur qui arrive reçoit l'en-tête puis part du prochain fragment qui commence par une
+//! image clé ; un spectateur en retard saute jusqu'à la suivante. Latence : moins d'une
 //! seconde plus la mise en mémoire du navigateur.
 use axum::body::Bytes;
 use std::collections::HashMap;
@@ -271,47 +272,64 @@ pub fn ffmpeg_args() -> Vec<String> {
     ["-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof", "-frag_duration", "250000", "pipe:1"].map(String::from).to_vec()
 }
 
-/// La page du lecteur (son script à part : la politique du Core refuse les scripts dans la page).
-pub fn player_page(title: &str, codecs: Option<&str>) -> String {
+/// La page d'une sortie HTML5, comme celles de Strata Graphics : sans rien autour (ni contrôles,
+/// ni texte), transparente ou du fond choisi, pour une source navigateur (OBS, vMix, CasparCG…).
+/// Le script est à part (la politique du Core refuse les scripts dans la page). `?scale=1` : à
+/// la taille de l'image ; `?bg=<couleur>` : un autre fond, pour essayer ; `?debug` : la mesure.
+pub fn output_page(title: &str, stream: &str, codecs: Option<&str>, background: &str) -> String {
     let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
     let mime = codecs.map(|c| format!("video/mp4; codecs=\"{c}\"")).unwrap_or_default();
     format!(
         r#"<!doctype html>
 <html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title}</title>
-<style>html,body{{margin:0;height:100%;background:#000;color:#aaa;font:14px system-ui,sans-serif}}video{{width:100%;height:100%;object-fit:contain;background:#000}}#w{{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none}}</style>
+<style>html,body{{margin:0;height:100%;overflow:hidden;background:transparent}}#o{{position:fixed;inset:0;overflow:hidden}}video{{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}}video.one{{inset:auto;left:50%;top:50%;width:auto;height:auto;transform:translate(-50%,-50%)}}#d{{position:fixed;left:8px;top:8px;font:12px ui-monospace,monospace;color:#0f0;background:rgba(0,0,0,.6);padding:4px 6px;white-space:pre}}</style>
 </head><body>
-<video id="v" data-mime="{mime}" autoplay muted playsinline controls></video><div id="w"></div>
-<script src="player.js"></script>
+<div id="o" data-bg="{bg}"><video id="v" data-mime="{mime}" data-stream="{stream}" autoplay playsinline></video></div>
+<script src="/live/output.js"></script>
 </body></html>
 "#,
         title = esc(title),
         mime = esc(&mime),
+        stream = esc(stream),
+        bg = esc(background),
     )
 }
 
-/// La politique de la page du lecteur : elle peut être mise dans la page d'un autre site.
-pub const PLAYER_CSP: &str = "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; media-src 'self' blob:; connect-src 'self'; frame-ancestors *";
+/// La politique de la page : elle peut être mise dans la page d'un autre site.
+pub const OUTPUT_CSP: &str = "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; media-src 'self' blob:; connect-src 'self'; frame-ancestors *";
 
-/// Le lecteur : MediaSource (ManagedMediaSource sur iPhone). Il reste à environ 0,6 s du direct
-/// en jouant à peine plus vite ou plus lentement (jamais par sauts, l'image reste fluide) ; il ne
-/// saute qu'après un vrai trou (plus de 4 s de retard). Sans MediaSource : le flux dans la balise.
-pub const PLAYER_JS: &str = r#"'use strict';
-const v = document.getElementById('v'), w = document.getElementById('w'), mime = v.dataset.mime;
+/// La sortie : MediaSource (ManagedMediaSource sur iPhone). Elle reste à environ 0,6 s du direct
+/// en jouant à peine plus vite ou plus lentement (jamais par sauts, l'image reste fluide) ; elle
+/// ne saute qu'après un vrai trou (plus de 4 s de retard). Rien ne s'affiche tant que le flux
+/// n'est pas là (une source navigateur est à l'antenne). Le son : joué si la page le peut (source
+/// navigateur), sinon coupé.
+pub const OUTPUT_JS: &str = r#"'use strict';
+const o = document.getElementById('o'), v = document.getElementById('v');
+const mime = v.dataset.mime, stream = v.dataset.stream, q = new URLSearchParams(location.search);
+o.style.background = q.get('bg') || o.dataset.bg || 'transparent';
+if (q.get('scale') === '1') v.className = 'one';
 const MS = window.ManagedMediaSource || window.MediaSource;
 const TARGET = 0.6;
-function wait(text) { w.textContent = text; setTimeout(() => location.reload(), 3000); }
+let dbg = null, frames = 0, last = performance.now();
+if (q.has('debug')) { dbg = document.createElement('div'); dbg.id = 'd'; document.body.append(dbg); }
+function note(text) { if (dbg) dbg.textContent = text; }
+function again() { setTimeout(() => location.reload(), 3000); }
+function start() {
+  v.play().catch(() => { v.muted = true; v.play().catch(() => {}); });
+}
 function steer(sb) {
   const b = sb.buffered;
   if (!b.length) return;
-  const start = b.start(0), end = b.end(b.length - 1), lag = end - v.currentTime;
-  if (v.currentTime < start || lag > 4) { v.currentTime = Math.max(start, end - TARGET); v.playbackRate = 1; }
+  const s = b.start(0), end = b.end(b.length - 1), lag = end - v.currentTime;
+  if (v.currentTime < s || lag > 4) { v.currentTime = Math.max(s, end - TARGET); v.playbackRate = 1; }
   else v.playbackRate = lag > TARGET + 0.6 ? 1.05 : lag > TARGET + 0.25 ? 1.02 : lag < TARGET - 0.3 ? 0.97 : 1;
-  if (v.paused && lag > 0.2) v.play().catch(() => {});
+  if (v.paused && lag > 0.2) start();
+  if (dbg) { const q2 = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : null; note(`retard ${lag.toFixed(2)} s · vitesse ${v.playbackRate}` + (q2 ? ` · images ${q2.totalVideoFrames} · perdues ${q2.droppedVideoFrames}` : '') + (v.muted ? ' · son coupé' : '')); }
 }
 async function play() {
-  if (!mime) return wait('En attente du flux…');
-  if (!MS || !MS.isTypeSupported(mime)) { v.src = 'stream.mp4'; return; }
+  if (!mime) { note('en attente du flux'); return again(); }
+  if (!MS || !MS.isTypeSupported(mime)) { v.src = stream; start(); return; }
   const ms = new MS();
   v.disableRemotePlayback = true;
   v.src = URL.createObjectURL(ms);
@@ -324,14 +342,12 @@ async function play() {
   };
   sb.addEventListener('updateend', () => {
     const b = sb.buffered;
-    // Les 10 dernières secondes gardées (retirées par paquets de 20 s, rarement).
     if (b.length && v.currentTime - b.start(0) > 30) { sb.remove(b.start(0), v.currentTime - 10); return; }
     steer(sb);
     pump();
   });
-  const res = await fetch('stream.mp4', { cache: 'no-store' });
-  if (!res.ok || !res.body) return wait('Flux indisponible');
-  w.textContent = '';
+  const res = await fetch(stream, { cache: 'no-store' });
+  if (!res.ok || !res.body) { note('flux indisponible'); return again(); }
   const reader = res.body.getReader();
   for (;;) {
     const { done, value } = await reader.read();
@@ -339,9 +355,10 @@ async function play() {
     queue.push(value);
     pump();
   }
-  wait('Flux interrompu');
+  note('flux interrompu');
+  again();
 }
-play().catch(() => wait('Flux interrompu'));
+play().catch(() => again());
 "#;
 
 #[cfg(test)]

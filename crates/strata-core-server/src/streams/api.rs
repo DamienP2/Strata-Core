@@ -5,8 +5,9 @@
 //!   (`/api/streams/app/outputs/:id`) ; l'appli écrit ensuite son flux MXL.
 //! - HLS : `GET /hls/<sortie>/index.m3u8`, servi tel que la sortie l'écrit (sans session : un
 //!   lecteur vidéo le lit).
-//! - HTML5 : `GET /live/<sortie>` (la page du lecteur) et `GET /live/<sortie>/stream.mp4` (le flux
-//!   en MP4 fragmenté), sans session non plus.
+//! - HTML5 : `GET /output/<adresse>` (la page, pour une source navigateur, comme les sorties HTML5
+//!   de Strata Graphics) et `GET /live/<sortie>/stream.mp4` (le flux en MP4 fragmenté), sans
+//!   session non plus.
 use axum::{
     extract::{ConnectInfo, Path as UrlPath, Query, State},
     http::{header, HeaderMap, StatusCode},
@@ -38,17 +39,16 @@ pub fn routes() -> Router<Shared> {
         .route("/api/streams/app/outputs", get(app_list))
         .route("/api/streams/app/outputs/{id}", post(app_put).delete(app_delete))
         .route("/hls/{id}/{file}", get(hls))
-        .route("/live/{id}", get(live_page))
-        .route("/live/{id}/", get(live_page))
+        .route("/output/{*path}", get(output_page))
+        .route("/live/output.js", get(output_js))
         .route("/live/{id}/stream.mp4", get(live_stream))
-        .route("/live/{id}/player.js", get(live_player))
 }
 
 /// L'adresse d'une destination servie par le Core (HLS, HTML5).
 fn served_url(o: &OutputCfg) -> Value {
     match o.url.as_str() {
         "hls" => json!(format!("/hls/{}/index.m3u8", o.id)),
-        "html5" => json!(format!("/live/{}/", o.id)),
+        "html5" => json!(format!("/output/{}", if o.path.is_empty() { &o.id } else { &o.path })),
         _ => Value::Null,
     }
 }
@@ -456,23 +456,26 @@ fn live_output(s: &Shared, id: &str) -> Option<String> {
     cfg.outputs.into_iter().find(|o| o.id == id && o.enabled && o.url == "html5").map(|o| o.name)
 }
 
-async fn live_page(State(s): State<Shared>, UrlPath(id): UrlPath<String>, uri: axum::http::Uri) -> ApiResult<axum::response::Response> {
-    let Some(name) = live_output(&s, &id) else { return Err((StatusCode::NOT_FOUND, "not found".into())) };
-    // `stream.mp4` est relatif : la page doit finir par « / ».
-    if !uri.path().ends_with('/') {
-        return Ok(axum::response::Redirect::to(&format!("/live/{id}/")).into_response());
-    }
-    let codecs = s.streams.live.get(&id).and_then(|c| c.codecs());
-    let page = super::live::player_page(&name, codecs.as_deref());
+/// La page d'une sortie HTML5, par son adresse (`/output/<adresse>`, sans tenir compte de la
+/// casse).
+async fn output_page(State(s): State<Shared>, UrlPath(path): UrlPath<String>) -> ApiResult<impl IntoResponse> {
+    let want = path.trim_matches('/').to_ascii_lowercase();
+    let cfg = StreamsConfig::load(&s.data_dir);
+    let o = cfg
+        .outputs
+        .into_iter()
+        .find(|o| o.enabled && o.url == "html5" && (if o.path.is_empty() { &o.id } else { &o.path }).to_ascii_lowercase() == want)
+        .ok_or((StatusCode::NOT_FOUND, "no such HTML5 output".to_string()))?;
+    let codecs = s.streams.live.get(&o.id).and_then(|c| c.codecs());
+    let page = super::live::output_page(&o.name, &format!("/live/{}/stream.mp4", o.id), codecs.as_deref(), &o.background);
     Ok((
-        [(header::CONTENT_TYPE, "text/html; charset=utf-8"), (header::CACHE_CONTROL, "no-cache"), (header::CONTENT_SECURITY_POLICY, super::live::PLAYER_CSP)],
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8"), (header::CACHE_CONTROL, "no-cache"), (header::CONTENT_SECURITY_POLICY, super::live::OUTPUT_CSP)],
         page,
-    )
-        .into_response())
+    ))
 }
 
-async fn live_player() -> impl IntoResponse {
-    ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], super::live::PLAYER_JS)
+async fn output_js() -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], super::live::OUTPUT_JS)
 }
 
 /// Le flux d'un spectateur : l'en-tête, puis les fragments à partir d'une image clé.
