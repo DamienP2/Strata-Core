@@ -42,7 +42,15 @@ const DAY_MS: i64 = 86_400_000;
 static DIR: OnceLock<PathBuf> = OnceLock::new();
 static STARTED: OnceLock<i64> = OnceLock::new();
 /// Le fichier du journal ouvert, et son jour.
-static FILE: Mutex<Option<(String, fs::File)>> = Mutex::new(None);
+static FILE: Mutex<Option<OpenJournal>> = Mutex::new(None);
+
+/// Le journal du jour, écrit par blocs : vidé au plus une seconde après une ligne, tout de suite
+/// pour un avertissement, une erreur ou un plantage.
+struct OpenJournal {
+    day: String,
+    out: std::io::BufWriter<fs::File>,
+    flushed: Instant,
+}
 /// Le dernier démarrage suivait un arrêt inattendu.
 static CRASHED_BEFORE: OnceLock<bool> = OnceLock::new();
 
@@ -121,12 +129,29 @@ fn write_line(line: &Line, wait: bool) {
         }
     };
     let day = day_of(line.at);
-    if guard.as_ref().is_none_or(|(d, _)| *d != day) {
+    if guard.as_ref().is_none_or(|j| j.day != day) {
+        if let Some(j) = guard.as_mut() {
+            let _ = j.out.flush();
+        }
         let f = fs::OpenOptions::new().create(true).append(true).open(dir.join(format!("journal-{day}.jsonl")));
-        *guard = f.ok().map(|f| (day, f));
+        *guard = f.ok().map(|f| OpenJournal { day, out: std::io::BufWriter::with_capacity(64 * 1024, f), flushed: Instant::now() });
     }
-    if let (Some((_, f)), Ok(s)) = (guard.as_mut(), serde_json::to_string(line)) {
-        let _ = writeln!(f, "{s}");
+    if let (Some(j), Ok(s)) = (guard.as_mut(), serde_json::to_string(line)) {
+        let _ = writeln!(j.out, "{s}");
+        if line.level != "INFO" || j.flushed.elapsed() >= Duration::from_secs(1) {
+            let _ = j.out.flush();
+            j.flushed = Instant::now();
+        }
+    }
+}
+
+/// Vide le journal (une ligne d'information restée dans le tampon).
+pub fn flush_journal() {
+    if let Ok(mut g) = FILE.try_lock() {
+        if let Some(j) = g.as_mut() {
+            let _ = j.out.flush();
+            j.flushed = Instant::now();
+        }
     }
 }
 
@@ -377,10 +402,14 @@ pub fn start(data_dir: &Path) {
         .spawn(|| {
             let mut n = 0u32;
             loop {
-                std::thread::sleep(Duration::from_secs(30));
-                beat();
+                // Le journal vidé chaque seconde ; le battement toutes les 30 s.
+                std::thread::sleep(Duration::from_secs(1));
+                flush_journal();
                 n += 1;
-                if n.is_multiple_of(720) {
+                if n.is_multiple_of(30) {
+                    beat();
+                }
+                if n.is_multiple_of(30 * 720) {
                     purge();
                 }
             }
@@ -390,6 +419,7 @@ pub fn start(data_dir: &Path) {
 
 /// Un arrêt que le Core fait lui-même (arrêt, redémarrage, mise à jour) : pas un plantage.
 pub fn stopped() {
+    flush_journal();
     if let Some(m) = marker() {
         let _ = fs::remove_file(m);
     }

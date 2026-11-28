@@ -5,6 +5,7 @@ import { Gpu as GpuIcon, RefreshCw } from 'lucide-react';
 import { Badge, Card, Empty, PageHead, formatBytes, t, tn } from '@strata/ui';
 import { api } from '../../api';
 import { friendly } from '../../errors';
+import { usePoll } from './Inputs';
 
 export interface GpuUsage {
   gpu: number;
@@ -87,16 +88,15 @@ export function GpuCard({ g }: { g: Gpu }) {
 }
 
 export function GpuPage() {
-  const [gpus, setGpus] = useState<Gpu[] | null>(null);
+  // Les GPU seulement (pas tout le matériel), et seulement quand l'onglet est visible.
+  const polled = usePoll<{ gpus: Gpu[] }>('/api/hardware/gpus');
+  const [fresh, setFresh] = useState<Gpu[] | null>(null);
+  const gpus = fresh ?? polled?.gpus ?? null;
+  useEffect(() => setFresh(null), [polled]);
   const read = () =>
-    api<{ gpus: Gpu[] }>('GET', '/api/hardware')
-      .then((r) => setGpus(r.gpus))
+    api<{ gpus: Gpu[] }>('GET', '/api/hardware/gpus')
+      .then((r) => setFresh(r.gpus))
       .catch(() => {});
-  useEffect(() => {
-    void read();
-    const id = setInterval(read, 3000);
-    return () => clearInterval(id);
-  }, []);
   return (
     <>
       <PageHead title="GPU" sub={gpus ? tn(gpus.length, '{n} GPU', '{n} GPUs') : undefined}>

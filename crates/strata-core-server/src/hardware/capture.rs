@@ -23,7 +23,7 @@ use std::{
     thread::JoinHandle,
     time::{Duration, Instant},
 };
-use strata_share::{Format, FrameInfo, Reader, Timecode, Writer, UHD_UYVY};
+use strata_share::{Format, FrameInfo, Timecode, Writer, UHD_UYVY};
 
 use super::{decklink, Function, HardwareConfig};
 
@@ -437,6 +437,8 @@ fn capture(writer: &mut Sink, device: u32, stop: &AtomicBool, status: &Mutex<Sta
         let mut seq = 0u64;
         let mut meter = Meter::new();
         let mut refused: Option<String> = None;
+        // Le son de chaque image, dans des tampons gardés (pas 120 Ko alloués par image).
+        let (mut audio_raw, mut audio_pcm): (Vec<i32>, Vec<f32>) = (Vec::new(), Vec::new());
         while !stop.load(Ordering::Relaxed) {
             let mut got = false;
             if input.wait(seq, 200) {
@@ -477,8 +479,8 @@ fn capture(writer: &mut Sink, device: u32, stop: &AtomicBool, status: &Mutex<Sta
                         }
                     };
                     // Le son embarqué de cette image, calé sur elle.
-                    if let Some((pcm, ch, last)) = input.audio() {
-                        let _ = writer.publish_audio(&pcm, ch, last);
+                    if let Some((ch, last)) = input.audio_into(&mut audio_raw, &mut audio_pcm) {
+                        let _ = writer.publish_audio(&audio_pcm, ch, last);
                     }
                     if published {
                         meter.tick(true, writer, status, |s| {
@@ -616,9 +618,11 @@ fn simulate(writer: &mut Sink, connector: u32, p: &Pattern, stop: &AtomicBool, s
 
 // ---------- L'aperçu ----------
 
-/// L'image la plus récente d'une entrée, réduite à `width` pixels au plus, en JPEG.
-pub fn preview(share: &std::path::Path, width: u32) -> Result<Vec<u8>, String> {
-    let mut r = Reader::observe(share).map_err(|e| format!("cannot read the input: {e}"))?;
+/// L'image la plus récente d'une entrée, réduite à `width` pixels au plus, en JPEG (essais ; les
+/// aperçus passent par `preview.rs`).
+#[cfg(test)]
+fn preview(share: &std::path::Path, width: u32) -> Result<Vec<u8>, String> {
+    let mut r = strata_share::Reader::observe(share).map_err(|e| format!("cannot read the input: {e}"))?;
     let mut buf = Vec::new();
     let f = r.latest(&mut buf).ok_or("no picture yet")?;
     jpeg(&buf, f.info.width, f.info.height, f.info.stride as usize, width)
@@ -679,7 +683,7 @@ mod tests {
         while !share.exists() && Instant::now() < end {
             std::thread::sleep(Duration::from_millis(10));
         }
-        let mut r = Reader::open(&share, "livecut").unwrap();
+        let mut r = strata_share::Reader::open(&share, "livecut").unwrap();
         let mut buf = Vec::new();
         let strata_share::Next::Frame(f) = r.next(&mut buf, Duration::from_secs(3)) else { panic!("no frame") };
         assert_eq!((f.info.width, f.info.height, f.info.rate), (1280, 720, (25, 1)));

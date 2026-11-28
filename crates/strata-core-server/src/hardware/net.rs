@@ -138,7 +138,22 @@ pub fn phc_of(name: &str) -> Option<String> {
 }
 
 /// Les cartes réseau, sans la boucle locale ; celles qui ont une adresse d'abord.
+/// Les cartes réseau, relues au plus une fois par seconde (la page Réseau, la charge des ports,
+/// NMOS et MTL les demandent souvent ; chaque lecture fait une dizaine de lectures sysfs par carte).
 pub fn nics() -> Vec<Nic> {
+    static CACHE: std::sync::Mutex<Option<(std::time::Instant, Vec<Nic>)>> = std::sync::Mutex::new(None);
+    let mut c = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, list)) = c.as_ref() {
+        if at.elapsed() < std::time::Duration::from_secs(1) {
+            return list.clone();
+        }
+    }
+    let list = nics_now();
+    *c = Some((std::time::Instant::now(), list.clone()));
+    list
+}
+
+fn nics_now() -> Vec<Nic> {
     if let Some(fake) = fake_nics() {
         return fake;
     }

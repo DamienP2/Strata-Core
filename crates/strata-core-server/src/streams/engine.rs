@@ -468,11 +468,13 @@ fn run_input(c: &InputCfg, env: &Env, stop: &AtomicBool, status: &Mutex<HashMap<
         });
         // L'image : lue par un fil, pour pouvoir arrêter ou constater un silence.
         let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(2);
+        // Les tampons rendus après écriture dans MXL : réutilisés (pas 5 Mo alloués par image).
+        let (back_tx, back_rx) = mpsc::channel::<Vec<u8>>();
         let mut out = p.child.stdout.take();
         let reader = std::thread::spawn(move || {
             let Some(out) = out.as_mut() else { return };
             loop {
-                let mut frame = vec![0u8; frame_bytes];
+                let mut frame = back_rx.try_recv().ok().filter(|f| f.len() == frame_bytes).unwrap_or_else(|| vec![0u8; frame_bytes]);
                 if out.read_exact(&mut frame).is_err() || tx.send(frame).is_err() {
                     break;
                 }
@@ -506,9 +508,11 @@ fn run_input(c: &InputCfg, env: &Env, stop: &AtomicBool, status: &Mutex<HashMap<
                     if vw.ahead() >= if v.interlaced { 4 } else { 2 } {
                         pcm.resize(n * 2, 0.0);
                         let _ = aw.write_interleaved(&pcm);
+                        let _ = back_tx.send(frame);
                         continue;
                     }
                     let _ = vw.write_v210(&frame, stride);
+                    let _ = back_tx.send(frame);
                     pcm.resize(n * 2, 0.0);
                     let _ = match vw.last_frame_audio_index() {
                         Some(at) => aw.write_at(at, &pcm),
@@ -936,7 +940,14 @@ fn feed_encoder(
         let slot = pool.iter_mut().find(|b| Arc::strong_count(b) == 1 && !Arc::ptr_eq(b, &last));
         let fresh_frame = match (slot, reader.as_ref()) {
             (Some(b), Some(r)) => r.latest_into(period * 3, Arc::get_mut(b).expect("only owner")).then(|| b.clone()),
-            (None, Some(r)) => r.latest(period * 3).map(Arc::new),
+            // Tous les tampons attendent l'encodeur (il prend du retard) : rien n'est lu ni
+            // copié, l'image d'avant repart ; le flux reste vivant tant que l'appli écrit.
+            (None, Some(r)) => {
+                if r.with_latest(period * 3, |_, _| ()).is_some() {
+                    last_live = Instant::now();
+                }
+                None
+            }
             _ => None,
         };
         if let Some(img) = fresh_frame {

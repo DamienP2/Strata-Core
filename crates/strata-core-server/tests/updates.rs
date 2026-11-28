@@ -12,7 +12,6 @@ use axum::{
 };
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use std::{
     net::SocketAddr,
     path::PathBuf,
@@ -40,7 +39,7 @@ fn core_archive(says: &str, name: &str) -> Vec<u8> {
 }
 
 fn sha(b: &[u8]) -> String {
-    Sha256::digest(b).iter().map(|x| format!("{x:02x}")).collect()
+    ring::digest::digest(&ring::digest::SHA256, b).as_ref().iter().map(|x| format!("{x:02x}")).collect()
 }
 
 #[derive(Default)]

@@ -279,6 +279,24 @@ pub type View = Vec<(Vec<u32>, String, Val)>;
 const SYS: [u32; 7] = [1, 3, 6, 1, 2, 1, 1];
 
 /// Tout ce que l'agent sait, trié par OID : (oid, nom, valeur).
+type Walk = Vec<(Vec<u32>, String, Val)>;
+
+/// La MIB d'il y a au plus une seconde : un `snmpwalk` envoie des centaines de requêtes, une seule
+/// reconstruction suffit.
+fn recent_snapshot(s: &AppState) -> std::sync::Arc<Walk> {
+    type Last = (std::time::Instant, std::path::PathBuf, std::sync::Arc<Walk>);
+    static LAST: Mutex<Option<Last>> = Mutex::new(None);
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, dir, w)) = last.as_ref() {
+        if *dir == s.data_dir && at.elapsed() < std::time::Duration::from_secs(1) {
+            return w.clone();
+        }
+    }
+    let w = std::sync::Arc::new(snapshot(s));
+    *last = Some((std::time::Instant::now(), s.data_dir.clone(), w.clone()));
+    w
+}
+
 pub fn snapshot(s: &AppState) -> Vec<(Vec<u32>, String, Val)> {
     let mut v: Vec<(Vec<u32>, String, Val)> = Vec::new();
     let set = s.snmp_settings.lock().unwrap().clone();
@@ -572,7 +590,7 @@ pub async fn apply(s: &Shared) {
             }
             let req = buf[..n].to_vec();
             let s2 = s.clone();
-            let Ok(Some(resp)) = tokio::task::spawn_blocking(move || answer(&req, &set.community, &snapshot(&s2))).await else { continue };
+            let Ok(Some(resp)) = tokio::task::spawn_blocking(move || answer(&req, &set.community, &recent_snapshot(&s2))).await else { continue };
             let _ = sock.send_to(&resp, from).await;
         }
     });

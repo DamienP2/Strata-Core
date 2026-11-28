@@ -11,7 +11,6 @@ use axum::{
 };
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use std::{
     net::SocketAddr,
     path::PathBuf,
@@ -43,7 +42,7 @@ fn archive(id: &str, version: &str, core: &str, port: u16, in_dir: bool) -> Vec<
 }
 
 fn sha(b: &[u8]) -> String {
-    Sha256::digest(b).iter().map(|x| format!("{x:02x}")).collect()
+    ring::digest::digest(&ring::digest::SHA256, b).as_ref().iter().map(|x| format!("{x:02x}")).collect()
 }
 
 /// Le faux GitHub : des releases par dépôt, leurs fichiers, et les clés reçues.

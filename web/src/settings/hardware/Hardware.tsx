@@ -732,7 +732,7 @@ export function St2110Page() {
           </tbody>
         </table>
       )}
-      <FlowsCard flows={snap.config.flows} />
+      <FlowsCard flows={snap.config.flows} state={io as Parameters<typeof FlowsCard>[0]['state']} />
       {editing && (
         <FlowEditor
           flow={editing.flow}

@@ -22,7 +22,6 @@ use http_body_util::BodyExt;
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashMap},
     io::{BufReader, Read, Write},
@@ -123,7 +122,8 @@ impl Installer {
         Installer { jobs: Mutex::default(), api: RwLock::new(api), swap: Mutex::default(), sources: data_dir.join("sources.json") }
     }
 
-    /// L'adresse de l'API GitHub (une autre pour les tests ou un GitHub Enterprise).
+    /// L'adresse de l'API GitHub (une autre pour les essais ou un GitHub Enterprise).
+    #[doc(hidden)]
     pub fn set_api(&self, url: &str) {
         *self.api.write().unwrap() = url.trim_end_matches('/').to_string();
     }
@@ -339,7 +339,7 @@ pub(crate) fn download(agent: &ureq::Agent, url: &str, repo: &str, key: &str, to
     }
     let mut body = res.into_body().into_reader();
     let mut out = std::fs::File::create(to).map_err(|e| format!("cannot write {}: {e}", to.display()))?;
-    let mut hash = Sha256::new();
+    let mut hash = ring::digest::Context::new(&ring::digest::SHA256);
     let mut buf = vec![0u8; 256 * 1024];
     let mut done = 0u64;
     loop {
@@ -356,7 +356,7 @@ pub(crate) fn download(agent: &ureq::Agent, url: &str, repo: &str, key: &str, to
         progress(done, total.max(done));
     }
     out.sync_all().map_err(|e| e.to_string())?;
-    Ok(hex(&hash.finalize()))
+    Ok(hex(hash.finish().as_ref()))
 }
 
 pub(crate) fn hex(b: &[u8]) -> String {

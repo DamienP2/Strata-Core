@@ -116,7 +116,8 @@ impl Updates {
         self.exe.lock().unwrap().clone()
     }
 
-    /// Un autre programme à remplacer (les tests).
+    /// Un autre programme à remplacer (crochet des essais).
+    #[doc(hidden)]
     pub fn set_exe(&self, path: PathBuf) {
         *self.exe.lock().unwrap() = path;
     }

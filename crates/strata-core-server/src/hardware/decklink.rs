@@ -434,7 +434,29 @@ pub(crate) fn fake_devices(models: &[String]) -> Vec<DeviceInfo> {
 
 /// What the driver lists (or the fake cards), and the Desktop Video
 /// version. A missing runtime is an empty list, not an error.
+/// What the driver sees, kept 2 s (the keeper, the alerts and the pages ask for it often; each
+/// look enumerates the devices twice through the driver).
 pub fn detect() -> (Vec<DetectedCard>, Option<String>, bool) {
+    let mut cache = DETECTED.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, seen)) = cache.as_ref() {
+        if at.elapsed() < std::time::Duration::from_secs(2) {
+            return seen.clone();
+        }
+    }
+    let seen = detect_now();
+    *cache = Some((std::time::Instant::now(), seen.clone()));
+    seen
+}
+
+type Detected = (Vec<DetectedCard>, Option<String>, bool);
+static DETECTED: std::sync::Mutex<Option<(std::time::Instant, Detected)>> = std::sync::Mutex::new(None);
+
+/// Forgets what was seen (a card switched to another profile).
+pub fn forget() {
+    *DETECTED.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
+fn detect_now() -> (Vec<DetectedCard>, Option<String>, bool) {
     if let Some(models) = fake_models() {
         return (group(&fake_devices(&models)), Some("14.2".into()), true);
     }
@@ -447,6 +469,12 @@ pub fn detect() -> (Vec<DetectedCard>, Option<String>, bool) {
 /// an input and its output ; on an 8K Pro, `4dhd`, `2dfd`…), on each of its pairs. The captures
 /// on that card must be stopped first.
 pub fn set_card_profile(card: &DetectedCard, profile: &str, simulated: bool) -> Result<(), String> {
+    let r = set_card_profile_now(card, profile, simulated);
+    forget();
+    r
+}
+
+fn set_card_profile_now(card: &DetectedCard, profile: &str, simulated: bool) -> Result<(), String> {
     let target = from_fourcc(profile).ok_or("not a DeckLink profile")?;
     if !card.profiles.iter().any(|p| p == profile) {
         return Err(format!("{} has no such mode", card.model_name));
@@ -470,16 +498,6 @@ pub fn set_card_profile(card: &DetectedCard, profile: &str, simulated: bool) -> 
         strata_decklink::set_profile(id, target)?;
     }
     Ok(())
-}
-
-/// The connector pairs of a card (0-based): from the model table, else
-/// 1+2, 3+4… when the driver says the card keys.
-pub fn pairs_of(d: &DetectedCard) -> Vec<(u32, u32)> {
-    match model(&d.model_name) {
-        Some(m) => m.keying.pairs.iter().map(|p| (p[0] - 1, p[1] - 1)).collect(),
-        None if d.internal_keyer || d.external_keyer => (0..d.connectors / 2).map(|i| (2 * i, 2 * i + 1)).collect(),
-        None => Vec::new(),
-    }
 }
 
 #[cfg(test)]

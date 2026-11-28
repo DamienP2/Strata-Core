@@ -700,20 +700,31 @@ impl InputHandle {
     /// floats): the samples, the channels, and the sample frames of the newest
     /// frame's packet (which ends the samples). None: no audio (or none yet).
     pub fn audio(&self) -> Option<(Vec<f32>, usize, usize)> {
+        let (mut raw, mut pcm) = (Vec::new(), Vec::new());
+        let (ch, last) = self.audio_into(&mut raw, &mut pcm)?;
+        Some((pcm, ch, last))
+    }
+
+    /// Like `audio`, into buffers kept by the caller (no allocation per frame
+    /// once they have grown): `pcm` gets the samples; returns (channels, last).
+    pub fn audio_into(&self, raw: &mut Vec<i32>, pcm: &mut Vec<f32>) -> Option<(usize, usize)> {
         #[cfg(decklink_shim)]
         {
-            let mut buf: Vec<i32> = vec![0; 48_000 * 16 / 25];
+            if raw.len() < 48_000 * 16 / 25 {
+                raw.resize(48_000 * 16 / 25, 0);
+            }
             for _ in 0..3 {
                 let (mut ch, mut last) = (0 as std::ffi::c_int, 0i64);
-                // SAFETY: open handle; `buf` holds `len` writable samples, the shim writes at most that.
-                let r = unsafe { ffi::dl_input_audio(self.raw, buf.as_mut_ptr(), buf.len() as i64, &mut ch, &mut last) };
+                // SAFETY: open handle; `raw` holds `len` writable samples, the shim writes at most that.
+                let r = unsafe { ffi::dl_input_audio(self.raw, raw.as_mut_ptr(), raw.len() as i64, &mut ch, &mut last) };
                 if r > 0 && ch > 0 {
                     let n = r as usize * ch as usize;
-                    let pcm = buf[..n].iter().map(|&x| x as f32 / 2_147_483_648.0).collect();
-                    return Some((pcm, ch as usize, last.max(0) as usize));
+                    pcm.clear();
+                    pcm.extend(raw[..n].iter().map(|&x| x as f32 / 2_147_483_648.0));
+                    return Some((ch as usize, last.max(0) as usize));
                 }
                 if r < 0 {
-                    buf.resize((-r) as usize, 0);
+                    raw.resize((-r) as usize, 0);
                     continue;
                 }
                 return None;
@@ -721,7 +732,10 @@ impl InputHandle {
             None
         }
         #[cfg(not(decklink_shim))]
-        None
+        {
+            let _ = (raw, pcm);
+            None
+        }
     }
 
     /// The timecode of the newest frame (None: the signal carries none).

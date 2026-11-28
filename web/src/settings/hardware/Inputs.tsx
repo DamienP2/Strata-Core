@@ -62,11 +62,11 @@ function usePageVisible(): boolean {
 }
 
 /** Relit `path` chaque seconde tant que l'onglet est visible. */
-export function usePoll<T>(path: string): T | null {
+export function usePoll<T>(path: string | null): T | null {
   const [data, setData] = useState<T | null>(null);
   const visible = usePageVisible();
   useEffect(() => {
-    if (!visible) return;
+    if (!visible || !path) return;
     let gone = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     // La lecture suivante part une seconde après la réponse : jamais deux en même temps, jamais
@@ -282,9 +282,13 @@ export function OutputsCard({ cfg }: { cfg: HwConfig }) {
 const LEG: Record<string, string> = { red: 'red network', blue: 'blue network', port1: 'port 1', port2: 'port 2' };
 
 /** Les flux vidéo ST 2110 : reçus (le Core les rejoint seulement pendant qu'on regarde) ou envoyés. */
-export function FlowsCard({ flows }: { flows: Flow[] }) {
+type FlowsState = { flows: FlowStatus[]; io?: { active: boolean; problem?: string | null } };
+
+/** `state` : déjà relu par la page (une seule lecture par seconde pour les deux). */
+export function FlowsCard({ flows, state }: { flows: Flow[]; state?: FlowsState | null }) {
   const video = flows.filter((f) => f.essence === 'video' && f.id);
-  const r = usePoll<{ flows: FlowStatus[]; io?: { active: boolean; problem?: string | null } }>('/api/hardware/flows');
+  const polled = usePoll<FlowsState>(state === undefined ? '/api/hardware/flows' : null);
+  const r = state === undefined ? polled : state;
   if (video.length === 0) return null;
   const engine = r?.io;
   const st = (id: string) => r?.flows.find((x) => x.id === id);

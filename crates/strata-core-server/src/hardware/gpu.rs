@@ -177,7 +177,7 @@ fn scan() -> Vec<Gpu> {
             .and_then(|r| r.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).find(|n| n.starts_with("renderD")))
             .map(|n| format!("/dev/dri/{n}"));
         let mut g = Gpu {
-            name: lspci_name(&pci).unwrap_or_else(|| format!("{vendor} {}", read(&d.join("device")))),
+            name: memo(format!("lspci {pci}"), || lspci_name(&pci)).unwrap_or_else(|| format!("{vendor} {}", read(&d.join("device")))),
             pci,
             vendor,
             driver: driver.clone(),
@@ -211,7 +211,9 @@ fn scan() -> Vec<Gpu> {
                 });
             }
             "intel" | "amd" => {
-                match (&g.render_node, output("vainfo", &["--display", "drm", "--device", g.render_node.as_deref().unwrap_or("/dev/dri/renderD128")])) {
+                let node = g.render_node.clone().unwrap_or_else(|| "/dev/dri/renderD128".into());
+                let vainfo = memo(format!("vainfo {node}"), || output("vainfo", &["--display", "drm", "--device", &node]));
+                match (&g.render_node, vainfo) {
                     (None, _) => g.note = Some("no render node: driver missing".into()),
                     (Some(_), None) => g.note = Some("VA-API not ready: install vainfo and the VA-API driver".into()),
                     (Some(_), Some(v)) => {
@@ -308,6 +310,18 @@ fn fake(list: &str) -> Vec<Gpu> {
 }
 
 static CACHE: Mutex<Option<(Instant, Vec<Gpu>)>> = Mutex::new(None);
+
+/// Ce qui ne change pas tant que le Core tourne (le nom d'une carte, ce que son pilote VA-API sait
+/// faire) : demandé une fois (lspci, vainfo), pas à chaque relevé.
+fn memo(key: String, f: impl FnOnce() -> Option<String>) -> Option<String> {
+    static SEEN: Mutex<Option<std::collections::HashMap<String, Option<String>>>> = Mutex::new(None);
+    if let Some(v) = SEEN.lock().unwrap_or_else(|p| p.into_inner()).get_or_insert_with(Default::default).get(&key) {
+        return v.clone();
+    }
+    let v = f();
+    SEEN.lock().unwrap_or_else(|p| p.into_inner()).get_or_insert_with(Default::default).insert(key, v.clone());
+    v
+}
 
 /// Les GPU (relus au plus toutes les 3 s).
 pub fn detect() -> Vec<Gpu> {

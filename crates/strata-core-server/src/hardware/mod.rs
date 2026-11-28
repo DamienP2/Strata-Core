@@ -354,8 +354,23 @@ impl HardwareConfig {
         data_dir.join("hardware.json")
     }
 
+    /// Lu une fois par révision du fichier (le gardien, les alertes, NMOS et les pages le
+    /// demandent souvent) : ensuite, une copie de ce qui est en mémoire.
     pub fn load(data_dir: &Path) -> Self {
-        strata_core::files::read_json(&Self::path(data_dir)).unwrap_or_default()
+        type Seen = std::collections::HashMap<PathBuf, (String, HardwareConfig)>;
+        static CACHE: std::sync::Mutex<Option<Seen>> = std::sync::Mutex::new(None);
+        let path = Self::path(data_dir);
+        let rev = revision(data_dir);
+        let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        let map = cache.get_or_insert_with(Default::default);
+        if let Some((r, cfg)) = map.get(&path) {
+            if *r == rev {
+                return cfg.clone();
+            }
+        }
+        let cfg: HardwareConfig = strata_core::files::read_json(&path).unwrap_or_default();
+        map.insert(path, (rev, cfg.clone()));
+        cfg
     }
 
     /// Des identifiants à tous les flux (`flow-1`, `flow-2`…), uniques.
@@ -538,6 +553,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/hardware/flows", get(flows))
         .route("/api/hardware/nmos", get(nmos_status))
         .route("/api/hardware/ports", get(ports))
+        .route("/api/hardware/gpus", get(gpus))
         .route("/api/hardware/flows/{id}/preview.jpg", get(flow_preview))
 }
 
@@ -594,8 +610,8 @@ fn published_mxl(mxl: &strata_mxl::Mxl, id: strata_mxl::Uuid) -> Value {
     if !mxl.is_active(id) {
         return json!({"sending": false, "mxlFlow": id.to_string()});
     }
-    let format = mxl.video_reader(id).ok().map(|r| {
-        let v = r.video;
+    // La description du flux suffit (pas de lecteur ouvert à chaque requête).
+    let format = mxl.video_of(id).map(|v| {
         let rate = v.rate.0 as f64 / v.rate.1.max(1) as f64 * if v.interlaced { 2.0 } else { 1.0 };
         let rate = (rate * 100.0).round() / 100.0;
         format!("{}{}{}", v.height, if v.interlaced { 'i' } else { 'p' }, if rate.fract() == 0.0 { format!("{rate:.0}") } else { format!("{rate}") })
@@ -815,6 +831,12 @@ async fn flow_preview(State(s): State<Shared>, CurrentUser(me): CurrentUser, Url
     .await?
     .map_err(|e| (StatusCode::NOT_FOUND, e))?;
     Ok(jpeg_response(jpeg))
+}
+
+/// Les GPU (la page GPU les relit seuls, pas tout le matériel).
+async fn gpus(CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
+    require(me.admin)?;
+    Ok(Json(json!({ "gpus": blocking(gpu::detect).await? })))
 }
 
 /// Les ports média : débit mesuré et prévu, place restante par format.

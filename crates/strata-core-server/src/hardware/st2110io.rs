@@ -9,8 +9,10 @@
 //!   sont seulement réglés (et regardés dans l'aperçu), comme avant.
 //! - **Son** : reçu en blocs de 10 ms (L24 ou L16), écrit en flux audio MXL `2110/<flux>` (float32
 //!   48 kHz) ; envoyé depuis le flux audio MXL que l'appli écrit, du silence sans lui.
-//! - MTL est rouvert quand les ports changent ; un flux changé, ajouté ou retiré est relancé
-//!   seul, sans couper les autres (un branchement NMOS ne touche que le récepteur branché).
+//! - MTL s'ouvre une fois sur les ports réglés et reste ouvert (DPDK ne se réinitialise pas dans
+//!   le même processus : des ports changés demandent un redémarrage du Core) ; un flux changé,
+//!   ajouté, coupé ou retiré est relancé seul, sans couper les autres (un branchement NMOS ne
+//!   touche que le récepteur branché).
 use serde::Serialize;
 use std::{
     collections::HashMap,
@@ -58,6 +60,8 @@ struct Plan {
     ports: Vec<(String, Pmd, Ipv4Addr, Ipv4Addr)>,
     flows: Vec<FlowPlan>,
     tai_offset: u32,
+    /// Les flux mal réglés (format inconnu) : leur erreur, sans toucher aux autres.
+    bad: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -90,6 +94,9 @@ struct FlowRun {
     thread: JoinHandle<()>,
     started: Instant,
 }
+
+/// MTL a déjà été ouvert dans ce processus (DPDK ne se réinitialise pas).
+static OPENED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Default)]
 pub struct Engine {
@@ -134,20 +141,31 @@ fn plan(cfg: &HardwareConfig) -> Result<Option<Plan>, String> {
         return Ok(None);
     }
     let video: Vec<_> = cfg.flows.iter().filter(|f| f.enabled && matches!(f.essence, Essence::Video | Essence::Audio)).collect();
-    if video.is_empty() {
+    if video.is_empty() && r.media1.is_empty() {
         return Ok(None);
     }
+    // Les deux ports réglés sont ouverts, que les flux du moment s'en servent ou non : MTL (DPDK)
+    // ne se rouvre pas sans redémarrer le Core, couper ou ajouter un flux ne doit pas changer ses
+    // ports.
     let two = r.media_mode == MediaMode::Redundant && video.iter().any(|f| f.blue.is_some()) || video.iter().any(|f| f.port == 2);
     let mut ports = vec![port_of(r.media_io, &r.media1, &r.media1_address)?];
-    if two {
-        ports.push(port_of(r.media_io, &r.media2, &r.media2_address)?);
+    if !r.media2.is_empty() {
+        match port_of(r.media_io, &r.media2, &r.media2_address) {
+            Ok(p) => ports.push(p),
+            Err(e) if two => return Err(e),
+            Err(_) => {}
+        }
     }
     let mut flows = Vec::new();
+    let mut bad = Vec::new();
     for f in video {
         let kind = if f.essence == Essence::Audio {
             Kind::Audio(strata_mtl::Audio { channels: f.channels.clamp(1, 64), bits: f.bits, ptime_us: f.ptime_us, frame_ms: 10 })
         } else {
-            let (width, height, rate, interlaced) = cfg.video_of(f).ok_or(format!("{}: unknown format {}", f.name, f.format))?;
+            let Some((width, height, rate, interlaced)) = cfg.video_of(f) else {
+                bad.push((f.id.clone(), format!("unknown format {}", f.format)));
+                continue;
+            };
             Kind::Video(strata_mtl::Video { width, height, rate, interlaced })
         };
         let legs = match (r.media_mode, f.blue) {
@@ -157,21 +175,21 @@ fn plan(cfg: &HardwareConfig) -> Result<Option<Plan>, String> {
         };
         flows.push(FlowPlan { id: f.id.clone(), name: f.name.clone(), input: f.direction == Direction::Input, legs, payload_type: f.pt(), kind });
     }
-    Ok(Some(Plan { ports, flows, tai_offset: cfg.ptp.tai_offset }))
+    Ok(Some(Plan { ports, flows, tai_offset: cfg.ptp.tai_offset, bad }))
 }
 
 impl Engine {
     /// Tient MTL en accord avec les réglages (bloquant ; rouvre tout quand ils changent).
     pub fn apply(&self, cfg: &HardwareConfig, mtl_loaded: Result<(), String>, mxl: Option<Arc<Mxl>>) {
         let planned = plan(cfg);
-        // MTL fermé avant que ses ports soient rendus au noyau (ports changés, ou plus de ST 2110).
-        let ports_change = {
-            let run = self.running.lock().unwrap();
-            match (run.as_ref(), &planned) {
-                (Some(r), Ok(Some(p))) => r.ports != (p.ports.clone(), p.tai_offset),
-                (Some(_), _) => true,
-                (None, _) => false,
-            }
+        let running_ports = self.running.lock().unwrap().as_ref().map(|r| r.ports.clone());
+        // MTL ouvert reste ouvert tant que ST 2110 est en marche (même sans flux : DPDK ne se
+        // rouvre pas dans le même processus). Ses ports changés, ou ST 2110 coupé : il est fermé,
+        // et ne repartira qu'au redémarrage du Core.
+        let ports_change = match (&running_ports, &planned) {
+            (Some(rp), Ok(Some(p))) => *rp != (p.ports.clone(), p.tai_offset),
+            (Some(_), _) => true,
+            (None, _) => false,
         };
         if ports_change {
             let old = self.running.lock().unwrap().take();
@@ -180,8 +198,10 @@ impl Engine {
             }
             self.status.lock().unwrap().clear();
         }
-        // Les hugepages et les ports DPDK ensuite (et rendus quand on n'en veut plus).
-        let system = super::media::prepare(cfg);
+        let keep_system = !ports_change && running_ports.is_some() && matches!(&planned, Ok(Some(p)) if p.flows.is_empty());
+        // Les hugepages et les ports DPDK ensuite (et rendus quand on n'en veut plus) ; pas pendant
+        // que MTL ouvert attend sans flux (il les tient encore).
+        let system = if keep_system { Ok(()) } else { super::media::prepare(cfg) };
         let want = match (planned, mtl_loaded, &mxl) {
             (Ok(None), _, _) => None,
             (Err(e), _, _) => {
@@ -211,16 +231,20 @@ impl Engine {
             *self.problem.lock().unwrap() = None;
             return;
         };
+        // Pas encore ouvert et aucun flux : rien à ouvrir.
+        if run.is_none() && plan.flows.is_empty() {
+            *self.problem.lock().unwrap() = None;
+            return;
+        }
         let Some(mxl) = mxl else { return };
         let ports = (plan.ports.clone(), plan.tai_offset);
-        // Les ports changent : tout est rouvert.
-        if run.as_ref().is_some_and(|r| r.ports != ports) {
-            if let Some(r) = run.take() {
-                halt(r);
-            }
-            self.status.lock().unwrap().clear();
-        }
         if run.is_none() {
+            // DPDK s'initialise une fois par processus : déjà ouvert puis fermé, MTL ne repart
+            // qu'avec un Core relancé.
+            if OPENED.load(Ordering::Relaxed) {
+                *self.problem.lock().unwrap() = Some("the media ports changed: restart Strata Core to apply them".into());
+                return;
+            }
             *self.problem.lock().unwrap() = None;
             let list: Vec<Port> = plan
                 .ports
@@ -235,6 +259,7 @@ impl Engine {
                     return;
                 }
             };
+            OPENED.store(true, Ordering::Relaxed);
             tracing::info!("MTL on {}", plan.ports.iter().map(|p| p.0.as_str()).collect::<Vec<_>>().join(", "));
             *run = Some(Running { ports, flows: HashMap::new(), mtl });
         }
@@ -255,6 +280,12 @@ impl Engine {
             if !plan.flows.iter().any(|p| p.id == f.plan.id) {
                 self.status.lock().unwrap().remove(&f.plan.id);
             }
+        }
+        for (id, e) in &plan.bad {
+            let mut st = self.status.lock().unwrap();
+            let s = st.entry(id.clone()).or_default();
+            s.state = IoState::Error;
+            s.error = Some(e.clone());
         }
         // … puis les nouveaux démarrent.
         let new: Vec<&FlowPlan> = plan.flows.iter().filter(|p| !r.flows.contains_key(&p.id)).collect();

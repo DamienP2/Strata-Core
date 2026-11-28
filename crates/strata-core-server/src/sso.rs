@@ -17,7 +17,6 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use ring::rand::SecureRandom;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::Digest;
 use std::{
     collections::HashMap,
     sync::{Mutex, OnceLock},
@@ -318,7 +317,7 @@ async fn start(State(s): State<Shared>, headers: HeaderMap, Query(q): Query<Star
     let scheme = if auth::is_https(&headers) { "https" } else { "http" };
     let host = first_header(&headers, "x-forwarded-host").or_else(|| first_header(&headers, "host")).unwrap_or("localhost");
     let (state, nonce, verifier) = (random(), random(), random());
-    let challenge = URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(verifier.as_bytes()));
+    let challenge = URL_SAFE_NO_PAD.encode(ring::digest::digest(&ring::digest::SHA256, verifier.as_bytes()));
     let redirect_uri = format!("{scheme}://{host}/api/auth/sso/callback");
     let url = format!(
         "{}{}response_type=code&client_id={}&redirect_uri={}&scope={}&state={}&nonce={}&code_challenge={}&code_challenge_method=S256",
