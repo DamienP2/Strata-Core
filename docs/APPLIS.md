@@ -226,6 +226,14 @@ Linux Foundation) : des flux en mémoire partagée, sur le serveur, sans passer 
   horloge de référence PTP ou `localmac` sans PTP) et leurs rapports RTCP (TR-10-1 : un par
   image, ou toutes les 10 ms pour le son, avec le bloc d'information IPMX) ; leurs images partent
   à l'instant de leur horodatage RTP. Rien ne change pour l'appli.
+- **Calage image/son (ST 2110)** : l'image et le son restent calés comme l'appli les a écrits
+  dans MXL (son posé à l'instant de l'image, `last_frame_audio_index`). À l'envoi, chaque image
+  et chaque bloc de son porte comme horodatage RTP son instant dans MXL plus une avance fixe, la
+  même pour tous les flux (deux images de la cadence maison) ; à la réception, chacun est posé
+  dans MXL à l'instant de son horodatage (PTP, ST 2059), pas à son arrivée. Un émetteur sur une
+  autre horloge : posé à l'arrivée. Mesuré en boucle (mire et bip coupé, `strata-core test bars
+  2110/<vidéo> --audio 2110/<son>` puis `strata-core test sync 2110/<vidéo reçue> 2110/<son
+  reçu>`) : 0,00 ms en 720p50 et 576i50, avec et sans IPMX.
 - **Fonctions du Core** : `features` de `/api/hardware/shared` dit lesquelles sont actives
   (`st2110`, `jpegxs`, `ipmx`, `ipmx-privacy`, `hdcp`, `dante`, `ndi`, `streams`) ; une appli
   n'offre que celles-là (réglées dans *Réglages › Fonctions*).

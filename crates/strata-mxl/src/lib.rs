@@ -154,6 +154,11 @@ impl Mxl {
     }
 
     /// Le flux existe et son écrivain est vivant.
+    /// L'heure TAI de MXL maintenant, en ns (au pas d'un échantillon à 48 kHz).
+    pub fn now_ns(&self) -> u64 {
+        (self.inst.get_current_index(&AUDIO_RATIONAL) as u128 * 1_000_000_000 / AUDIO_RATE as u128) as u64
+    }
+
     pub fn is_active(&self, id: Uuid) -> bool {
         self.inst.is_flow_active(&id.to_string()).unwrap_or(false)
     }
@@ -448,6 +453,34 @@ impl VideoReader {
         // Les deux trames d'une même image : la paire (paire, impaire) la plus récente.
         let first = if head % 2 == 1 { head - 1 } else { head.saturating_sub(2) };
         let (a, b) = (grain(first)?, grain(first + 1)?);
+        self.note_read(first);
+        Some(f(&a.payload[..size], Some(&b.payload[..size])))
+    }
+
+    /// L'index du dernier grain écrit.
+    pub fn head(&self) -> Option<u64> {
+        self.grains.get_runtime_info().ok().map(|i| i.headIndex)
+    }
+
+    /// La cadence des grains (des trames en entrelacé).
+    pub fn grain_rate(&self) -> (u64, u64) {
+        (self.rate.numerator.max(1) as u64, self.rate.denominator.max(1) as u64)
+    }
+
+    /// L'image qui commence au grain `first` (pair en entrelacé : ses deux trames), lue en place
+    /// comme `with_latest`. None si elle n'est pas (encore, ou plus) entière dans MXL.
+    pub fn with_grain<R>(&self, first: u64, f: impl FnOnce(&[u8], Option<&[u8]>) -> R) -> Option<R> {
+        let size = v210_stride(self.video.width) * self.video.grain_lines() as usize;
+        let grain = |i: u64| self.grains.get_grain_non_blocking(i).ok().filter(|g| g.index == i && g.payload.len() >= size);
+        if self.head()? < first + self.video.interlaced as u64 {
+            return None;
+        }
+        let a = grain(first)?;
+        if !self.video.interlaced {
+            self.note_read(first);
+            return Some(f(&a.payload[..size], None));
+        }
+        let b = grain(first + 1)?;
         self.note_read(first);
         Some(f(&a.payload[..size], Some(&b.payload[..size])))
     }

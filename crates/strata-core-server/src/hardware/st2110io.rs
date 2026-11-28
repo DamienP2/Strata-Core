@@ -96,6 +96,10 @@ struct FlowPlan {
     jpegxs: Option<f32>,
     /// Envoyé en IPMX : ses rapports RTCP.
     ipmx: Option<IpmxPlan>,
+    /// Envoyé : l'avance de l'envoi sur l'instant du contenu (la même pour tous les flux).
+    lead_ns: u64,
+    /// Le décalage TAI − UTC (s) : l'heure de MTL est TAI.
+    tai_offset: u32,
 }
 
 /// Les rapports RTCP d'un flux envoyé en IPMX (VSF TR-10-1 § 8.7).
@@ -175,62 +179,88 @@ fn port_of(io: MediaIo, iface: &str, address: &str) -> Result<(String, Pmd, Ipv4
     }
 }
 
-/// Ce qu'il faut ouvrir d'après les réglages ; None : rien (mode « Off », aucun flux vidéo ou son).
-/// L'envoi IPMX d'un flux : l'instant TAI de chaque image (ou bloc de son), qui devient son
-/// horodatage RTP, et son rapport RTCP envoyé juste avant elle (pendant l'image précédente).
-struct IpmxSend {
+/// L'horodatage des flux envoyés (ST 2110-10) : l'instant de leur contenu dans MXL, là où l'appli
+/// l'a posé (l'image, le son à l'instant de l'image), plus une avance fixe, la même pour tous les
+/// flux. Chaque image ou bloc de son part à cet instant (MTL cadence) ; un récepteur qui suit les
+/// horodatages remet l'image et le son exactement comme l'appli les a écrits : aucun décalage. IPMX :
+/// le rapport RTCP de chaque image part juste avant elle (pendant la précédente).
+struct TxClock {
+    /// L'heure de MTL (TAI) moins celle de MXL, en secondes entières (la même horloge, l'une en
+    /// TAI, l'autre parfois en UTC).
+    offset: i64,
+    lead_ns: u64,
+    tai_offset_ns: u64,
+    period_ns: u64,
     rep: Option<super::ipmx::Reporter>,
     /// Pourquoi les rapports ne partent pas (port média en DPDK : le noyau n'a pas son adresse).
     error: Option<String>,
-    period_ns: u64,
-    next: u64,
-    tai_offset_ns: u64,
     rate: u64,
     packets: u32,
     octets: u32,
 }
 
-impl IpmxSend {
-    fn open(p: &IpmxPlan, period_ns: u64, rate: u64) -> IpmxSend {
-        let (rep, error) = match super::ipmx::Reporter::open(&p.legs, p.ssrc, p.block.clone()) {
-            Ok(r) => (Some(r), None),
-            Err(e) => (None, Some(e)),
+impl TxClock {
+    fn open(f: &FlowPlan, mxl: &Mxl, period_ns: u64, rate: u64) -> TxClock {
+        let (rep, error, packets, octets) = match &f.ipmx {
+            Some(p) => match super::ipmx::Reporter::open(&p.legs, p.ssrc, p.block.clone()) {
+                Ok(r) => (Some(r), None, p.packets, p.octets),
+                Err(e) => (None, Some(e), p.packets, p.octets),
+            },
+            None => (None, None, 0, 0),
         };
-        IpmxSend {
+        let mut c = TxClock {
+            offset: 0,
+            lead_ns: f.lead_ns,
+            tai_offset_ns: f.tai_offset as u64 * 1_000_000_000,
+            period_ns: period_ns.max(1),
             rep,
             error,
-            period_ns: period_ns.max(1),
-            next: 0,
-            tai_offset_ns: p.tai_offset as u64 * 1_000_000_000,
             rate,
-            packets: p.packets,
-            octets: p.octets,
+            packets,
+            octets,
+        };
+        let d = c.now() as i64 - mxl.now_ns() as i64;
+        c.offset = (d as f64 / 1e9).round() as i64 * 1_000_000_000;
+        // La même horloge à des secondes entières près : sinon, les horodatages restent calés
+        // entre eux mais partent en retard ou en avance (le dire).
+        if (d - c.offset).abs() > 1_000_000 {
+            tracing::warn!("{}: the MTL and MXL clocks differ by {} ms more than whole seconds", f.name, (d - c.offset) / 1_000_000);
         }
+        c
     }
 
+    /// L'heure de MTL (TAI), en ns.
     fn now(&self) -> u64 {
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64) + self.tai_offset_ns
     }
 
-    /// L'instant de la prochaine image : son rapport part maintenant (pas plus d'une image avant
-    /// elle) ; en retard ou trop en avance, le compte repart de l'heure.
-    fn next(&mut self) -> u64 {
-        let p = self.period_ns;
+    /// L'heure de MXL, en ns.
+    fn mxl_now(&self) -> u64 {
+        (self.now() as i64 - self.offset) as u64
+    }
+
+    /// L'instant d'envoi (heure de MTL, son horodatage RTP) d'un contenu posé dans MXL à `mxl_ns`.
+    fn at(&self, mxl_ns: u64) -> u64 {
+        (mxl_ns as i64 + self.offset) as u64 + self.lead_ns
+    }
+
+    /// Attend l'image (le bloc) d'avant celle qui part à `ts` : MTL la reçoit juste à temps,
+    /// pas en avance (il l'enverrait plus tôt). IPMX : son rapport RTCP part alors.
+    fn report(&mut self, ts: u64) {
         let now = self.now();
-        if self.next == 0 || self.next < now || self.next > now + 2_000_000_000 {
-            self.next = (now / p + 1) * p;
+        if ts > now + self.period_ns {
+            std::thread::sleep(Duration::from_nanos((ts - self.period_ns - now).min(1_000_000_000)));
         }
-        // Le rapport de l'image k part pendant l'image k − 1 (TR-10-1 § 8.8.2).
-        if self.next > now + p {
-            std::thread::sleep(Duration::from_nanos(self.next - p - now));
-        }
-        let ts = self.next;
-        self.next += p;
         if let Some(r) = self.rep.as_mut() {
             r.report(ts, super::ipmx::rtp_of(ts, self.rate), self.packets, self.octets);
         }
-        ts
     }
+}
+
+/// L'instant (ns) du grain `g` à la cadence `num/den`, arrondi au-dessus : l'horodatage RTP qui en
+/// sort retombe sur lui.
+fn grain_ns(g: u64, num: u64, den: u64) -> u64 {
+    (g as u128 * 1_000_000_000 * den as u128).div_ceil(num.max(1) as u128) as u64
 }
 
 /// Le SSRC d'un flux : stable (d'après son identifiant), jamais 0.
@@ -240,6 +270,7 @@ fn ssrc_of(id: &str) -> u32 {
 }
 
 /// `ipmx` : l'horloge de référence à annoncer (`ts-refclk`) quand IPMX est actif.
+/// Ce qu'il faut ouvrir d'après les réglages ; None : rien (mode « Off », aucun flux vidéo ou son).
 fn plan(cfg: &HardwareConfig, ipmx: Option<&str>) -> Result<Option<Plan>, String> {
     let r = &cfg.network;
     if r.media_io == MediaIo::Off {
@@ -263,6 +294,10 @@ fn plan(cfg: &HardwareConfig, ipmx: Option<&str>) -> Result<Option<Plan>, String
     }
     let mut flows = Vec::new();
     let mut bad = Vec::new();
+    // Deux images de la cadence maison : le temps qu'une image et son son soient écrits par
+    // l'appli avant de partir.
+    let (hn, hd) = cfg.clock.house.rate.ratio();
+    let lead_ns = 2_000_000_000u64 * hd / hn.max(1);
     for f in video {
         let kind = if f.essence == Essence::Audio {
             Kind::Audio(strata_mtl::Audio { channels: f.channels.clamp(1, 64), bits: f.bits, ptime_us: f.ptime_us, frame_ms: 10 })
@@ -362,6 +397,8 @@ fn plan(cfg: &HardwareConfig, ipmx: Option<&str>) -> Result<Option<Plan>, String
             pacing: f.mtl_pacing(),
             jpegxs: f.jpegxs(),
             ipmx: ipmx_plan,
+            lead_ns,
+            tai_offset: cfg.ptp.tai_offset,
         });
     }
     Ok(Some(Plan { ports, flows, tai_offset: cfg.ptp.tai_offset, bad }))
@@ -540,11 +577,13 @@ pub(crate) struct RtpTime {
     clock: i64,
     /// Le décalage en secondes entières, appris au premier horodatage.
     shift: Option<i64>,
+    /// Les horodatages refusés de suite : au-delà de 50, le décalage est réappris.
+    misses: u32,
 }
 
 impl RtpTime {
     pub(crate) fn new(clock: u32) -> RtpTime {
-        RtpTime { clock: clock as i64, shift: None }
+        RtpTime { clock: clock as i64, shift: None, misses: 0 }
     }
 
     /// L'instant (ticks TAI) d'un horodatage RTP, `now` : maintenant en ticks. None : pas la même
@@ -555,11 +594,17 @@ impl RtpTime {
         let sec = self.clock;
         let shift = *self.shift.get_or_insert_with(|| (d as f64 / sec as f64).round() as i64 * sec);
         let late = shift - d;
-        // Pris jusqu'à 150 ms avant (le réseau, l'image entière) et 40 ms après (horloges).
-        if late < -sec / 25 || late > sec * 3 / 20 {
-            self.shift = None;
+        // Pris jusqu'à 150 ms avant (le réseau, l'image entière) et 100 ms après (un émetteur en
+        // avance).
+        if late < -sec / 10 || late > sec * 3 / 20 {
+            self.misses += 1;
+            if self.misses > 50 {
+                self.shift = None;
+                self.misses = 0;
+            }
             return None;
         }
+        self.misses = 0;
         Some((now as i64 + d - shift) as u64)
     }
 }
@@ -604,9 +649,10 @@ fn receive_audio(f: &FlowPlan, a: &strata_mtl::Audio, mtl: &Mtl, mxl: &Mxl, stop
 /// Son envoyé : flux audio MXL `2110/<flux>` (écrit par l'appli) → MTL ; du silence sans lui.
 /// MTL cadence l'envoi (un bloc de 10 ms libre à la fois).
 fn send_audio(f: &FlowPlan, a: &strata_mtl::Audio, mtl: &Mtl, mxl: &Mxl, stop: &AtomicBool, set: Setter) -> Result<(), String> {
-    let tx = mtl.atx(&f.name, &legs(f), f.payload_type, a, f.ipmx.as_ref().map(|p| p.ssrc))?;
+    // Chaque bloc part à l'instant de son horodatage (son instant dans MXL + l'avance).
+    let tx = mtl.atx(&f.name, &legs(f), f.payload_type, a, Some(f.ipmx.as_ref().map_or(0, |p| p.ssrc)))?;
     // IPMX : un rapport RTCP par bloc de 10 ms (TR-10-1 § 8.10.1).
-    let mut clock = f.ipmx.as_ref().map(|p| IpmxSend::open(p, a.frame_ms as u64 * 1_000_000, 48_000));
+    let mut clock = TxClock::open(f, mxl, a.frame_ms as u64 * 1_000_000, 48_000);
     let id = strata_mxl::flow_id(&format!("2110/{}", f.id));
     set(&|s| s.format = Some(audio_name(a)));
     let n = tx.frame_samples();
@@ -617,6 +663,11 @@ fn send_audio(f: &FlowPlan, a: &strata_mtl::Audio, mtl: &Mtl, mxl: &Mxl, stop: &
     let mut tick = Instant::now();
     // L'écrivain de l'appli, revu deux fois par seconde (pas à chaque bloc de 10 ms).
     let mut checked: Option<Instant> = None;
+    // Le premier échantillon du prochain bloc (index MXL, 48 kHz) : à la suite, recalé si l'appli
+    // saute.
+    let mut next: Option<u64> = None;
+    let mut buf = Vec::new();
+    let sample_ns = |s: u64| (s as u128 * 1_000_000_000).div_ceil(48_000) as u64;
     while !stop.load(Ordering::Relaxed) {
         if checked.is_none_or(|t| t.elapsed() >= Duration::from_millis(500)) {
             checked = Some(Instant::now());
@@ -628,17 +679,39 @@ fn send_audio(f: &FlowPlan, a: &strata_mtl::Audio, mtl: &Mtl, mxl: &Mxl, stop: &
                 reader = None;
             }
         }
-        // Les canaux de l'appli rangés dans ceux du flux (en trop : ignorés ; en moins : silence).
-        let pcm = reader.as_mut().and_then(|r| {
+        let now_s = clock.mxl_now() as u128 * 48_000 / 1_000_000_000;
+        let now_s = now_s as u64;
+        // Le bloc le plus récent écrit par l'appli, sinon celui de maintenant (du silence).
+        let written = reader.as_ref().and_then(|r| r.written()).filter(|w| now_s.abs_diff(*w) < 48_000);
+        let target = written.map_or(now_s, |w| w + 1).saturating_sub(n as u64);
+        // Sur la grille des blocs (MTL arrondit l'instant d'envoi d'un bloc à elle).
+        let s = match next {
+            Some(s) if s <= target + 9_600 && s + 9_600 >= target => s,
+            _ => target / n as u64 * n as u64,
+        };
+        next = Some(s + n as u64);
+        let ts = clock.at(sample_ns(s));
+        // Le son de ce bloc : attendu jusqu'à peu avant son départ (l'appli l'écrit avec l'image).
+        let pcm = reader.as_ref().and_then(|r| {
+            loop {
+                if r.read_at(s, n, &mut buf) {
+                    break;
+                }
+                if clock.now() + 2_000_000 >= ts || stop.load(Ordering::Relaxed) {
+                    return None;
+                }
+                std::thread::sleep(Duration::from_micros(500));
+            }
+            // Les canaux de l'appli rangés dans ceux du flux (en trop : ignorés ; en moins : silence).
             let rc = r.channels.max(1);
-            r.next_interleaved(n).map(|s| if rc == ch { s } else { (0..n * ch).map(|k| if k % ch < rc { s[(k / ch) * rc + k % ch] } else { 0.0 }).collect() })
+            Some(if rc == ch { buf.clone() } else { (0..n * ch).map(|k| if k % ch < rc { buf[(k / ch) * rc + k % ch] } else { 0.0 }).collect() })
         });
         if pcm.is_some() {
             heard += 1;
         }
         let pcm = pcm.unwrap_or_else(|| vec![0.0; n * ch]);
-        let at = clock.as_mut().map_or(0, IpmxSend::next);
-        if tx.send_at(&pcm, at) {
+        clock.report(ts);
+        if tx.send_at(&pcm, ts) {
             blocks += 1;
         }
         if tick.elapsed() >= Duration::from_secs(1) {
@@ -647,7 +720,7 @@ fn send_audio(f: &FlowPlan, a: &strata_mtl::Audio, mtl: &Mtl, mxl: &Mxl, stop: &
             set(&|s| {
                 s.state = if on { IoState::Running } else { IoState::Idle };
                 s.frames = blocks;
-                s.error = clock.as_ref().and_then(|c| c.error.clone());
+                s.error = clock.error.clone();
             });
             heard = 0;
         }
@@ -824,7 +897,12 @@ fn receive(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: 
                     let at = clock
                         .ticks(fr.timestamp as u32, w.tai_ticks(90_000))
                         .map(|t| ((t as u128 * num as u128 + 45_000 * den as u128) / (90_000 * den as u128)) as u64);
-                    w.write_grain_v210_at(fr.data, fr.linesize, video.interlaced && fr.second_field, at)?;
+                    // Sa place déjà passée (le flux a été écrit trop loin, une surcharge) : sautée,
+                    // le flux se recale après une image figée au lieu de rester décalé.
+                    let passed = matches!((at, w.last_index()), (Some(a), Some(l)) if a <= l && l - a <= num / den);
+                    if !passed {
+                        w.write_grain_v210_at(fr.data, fr.linesize, video.interlaced && fr.second_field, at)?;
+                    }
                     frames += 1;
                 }
                 true
@@ -849,12 +927,18 @@ fn receive(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: 
 fn send(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: &AtomicBool, set: Setter) -> Result<(), String> {
     // JPEG XS : l'image v210 est convertie et codée par le greffon en l'envoyant.
     let mut tx: Box<dyn strata_mtl::VideoTx> = match f.jpegxs {
-        Some(bpp) => Box::new(mtl.tx22(&f.name, &legs(f), f.payload_type, video, bpp, f.ipmx.as_ref().map(|p| p.ssrc))?),
-        None => Box::new(mtl.tx(&f.name, &legs(f), f.payload_type, video, f.pacing, f.ipmx.as_ref().map(|p| p.ssrc))?),
+        // Chaque image part à l'instant de son horodatage (son instant dans MXL + l'avance).
+        Some(bpp) => Box::new(mtl.tx22(&f.name, &legs(f), f.payload_type, video, bpp, Some(f.ipmx.as_ref().map_or(0, |p| p.ssrc)))?),
+        None => Box::new(mtl.tx(&f.name, &legs(f), f.payload_type, video, f.pacing, Some(f.ipmx.as_ref().map_or(0, |p| p.ssrc)))?),
     };
     // IPMX : un rapport RTCP par image, par trame en entrelacé (TR-10-1 § 8.8.2).
     let field_ns = 1_000_000_000u64 * video.rate.1 as u64 / (video.rate.0 as u64 * if video.interlaced { 2 } else { 1 }).max(1);
-    let mut clock = f.ipmx.as_ref().map(|p| IpmxSend::open(p, field_ns, 90_000));
+    let mut clock = TxClock::open(f, mxl, field_ns, 90_000);
+    // Les grains MXL (des trames en entrelacé) : envoyés à la suite, chacun à son instant.
+    let (gnum, gden) = (video.rate.0 as u64 * if video.interlaced { 2 } else { 1 }, video.rate.1.max(1) as u64);
+    let step = if video.interlaced { 2 } else { 1 };
+    let mut next_g: Option<u64> = None;
+    let mut cur_g = 0u64;
     let id = strata_mxl::flow_id(&format!("2110/{}", f.id));
     let v = *video;
     set(&|s| s.format = Some(format_name(&v)));
@@ -873,7 +957,6 @@ fn send(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: &At
     let mut frames = 0u64;
     let mut second = false;
     let mut tick = Instant::now();
-    let period = Duration::from_secs_f64(v.rate.1 as f64 / v.rate.0.max(1) as f64);
     let lines = if v.interlaced { v.height as usize / 2 } else { v.height as usize };
     let black_field = black.repeat(lines);
     // Des lignes de `stride` octets vers le tampon de MTL (une seule copie, ligne à ligne si
@@ -943,16 +1026,49 @@ fn send(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: &At
                     }
                 }
             };
-            live = src.and_then(|r| r.with_latest(period * 3, &mut fill)).is_some()
-                || src.and_then(|r| r.with_latest(Duration::from_secs(1), &mut fill)).is_some();
+            // L'image à envoyer : la suivante de la précédente ; au départ (ou si l'appli saute) la
+            // dernière entière écrite, sinon celle de maintenant (du noir).
+            let now_g = (clock.mxl_now() as u128 * gnum as u128 / (1_000_000_000u128 * gden as u128)) as u64;
+            let head = src.and_then(|r| r.head()).filter(|h| now_g.abs_diff(*h) <= gnum / gden + 1);
+            let target = match head {
+                Some(h) if v.interlaced => h.saturating_sub(if h % 2 == 1 { 1 } else { 2 }),
+                Some(h) => h,
+                None => now_g.saturating_sub(step) / step * step,
+            };
+            let g = match next_g {
+                Some(g) if g <= target + 2 * step && g + 4 * step >= target => g,
+                _ => target,
+            };
+            next_g = Some(g + step);
+            cur_g = g;
+            let ts = clock.at(grain_ns(g, gnum, gden));
+            // Attendue jusqu'à peu avant son départ (l'appli l'écrit à son instant) ; pas là :
+            // la dernière écrite pendant une seconde, puis du noir.
+            live = false;
+            if let Some(r) = src {
+                loop {
+                    if r.with_grain(g, &mut fill).is_some() {
+                        live = true;
+                        break;
+                    }
+                    if clock.now() + field_ns / 2 >= ts || stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                if !live {
+                    live = r.with_latest(Duration::from_secs(1), &mut fill).is_some();
+                }
+            }
             if !live {
                 put(out.data, ls, &black_field);
             }
         }
         out.second_field = second;
-        if let Some(c) = clock.as_mut() {
-            out.timestamp = c.next();
-        }
+        // La trame du bas : le grain qui suit celui du haut.
+        let ts = clock.at(grain_ns(cur_g + second as u64, gnum, gden));
+        out.timestamp = ts;
+        clock.report(ts);
         out.send_field(second);
         frames += 1;
         if v.interlaced {
@@ -964,7 +1080,7 @@ fn send(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: &At
             set(&|s| {
                 s.state = if on { IoState::Running } else { IoState::Idle };
                 s.frames = frames;
-                s.error = mismatch.clone().or_else(|| clock.as_ref().and_then(|c| c.error.clone()));
+                s.error = mismatch.clone().or_else(|| clock.error.clone());
             });
         }
     }
@@ -989,5 +1105,10 @@ mod tests {
         // Une autre horloge (0,3 s d'écart) : posé à l'arrivée.
         let mut c = RtpTime::new(48_000);
         assert_eq!(c.ticks((now / 2 - 14_400) as u32, now / 2), None);
+        // Un horodatage isolé hors fenêtre ne fait pas oublier le décalage appris.
+        let mut c = RtpTime::new(90_000);
+        assert_eq!(c.ticks(shifted as u32, now), Some(now - 2_700));
+        assert_eq!(c.ticks((shifted + 90_000) as u32, now), None);
+        assert_eq!(c.ticks((shifted + 1_800) as u32, now + 1_800), Some(now - 900));
     }
 }
