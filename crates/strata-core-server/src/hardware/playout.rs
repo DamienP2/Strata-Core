@@ -317,7 +317,8 @@ impl Sound {
         if self.checked.is_none_or(|t| t.elapsed() >= Duration::from_millis(500)) {
             self.checked = Some(Instant::now());
             if mxl.is_active(id) {
-                if self.reader.is_none() {
+                if self.reader.as_ref().is_none_or(|r| mxl.stale(id, r.stamp)) {
+                    drop(self.reader.take());
                     self.reader = mxl.audio_reader(id).ok();
                 }
             } else {

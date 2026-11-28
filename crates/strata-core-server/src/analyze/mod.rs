@@ -181,8 +181,59 @@ impl Analyzer {
     }
 }
 
-/// Une mesure du calage : l'éclair (index de son de son image) et le début du silence.
-const LIP_SPAN: u64 = 4_800;
+/// Une mesure du calage : l'éclair (l'index de son de son image) et le repère du son le plus
+/// proche, jusqu'à ±400 ms.
+const LIP_SPAN: u64 = 19_200;
+
+/// Les repères du son d'un canal pour le calage : où le son se coupe (mire Calage : un son
+/// continu coupé à l'éclair) et où il reprend après un silence (mire Synchro AV : un bip à
+/// l'éclair). Le canal surtout sonore se mesure sur ses coupures, le canal surtout muet sur ses
+/// bips.
+#[derive(Default)]
+struct Edges {
+    zero_run: u64,
+    zero_start: u64,
+    sounding: bool,
+    cuts: VecDeque<u64>,
+    beeps: VecDeque<u64>,
+    /// La part du temps où le canal sonne (lissée).
+    tonal: f32,
+}
+
+impl Edges {
+    fn push(&mut self, at: u64, x: f32) {
+        if x.abs() < 1e-5 {
+            if self.zero_run == 0 {
+                self.zero_start = at;
+            }
+            self.zero_run += 1;
+            if self.zero_run == 24 && self.sounding {
+                self.cuts.push_back(self.zero_start);
+                self.sounding = false;
+            }
+            self.tonal *= 0.999_98;
+        } else {
+            if self.zero_run >= 240 {
+                self.beeps.push_back(at);
+            }
+            self.zero_run = 0;
+            self.sounding = true;
+            self.tonal = self.tonal * 0.999_98 + 0.000_02;
+        }
+        while self.cuts.len() > 8 {
+            self.cuts.pop_front();
+        }
+        while self.beeps.len() > 8 {
+            self.beeps.pop_front();
+        }
+    }
+
+    /// Le décalage (ms) du repère le plus proche de l'éclair `at`.
+    fn offset(&self, at: u64) -> Option<f64> {
+        let list = if self.tonal > 0.5 { &self.cuts } else { &self.beeps };
+        list.iter().copied().filter(|o| o.abs_diff(at) <= LIP_SPAN).min_by_key(|o| o.abs_diff(at)).map(|o| (o as f64 - at as f64) / 48.0)
+    }
+}
 
 /// Le stéréo de l'écoute : tous les canaux (impairs à gauche, pairs à droite), ou ceux en solo
 /// (un seul : aux deux oreilles).
@@ -225,8 +276,8 @@ fn run(s: &Session, mxl: &Mxl) {
     let (mut last_sig, mut still_since): (Option<video::Signature>, Option<Instant>) = (None, None);
     let (mut last_head, mut was_flash) = (None, false);
     let mut flashes: VecDeque<u64> = VecDeque::new();
-    let mut onsets: VecDeque<u64> = VecDeque::new();
-    let (mut zero_run, mut zero_start, mut tone) = (0u64, 0u64, false);
+    let mut edges: Vec<Edges> = Vec::new();
+    let mut per_channel: Vec<Option<f64>> = Vec::new();
     let mut lip: VecDeque<f64> = VecDeque::new();
     let mut lip_seen: Option<Instant> = None;
     let (mut tc, mut captions, mut afd, mut scte): (Option<String>, Option<Instant>, Option<u8>, Option<String>) = (None, None, None, None);
@@ -247,21 +298,24 @@ fn run(s: &Session, mxl: &Mxl) {
             if let Some(id) = vid {
                 if !mxl.is_active(id) {
                     vr = None;
-                } else if vr.is_none() {
+                } else if vr.as_ref().is_none_or(|r| mxl.stale(id, r.stamp)) {
+                    drop(vr.take());
                     vr = mxl.video_reader(id).ok();
                 }
             }
             for (i, id) in aids.iter().enumerate() {
                 if !mxl.is_active(*id) {
                     ars[i] = None;
-                } else if ars[i].is_none() {
+                } else if ars[i].as_ref().is_none_or(|r| mxl.stale(*id, r.stamp)) {
+                    drop(ars[i].take());
                     ars[i] = mxl.audio_reader(*id).ok();
                 }
             }
             if let Some(id) = did {
                 if !mxl.is_active(id) {
                     dr = None;
-                } else if dr.is_none() {
+                } else if dr.as_ref().is_none_or(|r| mxl.stale(id, r.stamp)) {
+                    drop(dr.take());
                     dr = mxl.data_reader(id).ok();
                 }
             }
@@ -284,6 +338,7 @@ fn run(s: &Session, mxl: &Mxl) {
                 m.reset();
             }
             lip.clear();
+            per_channel.iter_mut().for_each(|o| *o = None);
         }
         // L'image : l'éclair de la mire de calage à chaque image, les scopes 5 fois par seconde.
         if let Some(r) = vr.as_ref() {
@@ -350,20 +405,14 @@ fn run(s: &Session, mxl: &Mxl) {
                     }
                     if ok {
                         m.push(&chunk);
-                        // Le début du silence du canal 1 (le bip coupé de la mire de calage).
+                        // Les repères de chaque canal (calage canal par canal).
+                        if edges.len() != total {
+                            edges = (0..total).map(|_| Edges { tonal: 1.0, ..Edges::default() }).collect();
+                            per_channel = vec![None; total];
+                        }
                         for k in 0..n {
-                            if chunk[k * total].abs() < 1e-6 {
-                                if zero_run == 0 {
-                                    zero_start = p + k as u64;
-                                }
-                                zero_run += 1;
-                                if zero_run == 24 && tone {
-                                    onsets.push_back(zero_start);
-                                    tone = false;
-                                }
-                            } else {
-                                zero_run = 0;
-                                tone = true;
+                            for (c, e) in edges.iter_mut().enumerate() {
+                                e.push(p + k as u64, chunk[k * total + c]);
                             }
                         }
                         // L'écoute.
@@ -382,22 +431,24 @@ fn run(s: &Session, mxl: &Mxl) {
                 }
             }
         }
-        // Le calage : chaque éclair avec le silence le plus proche (±100 ms).
+        // Le calage : chaque éclair avec le repère le plus proche, canal par canal.
         while let Some(&at) = flashes.front() {
             if pos.is_some_and(|p| p < at + LIP_SPAN) {
                 break;
             }
             flashes.pop_front();
-            if let Some(o) = onsets.iter().copied().filter(|o| o.abs_diff(at) <= LIP_SPAN).min_by_key(|o| o.abs_diff(at)) {
-                lip.push_back((o as f64 - at as f64) / 48.0);
-                lip_seen = Some(Instant::now());
-                while lip.len() > 30 {
-                    lip.pop_front();
+            for (c, e) in edges.iter().enumerate() {
+                if let Some(o) = e.offset(at) {
+                    per_channel[c] = Some(o);
+                    if c == 0 {
+                        lip.push_back(o);
+                        lip_seen = Some(Instant::now());
+                        while lip.len() > 30 {
+                            lip.pop_front();
+                        }
+                    }
                 }
             }
-        }
-        while onsets.len() > 8 {
-            onsets.pop_front();
         }
         while flashes.len() > 8 {
             flashes.pop_front();
@@ -447,6 +498,7 @@ fn run(s: &Session, mxl: &Mxl) {
                 "lipsync": {
                     "offset": lip.back(),
                     "history": lip,
+                    "channels": per_channel,
                     "detected": lip_seen.is_some_and(|t| t.elapsed() < Duration::from_secs(5)),
                 },
                 "data": {

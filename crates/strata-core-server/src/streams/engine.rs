@@ -1063,7 +1063,8 @@ fn feed_encoder(
         if checked.elapsed() >= Duration::from_millis(500) {
             checked = Instant::now();
             if env.mxl.is_active(vid) {
-                if reader.is_none() {
+                if reader.as_ref().is_none_or(|r| env.mxl.stale(vid, r.stamp)) {
+                    drop(reader.take());
                     reader = env.mxl.video_reader(vid).ok();
                 }
                 if reader.as_ref().is_some_and(|r| r.video != *feed) {
@@ -1077,7 +1078,8 @@ fn feed_encoder(
                 reader = None;
             }
             if env.mxl.is_active(aid) {
-                if areader.is_none() {
+                if areader.as_ref().is_none_or(|r| env.mxl.stale(aid, r.stamp)) {
+                    drop(areader.take());
                     areader = env.mxl.audio_reader(aid).ok();
                 }
             } else {

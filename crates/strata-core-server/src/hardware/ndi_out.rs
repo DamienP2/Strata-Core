@@ -275,14 +275,16 @@ fn send(w: &Wanted, mxl: &Mxl, sender: &ndi::Sender, stop: &AtomicBool, set: Set
         if checked.elapsed() >= Duration::from_millis(500) {
             checked = Instant::now();
             if mxl.is_active(vid) {
-                if reader.is_none() {
+                if reader.as_ref().is_none_or(|r| mxl.stale(vid, r.stamp)) {
+                    drop(reader.take());
                     reader = mxl.video_reader(vid).ok();
                 }
             } else {
                 reader = None;
             }
             if mxl.is_active(aid) {
-                if areader.is_none() {
+                if areader.as_ref().is_none_or(|r| mxl.stale(aid, r.stamp)) {
+                    drop(areader.take());
                     areader = mxl.audio_reader(aid).ok();
                 }
             } else {

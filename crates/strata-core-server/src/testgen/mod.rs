@@ -50,11 +50,12 @@ pub struct Generator {
     /// Le format (« 1080i50 ») ; vide : la cadence maison en 1080 (un flux ST 2110 impose le sien).
     pub format: String,
     /// La mire : `bars75`, `bars100`, `smpte`, `ramp`, `checker`, `zoneplate`, `solid`, `black`,
-    /// `lipsync` (éclair blanc et bip coupé, une fois par seconde).
+    /// `lipsync` (éclair blanc et bip coupé, une fois par seconde), `avsync` (un curseur sur une
+    /// échelle de ±500 ms, l'éclair et un bip court sur du silence : le calage de chaque canal).
     pub pattern: String,
     /// La couleur unie (`solid`), `#RRGGBB`.
     pub color: String,
-    /// Le texte d'identification (vide : aucun).
+    /// Le texte d'identification (vide : aucun) ; `{name}` et `{format}` y sont remplacés.
     pub ident: String,
     /// Le timecode maison incrusté.
     pub burn_tc: bool,
@@ -70,6 +71,8 @@ pub struct Generator {
     pub channels: u32,
     /// L'identification des canaux (le canal n coupé n fois toutes les 4 s).
     pub channel_ident: bool,
+    /// Le canal n à n fois la fréquence (reconnu à l'oreille, au spectre, mesuré canal par canal).
+    pub tone_per_channel: bool,
     /// Le timecode maison en ATC (flux de données d'un groupe ST 2110).
     pub atc: bool,
 }
@@ -92,6 +95,7 @@ impl Default for Generator {
             level: -18.0,
             channels: 8,
             channel_ident: false,
+            tone_per_channel: false,
             atc: true,
         }
     }
@@ -436,7 +440,7 @@ fn generate(w: &Wanted, mxl: &Mxl, stop: &AtomicBool, set: Setter) -> Result<(),
             continue;
         }
         let aw = mxl.audio_writer(*id, &label, *ch)?;
-        audio.push((aw, sound::Sound::new(&g.tone, g.level, *ch as usize, g.channel_ident)));
+        audio.push((aw, sound::Sound::new(&g.tone, g.level, *ch as usize, g.channel_ident).beeping(g.pattern == "avsync").per_channel(g.tone_per_channel)));
     }
     let grains = if v.interlaced { (v.rate.0 * 2, v.rate.1) } else { v.rate };
     let mut data = match (&w.flows.data, g.atc) {
@@ -447,6 +451,10 @@ fn generate(w: &Wanted, mxl: &Mxl, stop: &AtomicBool, set: Setter) -> Result<(),
     let base = picture::pattern(&g.pattern, width, height, &g.color);
     let mut frame = picture::Frame::new(width, height, picture::grey(0.0));
     let s = picture::scale(height);
+    let format_name = crate::streams::engine::format_name(&v);
+    let ident = g.ident.replace("{name}", &g.name).replace("{format}", &format_name);
+    let av = picture::av_scale(width, height);
+    let avsync = g.pattern == "avsync";
     let (num, den) = (v.rate.0.max(1) as u64, v.rate.1.max(1) as u64);
     let per_second = num.div_ceil(den);
     let start = Instant::now();
@@ -458,11 +466,25 @@ fn generate(w: &Wanted, mxl: &Mxl, stop: &AtomicBool, set: Setter) -> Result<(),
         }
         let tc = strata_core::timecode::house_timecode(now_unix_ns(), &w.house, &w.timezone, w.tai_offset);
         // La mire de calage : un éclair blanc la première image de chaque seconde.
-        let flash = g.pattern == "lipsync" && tc.frames == 0;
-        if flash {
+        let flash = (g.pattern == "lipsync" || avsync) && tc.frames == 0;
+        if flash && !avsync {
             frame.fill(0, 0, width, height, picture::grey(1.0));
         } else {
             frame.data.copy_from_slice(&base.data);
+        }
+        if avsync {
+            // Le curseur : au 0 à l'éclair, à droite après (le son qui arrive en retard), à gauche
+            // avant.
+            let t = tc.frames as i64 * 1000 / per_second.max(1) as i64;
+            let rel = if t < 500 { t } else { t - 1000 };
+            let x = av.x0 as i64 + (av.x1 - av.x0) as i64 * (rel + 500) / 1000;
+            let x = x.max(0) as usize;
+            frame.fill(x.saturating_sub(s), av.y.saturating_sub(av.tick * 4), x + s, av.y + av.tick * 2, picture::ycc(1.0, 0.8, 0.0));
+            if flash {
+                // L'éclair : un carré blanc au centre (là où l'analyseur regarde).
+                let half = height / 8;
+                frame.fill(width / 2 - half, height / 2 - half, width / 2 + half, height / 2 + half, picture::grey(1.0));
+            }
         }
         if g.pattern == "lipsync" && !flash {
             // Un trait qui avance d'un bord à l'autre en une seconde : on voit où en est l'éclair.
@@ -477,13 +499,14 @@ fn generate(w: &Wanted, mxl: &Mxl, stop: &AtomicBool, set: Setter) -> Result<(),
             frame.fill(x, height - 14 * s, x + 6 * s, height - 8 * s, picture::grey(1.0));
         }
         // L'éclair reste blanc partout : c'est lui que l'analyseur cherche.
-        if !g.ident.is_empty() && !flash {
-            picture::label_centred(&mut frame, height / 2 - 4 * s, &g.ident, s);
+        if !ident.is_empty() && (!flash || avsync) {
+            let y = if avsync { height / 6 } else { height / 2 - 4 * s };
+            picture::label_centred(&mut frame, y, &ident, s);
         }
-        if g.burn_tc && !flash {
+        if g.burn_tc && (!flash || avsync) {
             picture::label_centred(&mut frame, height - 28 * s, &format!("TC {tc}"), s);
         }
-        if g.clock && !flash {
+        if g.clock && (!flash || avsync) {
             let t = jiff::Timestamp::now().to_zoned_datetime(jiff::tz::TimeZone::get(&w.timezone).unwrap_or(jiff::tz::TimeZone::UTC));
             let text = format!("{:02}:{:02}:{:02}", t.hour(), t.minute(), t.second());
             let x = width.saturating_sub(picture::text_width(&text, s) + 8 * s);

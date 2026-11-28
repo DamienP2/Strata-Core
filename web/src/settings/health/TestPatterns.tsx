@@ -27,6 +27,7 @@ export interface Generator {
   level: number;
   channels: number;
   channelIdent: boolean;
+  tonePerChannel: boolean;
   atc: boolean;
 }
 
@@ -63,6 +64,7 @@ const PATTERNS: [string, string][] = [
   ['solid', 'Solid colour'],
   ['black', 'Black'],
   ['lipsync', 'Lip sync'],
+  ['avsync', 'AV sync (per channel)'],
 ];
 const TONES: [string, string][] = [
   ['1k', '1 kHz'],
@@ -70,7 +72,7 @@ const TONES: [string, string][] = [
   ['pink', 'Pink noise'],
   ['silence', 'Silence'],
 ];
-const FORMATS = ['1080i50', '1080p25', '1080p50', '720p50', '1080i59.94', '1080p29.97', '1080p59.94', '720p59.94', '2160p25', '2160p50', '576i50'];
+const FORMATS = ['1080i50', '1080p25', '1080p50', '720p50', '1080i59.94', '1080p29.97', '1080p59.94', '720p59.94', '1080p23.98', '1080p24', '2160p23.98', '2160p24', '2160p25', '2160p29.97', '2160p50', '2160p59.94', '576i50'];
 const KIND_LABEL: Record<Target['kind'], string> = { sdi: 'SDI output', '2110': 'ST 2110 flow', ndi: 'NDI destination', stream: 'Network stream', mxl: 'MXL flow' };
 
 const patternName = (p: string) => t(PATTERNS.find(([k]) => k === p)?.[1] ?? p);
@@ -112,7 +114,7 @@ export function TestPatternsPage() {
   };
   const gens = data?.generators ?? [];
   const targetOf = (g: Generator) => (g.target === 'mxl' ? { label: `testgen/${g.id}`, kind: 'mxl' as const } : data?.targets.find((x) => x.target === g.target));
-  const fresh: Generator = { id: '', name: '', enabled: true, target: 'mxl', format: '', pattern: 'bars75', color: '#336699', ident: '', burnTc: true, clock: false, marker: true, tone: '1k', level: -18, channels: 8, channelIdent: false, atc: true };
+  const fresh: Generator = { id: '', name: '', enabled: true, target: 'mxl', format: '', pattern: 'bars75', color: '#336699', ident: '', burnTc: true, clock: false, marker: true, tone: '1k', level: -18, channels: 8, channelIdent: false, tonePerChannel: false, atc: true };
 
   return (
     <>
@@ -264,8 +266,8 @@ function Editor({ value, view, busy, onClose, onSave }: { value: Generator; view
             <Dropdown value={v.format} options={[{ value: '', label: t('House rate ({format})', { format: view.house }) }, ...FORMATS.map((f) => ({ value: f, label: f }))]} onChange={(x) => set('format', x)} />
           )}
         </Field>
-        <Field label={t('Identification')} hint={t('Shown in the middle of the picture. Empty: none.')}>
-          <input value={v.ident} maxLength={48} placeholder="REGIE 1 · SDI 3" onChange={(e) => set('ident', e.target.value)} />
+        <Field label={t('Identification')} hint={t('Shown on the picture. {name} and {format} are replaced. Empty: none.')}>
+          <input value={v.ident} maxLength={48} placeholder="{name} · {format}" onChange={(e) => set('ident', e.target.value)} />
         </Field>
       </FieldGrid>
       <Field label={t('Picture')} group>
@@ -283,6 +285,7 @@ function Editor({ value, view, busy, onClose, onSave }: { value: Generator; view
         </Field>
       )}
       {v.pattern === 'lipsync' && <p className="st-muted core-note">{t('A white flash and a cut in the tone once a second, at the same instant: the analyzer measures the lip sync with it.')}</p>}
+      {v.pattern === 'avsync' && <p className="st-muted core-note">{t('A cursor sweeps a ±500 ms scale and reaches 0 at the white flash, with a short beep on every channel at the same instant: by eye, the cursor shows where the beep is heard; the analyzer measures each channel.')}</p>}
       <div className="core-switches">
         <Switch checked={v.burnTc} onChange={(x) => set('burnTc', x)} label={t('House timecode burnt in')} />
         <Switch checked={v.clock} onChange={(x) => set('clock', x)} label={t('Server time')} />
@@ -314,6 +317,7 @@ function Editor({ value, view, busy, onClose, onSave }: { value: Generator; view
       </FieldGrid>
       <div className="core-switches">
         <Switch checked={v.channelIdent} onChange={(x) => set('channelIdent', x)} label={t('Channel identification (channel n cut n times every 4 s)')} />
+        <Switch checked={v.tonePerChannel} onChange={(x) => set('tonePerChannel', x)} label={t('One frequency per channel (channel n at n times the tone)')} />
         {target?.kind === '2110' && <Switch checked={v.atc} onChange={(x) => set('atc', x)} label={t('House timecode in the data flow (ATC)')} />}
       </div>
     </Modal>

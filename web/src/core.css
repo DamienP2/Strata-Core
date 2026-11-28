@@ -366,3 +366,10 @@ button.core-hw-role.on { border-style: solid; background: color-mix(in srgb, var
 .core-an-table th { color: var(--text-3); font-weight: 600; text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 .core-an-table td { text-align: right; padding: 7px 8px; border-bottom: 1px solid var(--panel-3); }
 .core-an-table th:first-child, .core-an-table td:first-child { text-align: left; }
+
+.core-an-lipch { display: grid; grid-template-columns: repeat(auto-fill, minmax(56px, 1fr)); gap: 6px; margin-top: 12px; }
+.core-an-lipc { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 4px; border-radius: 6px; background: var(--panel-3); font-size: 11px; color: var(--text-3); }
+.core-an-lipc b { font-size: 13px; color: var(--text); font-variant-numeric: tabular-nums; }
+.core-an-lipc.ok { background: color-mix(in srgb, var(--pvw) 14%, transparent); }
+.core-an-lipc.warn { background: color-mix(in srgb, var(--warn) 18%, transparent); }
+.core-an-lipc.bad { background: color-mix(in srgb, var(--live) 18%, transparent); }

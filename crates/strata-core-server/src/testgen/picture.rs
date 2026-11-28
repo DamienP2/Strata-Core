@@ -60,7 +60,7 @@ impl Frame {
 }
 
 /// Les mires.
-pub const PATTERNS: &[&str] = &["bars75", "bars100", "smpte", "ramp", "checker", "zoneplate", "solid", "black", "lipsync"];
+pub const PATTERNS: &[&str] = &["bars75", "bars100", "smpte", "ramp", "checker", "zoneplate", "solid", "black", "lipsync", "avsync"];
 
 /// La mire de base (sans ce qui change d'une image à l'autre). `color` : la couleur unie (#RRGGBB).
 pub fn pattern(name: &str, w: usize, h: usize, color: &str) -> Frame {
@@ -77,6 +77,7 @@ pub fn pattern(name: &str, w: usize, h: usize, color: &str) -> Frame {
         "black" => Frame::new(w, h, grey(0.0)),
         // La mire de calage : un fond gris sombre, l'éclair blanc vient image par image.
         "lipsync" => Frame::new(w, h, grey(0.2)),
+        "avsync" => avsync(w, h),
         _ => bars(w, h, 0.75),
     }
 }
@@ -138,6 +139,43 @@ fn smpte(w: usize, h: usize) -> Frame {
         let y = (16.0 + 219.0 * pct / 100.0).round() as u8;
         f.fill(side + k * u, h3, side + (k + 1) * u, h, [y, 128, 128]);
     }
+    f
+}
+
+/// La géométrie de la mire Synchro AV : l'échelle de −500 à +500 ms au milieu de l'image.
+pub struct AvScale {
+    pub x0: usize,
+    pub x1: usize,
+    pub y: usize,
+    pub tick: usize,
+}
+
+pub fn av_scale(w: usize, h: usize) -> AvScale {
+    AvScale { x0: w / 10, x1: w - w / 10, y: h * 2 / 3, tick: (h / 40).max(4) }
+}
+
+/// La mire Synchro AV (sans le curseur ni l'éclair) : fond sombre, l'échelle graduée tous les
+/// 20 ms (plus longue tous les 100 ms), « EN AVANCE » à gauche, « EN RETARD » à droite.
+fn avsync(w: usize, h: usize) -> Frame {
+    let mut f = Frame::new(w, h, grey(0.12));
+    let sc = av_scale(w, h);
+    let s = scale(h);
+    f.fill(sc.x0, sc.y, sc.x1, sc.y + s.max(2), grey(0.6));
+    for k in -25i32..=25 {
+        let x = (sc.x0 as i64 + (sc.x1 - sc.x0) as i64 * (k + 25) as i64 / 50) as usize;
+        let len = if k % 5 == 0 { sc.tick * 2 } else { sc.tick };
+        let c = if k == 0 { grey(1.0) } else { grey(0.6) };
+        f.fill(x.saturating_sub(s / 2), sc.y.saturating_sub(len), x + s.max(2) / 2 + 1, sc.y, c);
+    }
+    let ty = sc.y + 3 * s;
+    label(&mut f, sc.x0, ty, "-500 MS", s);
+    label(&mut f, sc.x1.saturating_sub(text_width("+500 MS", s)), ty, "+500 MS", s);
+    label_centred(&mut f, ty, "0", s);
+    // Les deux sens, en entier s'ils tiennent côte à côte (sinon en court : en SD).
+    let (early, late) = if 2 * text_width("SON EN AVANCE", s) + 8 * s <= sc.x1 - sc.x0 { ("SON EN AVANCE", "SON EN RETARD") } else { ("< AVANCE", "RETARD >") };
+    let ly = sc.y.saturating_sub(sc.tick * 2 + 12 * s);
+    label(&mut f, sc.x0, ly, early, s);
+    label(&mut f, sc.x1.saturating_sub(text_width(late, s)), ly, late, s);
     f
 }
 
@@ -241,6 +279,8 @@ fn glyph(c: char) -> [u8; 7] {
         '_' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F],
         '!' => [0x04, 0x04, 0x04, 0x04, 0x04, 0x00, 0x04],
         '?' => [0x0E, 0x11, 0x01, 0x02, 0x04, 0x00, 0x04],
+        '<' => [0x02, 0x04, 0x08, 0x10, 0x08, 0x04, 0x02],
+        '>' => [0x08, 0x04, 0x02, 0x01, 0x02, 0x04, 0x08],
         _ => [0; 7],
     }
 }

@@ -1295,4 +1295,10 @@ export const fr: Record<string, string> = {
   'Spectrum from 20 Hz to 20 kHz': 'Spectre de 20 Hz à 20 kHz',
   'Spectrum · channels {list}': 'Spectre · canaux {list}',
   'The RTP timestamp ahead of the arrival: the latency of the sender. —: not on the same clock (placed at arrival).': 'L’avance de l’horodatage RTP sur l’arrivée : la latence de l’émetteur. — : pas sur la même horloge (posé à l’arrivée).',
+  'AV sync (per channel)': 'Synchro AV (par canal)',
+  'Shown on the picture. {name} and {format} are replaced. Empty: none.': 'Incrustée sur l’image. {name} et {format} y sont remplacés. Vide : aucune.',
+  'A cursor sweeps a ±500 ms scale and reaches 0 at the white flash, with a short beep on every channel at the same instant: by eye, the cursor shows where the beep is heard; the analyzer measures each channel.': 'Un curseur balaie une échelle de ±500 ms et arrive au 0 à l’éclair blanc, avec un bip court sur chaque canal au même instant : à l’œil, le curseur montre où l’on entend le bip ; l’analyseur mesure chaque canal.',
+  'One frequency per channel (channel n at n times the tone)': 'Une fréquence par canal (le canal n à n fois la fréquence)',
+  'Measured on the Lip sync or AV sync test pattern of the generator, channel by channel, read like an app reads it (ms, positive: sound late).': 'Mesuré sur la mire Calage image/son ou Synchro AV du générateur, canal par canal, lue comme une appli la lit (ms, positif : son en retard).',
+  'Channel {n}': 'Canal {n}',
 };

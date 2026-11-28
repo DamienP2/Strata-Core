@@ -39,7 +39,7 @@ interface State {
     silent: boolean[];
     clipping: boolean[];
   } | null;
-  lipsync?: { offset?: number | null; history: number[]; detected: boolean };
+  lipsync?: { offset?: number | null; history: number[]; detected: boolean; channels?: (number | null)[] };
   data?: { timecode?: string | null; captions: boolean; afd?: number | null; scte104?: string | null };
   ip?: {
     redundant: boolean;
@@ -177,7 +177,17 @@ export function Analyzer() {
                 </div>
                 <Spark values={st?.lipsync?.history ?? []} />
               </div>
-              <p className="st-muted core-an-note">{t('Measured on the Lip sync test pattern of the generator (white flash and cut tone), read like an app reads it.')}</p>
+              {(st?.lipsync?.channels ?? []).some((x) => x != null) && (
+                <div className="core-an-lipch">
+                  {(st?.lipsync?.channels ?? []).map((x, i) => (
+                    <div key={i} className={`core-an-lipc ${x == null ? '' : Math.abs(x) <= 1 ? 'ok' : Math.abs(x) <= 20 ? 'warn' : 'bad'}`} title={t('Channel {n}', { n: i + 1 })}>
+                      <span>{i + 1}</span>
+                      <b>{x == null ? '—' : `${x >= 0 ? '+' : ''}${num(x, 1)}`}</b>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="st-muted core-an-note">{t('Measured on the Lip sync or AV sync test pattern of the generator, channel by channel, read like an app reads it (ms, positive: sound late).')}</p>
             </Card>
           )}
           <Card title={t('Data')}>

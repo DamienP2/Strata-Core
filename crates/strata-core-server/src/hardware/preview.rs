@@ -151,7 +151,7 @@ fn from_mxl(mxl: &strata_mxl::Mxl, id: strata_mxl::Uuid, reader: &mut Option<str
         return Err("nothing is published here".into());
     }
     // Recréé à un autre format : rouvert (l'ancien lecteur ne verrait plus rien).
-    if reader.as_ref().is_some_and(|r| mxl.video_of(id) != Some(r.video)) {
+    if reader.as_ref().is_some_and(|r| mxl.video_of(id) != Some(r.video) || mxl.stale(id, r.stamp)) {
         *reader = None;
     }
     if reader.is_none() {

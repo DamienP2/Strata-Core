@@ -688,7 +688,8 @@ fn send_audio(f: &FlowPlan, a: &strata_mtl::Audio, mtl: &Mtl, mxl: &Mxl, stop: &
         if checked.is_none_or(|t| t.elapsed() >= Duration::from_millis(500)) {
             checked = Some(Instant::now());
             if mxl.is_active(id) {
-                if reader.is_none() {
+                if reader.as_ref().is_none_or(|r| mxl.stale(id, r.stamp)) {
+                    drop(reader.take());
                     reader = mxl.audio_reader(id).ok();
                 }
             } else {
@@ -806,7 +807,8 @@ fn send_data(f: &FlowPlan, v: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: &A
         if checked.is_none_or(|t| t.elapsed() >= Duration::from_millis(500)) {
             checked = Some(Instant::now());
             if mxl.is_active(id) {
-                if reader.is_none() {
+                if reader.as_ref().is_none_or(|r| mxl.stale(id, r.stamp)) {
+                    drop(reader.take());
                     reader = mxl.data_reader(id).ok();
                 }
             } else {

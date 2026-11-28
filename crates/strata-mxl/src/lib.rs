@@ -113,10 +113,11 @@ impl Mxl {
     pub fn video_reader(&self, id: Uuid) -> Result<VideoReader, String> {
         let def = self.inst.get_flow_def(&id.to_string()).map_err(|e| format!("no MXL flow {id}: {e}"))?;
         let video = Video::from_flow_def(&def).ok_or_else(|| format!("the MXL flow {id} is not v210 video"))?;
+        let stamp = self.flow_stamp(id);
         let r = self.inst.create_flow_reader(&id.to_string()).map_err(|e| format!("cannot read the MXL flow {id}: {e}"))?;
         let grains = r.to_grain_reader().map_err(|e| e.to_string())?;
         let rate = grains.get_config_info().map_err(|e| e.to_string())?.common().grain_rate().map_err(|e| e.to_string())?;
-        Ok(VideoReader { inst: self.inst.clone(), grains, rate, video, read_at: std::sync::atomic::AtomicU64::new(u64::MAX) })
+        Ok(VideoReader { inst: self.inst.clone(), grains, rate, video, read_at: std::sync::atomic::AtomicU64::new(u64::MAX), stamp })
     }
 
     /// Crée (ou reprend) le flux audio `id` (float32, 48 kHz, `channels` canaux).
@@ -136,9 +137,10 @@ impl Mxl {
             return Err(format!("the MXL flow {id} is not 48 kHz float32 audio"));
         }
         let channels = v["channel_count"].as_u64().unwrap_or(2) as usize;
+        let stamp = self.flow_stamp(id);
         let r = self.inst.create_flow_reader(&id.to_string()).map_err(|e| format!("cannot read the MXL flow {id}: {e}"))?;
         let samples = r.to_samples_reader().map_err(|e| e.to_string())?;
-        Ok(AudioReader { inst: self.inst.clone(), samples, channels, next: None })
+        Ok(AudioReader { inst: self.inst.clone(), samples, channels, next: None, stamp })
     }
 
     /// La vidéo d'un flux d'après sa description (elle change quand l'écrivain le recrée à un
@@ -161,6 +163,19 @@ impl Mxl {
 
     pub fn is_active(&self, id: Uuid) -> bool {
         self.inst.is_flow_active(&id.to_string()).unwrap_or(false)
+    }
+
+    /// L'empreinte du flux `id` sur le disque (l'inode de ses données) : un flux recréé par son
+    /// écrivain (une mire relancée, une appli redémarrée), même au même format, est un autre
+    /// fichier, que l'ancien lecteur ne voit pas.
+    pub fn flow_stamp(&self, id: Uuid) -> Option<u64> {
+        use std::os::unix::fs::MetadataExt as _;
+        std::fs::metadata(self.domain.join(format!("{id}.mxl-flow")).join("data")).ok().map(|m| m.ino())
+    }
+
+    /// Le lecteur ouvert à l'empreinte `stamp` lit-il un flux qui a été recréé depuis ?
+    pub fn stale(&self, id: Uuid, stamp: Option<u64>) -> bool {
+        stamp.is_some() && self.flow_stamp(id) != stamp
     }
 
     /// Efface les flux dont l'écrivain a disparu.
@@ -401,7 +416,7 @@ impl Follow {
             if !mxl.is_active(self.id) {
                 self.reader = None;
             } else {
-                if self.reader.as_ref().is_some_and(|r| mxl.video_of(self.id) != Some(r.video)) {
+                if self.reader.as_ref().is_some_and(|r| mxl.video_of(self.id) != Some(r.video) || mxl.stale(self.id, r.stamp)) {
                     self.reader = None;
                 }
                 if self.reader.is_none() {
@@ -427,6 +442,8 @@ pub struct VideoReader {
     pub video: Video,
     /// Le début de la dernière image lue, en échantillons à 48 kHz (`u64::MAX` : aucune).
     read_at: std::sync::atomic::AtomicU64,
+    /// L'empreinte du flux à l'ouverture (`Mxl::stale`).
+    pub stamp: Option<u64>,
 }
 
 impl VideoReader {
@@ -621,6 +638,8 @@ pub struct AudioReader {
     samples: mxl::SamplesReader,
     pub channels: usize,
     next: Option<u64>,
+    /// L'empreinte du flux à l'ouverture (`Mxl::stale`).
+    pub stamp: Option<u64>,
 }
 
 impl AudioReader {
@@ -844,10 +863,11 @@ impl Mxl {
         if v["media_type"] != "video/smpte291" {
             return Err(format!("the MXL flow {id} is not ancillary data (video/smpte291)"));
         }
+        let stamp = self.flow_stamp(id);
         let r = self.inst.create_flow_reader(&id.to_string()).map_err(|e| format!("cannot read the MXL flow {id}: {e}"))?;
         let grains = r.to_grain_reader().map_err(|e| e.to_string())?;
         let rate = grains.get_config_info().map_err(|e| e.to_string())?.common().grain_rate().map_err(|e| e.to_string())?;
-        Ok(DataReader { inst: self.inst.clone(), grains, rate, next: None })
+        Ok(DataReader { inst: self.inst.clone(), grains, rate, next: None, stamp })
     }
 }
 
@@ -900,6 +920,8 @@ pub struct DataReader {
     grains: mxl::GrainReader,
     rate: mxl::Rational,
     next: Option<u64>,
+    /// L'empreinte du flux à l'ouverture (`Mxl::stale`).
+    pub stamp: Option<u64>,
 }
 
 impl DataReader {
