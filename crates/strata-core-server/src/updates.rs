@@ -224,13 +224,19 @@ pub async fn tick(s: &Shared) {
 
 /// Le nom du programme et sa version, d'après `<programme> --version` (« strata-core 0.3.0 »).
 fn version_of(program: &Path) -> Result<Version, String> {
-    let mut child = Command::new(program)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("the new Core does not start: {e}"))?;
+    // Juste écrit : un processus lancé en même temps (un autre fil du Core) peut tenir encore une
+    // copie du descripteur d'écriture le temps de son exec (ETXTBSY) ; on réessaie un peu.
+    let mut tries = 0;
+    let mut child = loop {
+        match Command::new(program).arg("--version").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn() {
+            Ok(c) => break c,
+            Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) && tries < 40 => {
+                tries += 1;
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => return Err(format!("the new Core does not start: {e}")),
+        }
+    };
     let start = Instant::now();
     loop {
         match child.try_wait() {
