@@ -17,7 +17,7 @@ fn main() -> Result<(), String> {
     let v = Video { width: 1920, height: 1080, rate: (25, 1), interlaced: false };
     let leg = [Leg { port: 0, ip, udp: 20000, source: None }];
     let rx = mtl.rx("loop-rx", &leg, 96, &v)?;
-    let tx = mtl.tx("loop-tx", &leg, 96, &v, strata_mtl::Pacing::default())?;
+    let tx = mtl.tx("loop-tx", &leg, 96, &v, strata_mtl::Pacing::default(), None)?;
     let start = Instant::now();
     let (mut sent, mut got) = (0u32, 0u32);
     while start.elapsed() < Duration::from_secs(6) {

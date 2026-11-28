@@ -83,11 +83,13 @@ mod ffi {
             pt: u8,
             v: Video,
             pacing: c_int,
+            ssrc: u32,
+            user_time: c_int,
             err: *mut c_char,
             errlen: c_int,
         ) -> *mut c_void;
         pub fn smtl_tx_get(tx: *mut c_void, out: *mut Frame) -> c_int;
-        pub fn smtl_tx_put(tx: *mut c_void, frame: *mut c_void, second_field: c_int) -> c_int;
+        pub fn smtl_tx_put(tx: *mut c_void, frame: *mut c_void, second_field: c_int, tai_ns: u64) -> c_int;
         pub fn smtl_tx_close(tx: *mut c_void);
         pub fn smtl_has_st22p() -> c_int;
         pub fn smtl22_rx_open(
@@ -116,11 +118,13 @@ mod ffi {
             pt: u8,
             v: Video,
             codestream_size: u64,
+            ssrc: u32,
+            user_time: c_int,
             err: *mut c_char,
             errlen: c_int,
         ) -> *mut c_void;
         pub fn smtl22_tx_get(tx: *mut c_void, out: *mut Frame3) -> c_int;
-        pub fn smtl22_tx_put(tx: *mut c_void, frame: *mut c_void, second_field: c_int) -> c_int;
+        pub fn smtl22_tx_put(tx: *mut c_void, frame: *mut c_void, second_field: c_int, tai_ns: u64) -> c_int;
         pub fn smtl22_tx_close(tx: *mut c_void);
     }
 
@@ -396,8 +400,9 @@ impl Mtl {
         }
     }
 
-    /// Envoie un flux vidéo.
-    pub fn tx(&self, name: &str, legs: &[Leg], payload_type: u8, v: &Video, pacing: Pacing) -> Result<Tx, String> {
+    /// Envoie un flux vidéo. `timing` (IPMX) : son SSRC, et chaque image part à l'instant de
+    /// son `timestamp` (son horodatage RTP).
+    pub fn tx(&self, name: &str, legs: &[Leg], payload_type: u8, v: &Video, pacing: Pacing, timing: Option<u32>) -> Result<Tx, String> {
         let fps = st_fps(v).ok_or("MTL has no such frame rate")?;
         #[cfg(mtl_shim)]
         {
@@ -421,6 +426,8 @@ impl Mtl {
                         Pacing::Wide => 1,
                         Pacing::NarrowLinear => 2,
                     },
+                    timing.unwrap_or(0),
+                    timing.is_some() as c_int,
                     err.as_mut_ptr(),
                     err.len() as c_int,
                 )
@@ -433,7 +440,7 @@ impl Mtl {
         }
         #[cfg(not(mtl_shim))]
         {
-            let _ = (name, legs, payload_type, fps, pacing);
+            let _ = (name, legs, payload_type, fps, pacing, timing);
             Err(NOT_BUILT.into())
         }
     }
@@ -496,6 +503,9 @@ pub struct Frame<'a> {
     pub height: u32,
     pub second_field: bool,
     pub complete: bool,
+    /// Émetteur : l'instant TAI (ns) où l'envoyer, son horodatage RTP (IPMX) ; 0 : le rythme de
+    /// MTL.
+    pub timestamp: u64,
     #[cfg(mtl_shim)]
     raw: *mut c_void,
     #[cfg(mtl_shim)]
@@ -549,13 +559,13 @@ impl Frame<'_> {
             match &self.kind {
                 Kind::Rx => ffi::smtl_rx_put(self.owner, self.raw),
                 Kind::Tx => {
-                    ffi::smtl_tx_put(self.owner, self.raw, second as c_int);
+                    ffi::smtl_tx_put(self.owner, self.raw, second as c_int, self.timestamp);
                 }
                 Kind::Rx22 => ffi::smtl22_rx_put(self.owner, self.raw),
                 Kind::Tx22(p) => {
                     let [y, cb, cr] = p.slices();
                     v210_to_planar(self.data, self.linesize, p.width, p.lines, [y, cb, cr], p.linesize);
-                    ffi::smtl22_tx_put(self.owner, self.raw, second as c_int);
+                    ffi::smtl22_tx_put(self.owner, self.raw, second as c_int, self.timestamp);
                 }
             }
         }
@@ -585,6 +595,7 @@ fn frame_of<'a>(f: ffi::Frame, owner: *mut c_void, tx: bool) -> Frame<'a> {
         height: f.height,
         second_field: f.second_field != 0,
         complete: f.complete != 0,
+        timestamp: 0,
         raw: f.frame,
         owner,
         kind,
@@ -870,8 +881,9 @@ impl Mtl {
         }
     }
 
-    /// Envoie un flux JPEG XS à `bpp` bits par pixel (4:2:2 10 bits non compressé : 20).
-    pub fn tx22(&self, name: &str, legs: &[Leg], payload_type: u8, v: &Video, bpp: f32) -> Result<Tx22, String> {
+    /// Envoie un flux JPEG XS à `bpp` bits par pixel (4:2:2 10 bits non compressé : 20) ;
+    /// `timing` comme pour [`Mtl::tx`].
+    pub fn tx22(&self, name: &str, legs: &[Leg], payload_type: u8, v: &Video, bpp: f32, timing: Option<u32>) -> Result<Tx22, String> {
         let fps = st_fps(v).ok_or("MTL has no such frame rate")?;
         #[cfg(mtl_shim)]
         {
@@ -891,6 +903,8 @@ impl Mtl {
                     payload_type,
                     vv,
                     codestream_size(v, bpp),
+                    timing.unwrap_or(0),
+                    timing.is_some() as c_int,
                     err.as_mut_ptr(),
                     err.len() as c_int,
                 )
@@ -902,7 +916,7 @@ impl Mtl {
         }
         #[cfg(not(mtl_shim))]
         {
-            let _ = (name, legs, payload_type, fps, bpp);
+            let _ = (name, legs, payload_type, fps, bpp, timing);
             Err(NOT_BUILT.into())
         }
     }
@@ -950,6 +964,7 @@ impl Rx22 {
                 height: f.height,
                 second_field: f.second_field != 0,
                 complete: f.complete != 0,
+                timestamp: 0,
                 raw: f.frame,
                 owner: self.h,
                 kind: Kind::Rx22,
@@ -1010,6 +1025,7 @@ impl Tx22 {
                 height: f.height,
                 second_field: f.second_field != 0,
                 complete: true,
+                timestamp: 0,
                 raw: f.frame,
                 owner: self.h,
                 kind: Kind::Tx22(Planes { ptr: f.data, linesize: f.linesize.map(|x| x as usize), width: f.width as usize, lines }),
@@ -1161,11 +1177,13 @@ mod affi {
             sip: *const [u8; 4],
             pt: u8,
             a: Audio,
+            ssrc: u32,
+            user_time: c_int,
             err: *mut c_char,
             errlen: c_int,
         ) -> *mut c_void;
         pub fn smtl_atx_get(tx: *mut c_void, out: *mut AFrame) -> c_int;
-        pub fn smtl_atx_put(tx: *mut c_void, frame: *mut c_void) -> c_int;
+        pub fn smtl_atx_put(tx: *mut c_void, frame: *mut c_void, tai_ns: u64) -> c_int;
         pub fn smtl_atx_close(tx: *mut c_void);
     }
 
@@ -1176,29 +1194,46 @@ mod affi {
 
 impl Mtl {
     #[cfg(mtl_shim)]
-    fn audio_open(&self, tx: bool, name: &str, legs: &[Leg], payload_type: u8, a: &Audio) -> Result<(*mut c_void, CString), String> {
+    fn audio_open(&self, tx: Option<Option<u32>>, name: &str, legs: &[Leg], payload_type: u8, a: &Audio) -> Result<(*mut c_void, CString), String> {
         let fmt = a.fmt().ok_or("ST 2110-30: 16 or 24-bit samples")?;
         let ptime = a.ptime().ok_or("ST 2110-30: 1 ms or 125 µs packets")?;
         let (idx, ips, udps, sips) = legs_of(legs);
         let n = CString::new(name).unwrap_or_default();
         let mut err = [0 as c_char; 256];
         let aa = affi::Audio { channels: a.channels, fmt, ptime, frame_ms: a.frame_ms.max(1) };
-        let open = if tx { affi::smtl_atx_open } else { affi::smtl_arx_open };
         // SAFETY: arrays of `legs.len()` entries; `err` sized as passed.
         let h = unsafe {
-            open(
-                self.h,
-                n.as_ptr(),
-                legs.len() as c_int,
-                idx.as_ptr(),
-                ips.as_ptr(),
-                udps.as_ptr(),
-                sips.as_ptr(),
-                payload_type,
-                aa,
-                err.as_mut_ptr(),
-                err.len() as c_int,
-            )
+            match tx {
+                // Envoi : `timing` (IPMX) comme pour la vidéo.
+                Some(timing) => affi::smtl_atx_open(
+                    self.h,
+                    n.as_ptr(),
+                    legs.len() as c_int,
+                    idx.as_ptr(),
+                    ips.as_ptr(),
+                    udps.as_ptr(),
+                    sips.as_ptr(),
+                    payload_type,
+                    aa,
+                    timing.unwrap_or(0),
+                    timing.is_some() as c_int,
+                    err.as_mut_ptr(),
+                    err.len() as c_int,
+                ),
+                None => affi::smtl_arx_open(
+                    self.h,
+                    n.as_ptr(),
+                    legs.len() as c_int,
+                    idx.as_ptr(),
+                    ips.as_ptr(),
+                    udps.as_ptr(),
+                    sips.as_ptr(),
+                    payload_type,
+                    aa,
+                    err.as_mut_ptr(),
+                    err.len() as c_int,
+                ),
+            }
         };
         if h.is_null() {
             Err(ffi::text(&err))
@@ -1211,7 +1246,7 @@ impl Mtl {
     pub fn arx(&self, name: &str, legs: &[Leg], payload_type: u8, a: &Audio) -> Result<ARx, String> {
         #[cfg(mtl_shim)]
         {
-            self.audio_open(false, name, legs, payload_type, a).map(|(h, n)| ARx { h, _name: n, audio: *a })
+            self.audio_open(None, name, legs, payload_type, a).map(|(h, n)| ARx { h, _name: n, audio: *a })
         }
         #[cfg(not(mtl_shim))]
         {
@@ -1221,14 +1256,14 @@ impl Mtl {
     }
 
     /// Envoie un flux audio.
-    pub fn atx(&self, name: &str, legs: &[Leg], payload_type: u8, a: &Audio) -> Result<ATx, String> {
+    pub fn atx(&self, name: &str, legs: &[Leg], payload_type: u8, a: &Audio, timing: Option<u32>) -> Result<ATx, String> {
         #[cfg(mtl_shim)]
         {
-            self.audio_open(true, name, legs, payload_type, a).map(|(h, n)| ATx { h, _name: n, audio: *a })
+            self.audio_open(Some(timing), name, legs, payload_type, a).map(|(h, n)| ATx { h, _name: n, audio: *a })
         }
         #[cfg(not(mtl_shim))]
         {
-            let _ = (name, legs, payload_type, a);
+            let _ = (name, legs, payload_type, a, timing);
             Err(NOT_BUILT.into())
         }
     }
@@ -1311,6 +1346,12 @@ impl ATx {
     /// complété de silence) : vrai s'il est parti. MTL cadence l'envoi : appelé en boucle, il
     /// donne le rythme.
     pub fn send(&self, pcm: &[f32]) -> bool {
+        self.send_at(pcm, 0)
+    }
+
+    /// Comme [`ATx::send`], le bloc partant à l'instant TAI `tai_ns` (son horodatage RTP ;
+    /// 0 : le rythme de MTL).
+    pub fn send_at(&self, pcm: &[f32], tai_ns: u64) -> bool {
         #[cfg(mtl_shim)]
         {
             let mut f = affi::empty();
@@ -1322,11 +1363,11 @@ impl ATx {
             let data = unsafe { std::slice::from_raw_parts_mut(f.data, f.size as usize) };
             to_pcm(pcm, data, self.audio.bits);
             // SAFETY: a frame taken from this session, given back once.
-            unsafe { affi::smtl_atx_put(self.h, f.frame) == 0 }
+            unsafe { affi::smtl_atx_put(self.h, f.frame, tai_ns) == 0 }
         }
         #[cfg(not(mtl_shim))]
         {
-            let _ = pcm;
+            let _ = (pcm, tai_ns);
             false
         }
     }

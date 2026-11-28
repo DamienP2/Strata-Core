@@ -94,6 +94,23 @@ struct FlowPlan {
     pacing: strata_mtl::Pacing,
     /// Vidéo JPEG XS (ST 2110-22) : ses bits par pixel.
     jpegxs: Option<f32>,
+    /// Envoyé en IPMX : ses rapports RTCP.
+    ipmx: Option<IpmxPlan>,
+}
+
+/// Les rapports RTCP d'un flux envoyé en IPMX (VSF TR-10-1 § 8.7).
+#[derive(Debug, Clone, PartialEq)]
+struct IpmxPlan {
+    ssrc: u32,
+    /// Le bloc d'information IPMX (fixe tant que le flux ne change pas).
+    block: Vec<u8>,
+    /// Par patte : l'adresse de l'interface du port média, l'adresse et le port du flux.
+    legs: Vec<(Ipv4Addr, std::net::SocketAddrV4)>,
+    /// Le décalage TAI − UTC (s) : l'heure interne est TAI.
+    tai_offset: u32,
+    /// Octets et paquets RTP d'une image (ou d'un bloc de son), pour les compteurs du rapport.
+    packets: u32,
+    octets: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -159,7 +176,71 @@ fn port_of(io: MediaIo, iface: &str, address: &str) -> Result<(String, Pmd, Ipv4
 }
 
 /// Ce qu'il faut ouvrir d'après les réglages ; None : rien (mode « Off », aucun flux vidéo ou son).
-fn plan(cfg: &HardwareConfig) -> Result<Option<Plan>, String> {
+/// L'envoi IPMX d'un flux : l'instant TAI de chaque image (ou bloc de son), qui devient son
+/// horodatage RTP, et son rapport RTCP envoyé juste avant elle (pendant l'image précédente).
+struct IpmxSend {
+    rep: Option<super::ipmx::Reporter>,
+    /// Pourquoi les rapports ne partent pas (port média en DPDK : le noyau n'a pas son adresse).
+    error: Option<String>,
+    period_ns: u64,
+    next: u64,
+    tai_offset_ns: u64,
+    rate: u64,
+    packets: u32,
+    octets: u32,
+}
+
+impl IpmxSend {
+    fn open(p: &IpmxPlan, period_ns: u64, rate: u64) -> IpmxSend {
+        let (rep, error) = match super::ipmx::Reporter::open(&p.legs, p.ssrc, p.block.clone()) {
+            Ok(r) => (Some(r), None),
+            Err(e) => (None, Some(e)),
+        };
+        IpmxSend {
+            rep,
+            error,
+            period_ns: period_ns.max(1),
+            next: 0,
+            tai_offset_ns: p.tai_offset as u64 * 1_000_000_000,
+            rate,
+            packets: p.packets,
+            octets: p.octets,
+        }
+    }
+
+    fn now(&self) -> u64 {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64) + self.tai_offset_ns
+    }
+
+    /// L'instant de la prochaine image : son rapport part maintenant (pas plus d'une image avant
+    /// elle) ; en retard ou trop en avance, le compte repart de l'heure.
+    fn next(&mut self) -> u64 {
+        let p = self.period_ns;
+        let now = self.now();
+        if self.next == 0 || self.next < now || self.next > now + 2_000_000_000 {
+            self.next = (now / p + 1) * p;
+        }
+        // Le rapport de l'image k part pendant l'image k − 1 (TR-10-1 § 8.8.2).
+        if self.next > now + p {
+            std::thread::sleep(Duration::from_nanos(self.next - p - now));
+        }
+        let ts = self.next;
+        self.next += p;
+        if let Some(r) = self.rep.as_mut() {
+            r.report(ts, super::ipmx::rtp_of(ts, self.rate), self.packets, self.octets);
+        }
+        ts
+    }
+}
+
+/// Le SSRC d'un flux : stable (d'après son identifiant), jamais 0.
+fn ssrc_of(id: &str) -> u32 {
+    let d = ring::digest::digest(&ring::digest::SHA256, id.as_bytes());
+    u32::from_be_bytes(d.as_ref()[..4].try_into().unwrap()) | 1
+}
+
+/// `ipmx` : l'horloge de référence à annoncer (`ts-refclk`) quand IPMX est actif.
+fn plan(cfg: &HardwareConfig, ipmx: Option<&str>) -> Result<Option<Plan>, String> {
     let r = &cfg.network;
     if r.media_io == MediaIo::Off {
         return Ok(None);
@@ -202,6 +283,75 @@ fn plan(cfg: &HardwareConfig) -> Result<Option<Plan>, String> {
             (MediaMode::Separate, _) if f.port == 2 => vec![(1.min(ports.len() - 1), *f.red.ip(), f.red.port(), f.source)],
             _ => vec![(0, *f.red.ip(), f.red.port(), f.source)],
         };
+        // IPMX : les rapports RTCP des flux envoyés, vidéo et son (le JPEG XS sans bloc de média :
+        // TR-10-1/2/3 n'en définissent pas pour lui).
+        let ipmx_plan = match (ipmx, f.direction, &kind) {
+            (Some(refclk), Direction::Output, Kind::Video(_) | Kind::Audio(_)) => {
+                let media = match &kind {
+                    Kind::Video(v) if f.jpegxs().is_none() => {
+                        let (htotal, vtotal, pixel_clock) = super::ipmx::video_totals(v.width, v.height, v.rate, v.interlaced);
+                        super::ipmx::MediaInfo::Video(super::ipmx::VideoInfo {
+                            sampling: "YCbCr-4:2:2".into(),
+                            depth: 10,
+                            gpm: false,
+                            interlaced: v.interlaced,
+                            segmented: false,
+                            par: (1, 1),
+                            range: "NARROW".into(),
+                            colorimetry: "BT709".into(),
+                            tcs: "SDR".into(),
+                            width: v.width as u16,
+                            height: v.height as u16,
+                            rate: v.rate,
+                            pixel_clock,
+                            htotal,
+                            vtotal,
+                        })
+                    }
+                    Kind::Audio(a) => super::ipmx::MediaInfo::Audio(super::ipmx::AudioInfo {
+                        sample_rate: 48000,
+                        bits: a.bits,
+                        channels: a.channels.min(255) as u8,
+                        ptime_us: a.ptime_us.min(u16::MAX as u32) as u16,
+                        measured_rate: 48000,
+                        channel_order: match a.channels {
+                            1 => "SMPTE2110.(M)".into(),
+                            2 => "SMPTE2110.(ST)".into(),
+                            n => format!("SMPTE2110.(U{n:02})"),
+                        },
+                    }),
+                    _ => super::ipmx::MediaInfo::None,
+                };
+                let (packets, octets) = match &kind {
+                    Kind::Video(v) => {
+                        let lines = if v.interlaced { v.height / 2 } else { v.height } as f64;
+                        let bytes = match f.jpegxs() {
+                            Some(bpp) => v.width as f64 * lines * bpp as f64 / 8.0,
+                            None => v.width as f64 * lines * 2.5,
+                        };
+                        ((bytes / 1200.0).ceil() as u32, bytes as u32)
+                    }
+                    Kind::Audio(a) => {
+                        let per = 1000 * a.frame_ms / a.ptime_us.max(125);
+                        (per, 48 * a.frame_ms * a.channels as u32 * a.bits as u32 / 8)
+                    }
+                    Kind::Data(_) => (1, 0),
+                };
+                let ports_ip: Vec<Ipv4Addr> = ports.iter().map(|p| p.2).collect();
+                Some(IpmxPlan {
+                    ssrc: ssrc_of(&f.id),
+                    block: super::ipmx::info_block(refclk, "direct=0", 0, &media),
+                    legs: legs
+                        .iter()
+                        .map(|(port, ip, udp, _)| (ports_ip.get(*port).copied().unwrap_or(Ipv4Addr::UNSPECIFIED), std::net::SocketAddrV4::new(*ip, *udp)))
+                        .collect(),
+                    tai_offset: cfg.ptp.tai_offset,
+                    packets,
+                    octets,
+                })
+            }
+            _ => None,
+        };
         flows.push(FlowPlan {
             id: f.id.clone(),
             name: f.name.clone(),
@@ -211,6 +361,7 @@ fn plan(cfg: &HardwareConfig) -> Result<Option<Plan>, String> {
             kind,
             pacing: f.mtl_pacing(),
             jpegxs: f.jpegxs(),
+            ipmx: ipmx_plan,
         });
     }
     Ok(Some(Plan { ports, flows, tai_offset: cfg.ptp.tai_offset, bad }))
@@ -218,8 +369,9 @@ fn plan(cfg: &HardwareConfig) -> Result<Option<Plan>, String> {
 
 impl Engine {
     /// Tient MTL en accord avec les réglages (bloquant ; rouvre tout quand ils changent).
-    pub fn apply(&self, cfg: &HardwareConfig, mtl_loaded: Result<(), String>, mxl: Option<Arc<Mxl>>) {
-        let planned = plan(cfg);
+    /// `ipmx` : l'horloge de référence (`ts-refclk`) quand IPMX est actif.
+    pub fn apply(&self, cfg: &HardwareConfig, mtl_loaded: Result<(), String>, mxl: Option<Arc<Mxl>>, ipmx: Option<String>) {
+        let planned = plan(cfg, ipmx.as_deref());
         let running_ports = self.running.lock().unwrap().as_ref().map(|r| r.ports.clone());
         // MTL ouvert reste ouvert tant que ST 2110 est en marche (même sans flux : DPDK ne se
         // rouvre pas dans le même processus). Ses ports changés, ou ST 2110 coupé : il est fermé,
@@ -414,7 +566,9 @@ fn receive_audio(f: &FlowPlan, a: &strata_mtl::Audio, mtl: &Mtl, mxl: &Mxl, stop
 /// Son envoyé : flux audio MXL `2110/<flux>` (écrit par l'appli) → MTL ; du silence sans lui.
 /// MTL cadence l'envoi (un bloc de 10 ms libre à la fois).
 fn send_audio(f: &FlowPlan, a: &strata_mtl::Audio, mtl: &Mtl, mxl: &Mxl, stop: &AtomicBool, set: Setter) -> Result<(), String> {
-    let tx = mtl.atx(&f.name, &legs(f), f.payload_type, a)?;
+    let tx = mtl.atx(&f.name, &legs(f), f.payload_type, a, f.ipmx.as_ref().map(|p| p.ssrc))?;
+    // IPMX : un rapport RTCP par bloc de 10 ms (TR-10-1 § 8.10.1).
+    let mut clock = f.ipmx.as_ref().map(|p| IpmxSend::open(p, a.frame_ms as u64 * 1_000_000, 48_000));
     let id = strata_mxl::flow_id(&format!("2110/{}", f.id));
     set(&|s| s.format = Some(audio_name(a)));
     let n = tx.frame_samples();
@@ -445,7 +599,8 @@ fn send_audio(f: &FlowPlan, a: &strata_mtl::Audio, mtl: &Mtl, mxl: &Mxl, stop: &
             heard += 1;
         }
         let pcm = pcm.unwrap_or_else(|| vec![0.0; n * ch]);
-        if tx.send(&pcm) {
+        let at = clock.as_mut().map_or(0, IpmxSend::next);
+        if tx.send_at(&pcm, at) {
             blocks += 1;
         }
         if tick.elapsed() >= Duration::from_secs(1) {
@@ -454,7 +609,7 @@ fn send_audio(f: &FlowPlan, a: &strata_mtl::Audio, mtl: &Mtl, mxl: &Mxl, stop: &
             set(&|s| {
                 s.state = if on { IoState::Running } else { IoState::Idle };
                 s.frames = blocks;
-                s.error = None;
+                s.error = clock.as_ref().and_then(|c| c.error.clone());
             });
             heard = 0;
         }
@@ -653,9 +808,12 @@ fn receive(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: 
 fn send(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: &AtomicBool, set: Setter) -> Result<(), String> {
     // JPEG XS : l'image v210 est convertie et codée par le greffon en l'envoyant.
     let mut tx: Box<dyn strata_mtl::VideoTx> = match f.jpegxs {
-        Some(bpp) => Box::new(mtl.tx22(&f.name, &legs(f), f.payload_type, video, bpp)?),
-        None => Box::new(mtl.tx(&f.name, &legs(f), f.payload_type, video, f.pacing)?),
+        Some(bpp) => Box::new(mtl.tx22(&f.name, &legs(f), f.payload_type, video, bpp, f.ipmx.as_ref().map(|p| p.ssrc))?),
+        None => Box::new(mtl.tx(&f.name, &legs(f), f.payload_type, video, f.pacing, f.ipmx.as_ref().map(|p| p.ssrc))?),
     };
+    // IPMX : un rapport RTCP par image, par trame en entrelacé (TR-10-1 § 8.8.2).
+    let field_ns = 1_000_000_000u64 * video.rate.1 as u64 / (video.rate.0 as u64 * if video.interlaced { 2 } else { 1 }).max(1);
+    let mut clock = f.ipmx.as_ref().map(|p| IpmxSend::open(p, field_ns, 90_000));
     let id = strata_mxl::flow_id(&format!("2110/{}", f.id));
     let v = *video;
     set(&|s| s.format = Some(format_name(&v)));
@@ -751,6 +909,9 @@ fn send(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: &At
             }
         }
         out.second_field = second;
+        if let Some(c) = clock.as_mut() {
+            out.timestamp = c.next();
+        }
         out.send_field(second);
         frames += 1;
         if v.interlaced {
@@ -762,7 +923,7 @@ fn send(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: &At
             set(&|s| {
                 s.state = if on { IoState::Running } else { IoState::Idle };
                 s.frames = frames;
-                s.error = mismatch.clone();
+                s.error = mismatch.clone().or_else(|| clock.as_ref().and_then(|c| c.error.clone()));
             });
         }
     }

@@ -809,7 +809,8 @@ pub fn reconcile_inputs(s: &crate::state::AppState) {
         }
         std::borrow::Cow::Owned(c)
     };
-    s.st2110.apply(&st2110_cfg, mtl, mxl_of(s));
+    let refclk = ipmx.then(|| crate::nmos::refclk(s, &cfg, &cfg.network.media1));
+    s.st2110.apply(&st2110_cfg, mtl, mxl_of(s), refclk);
     crate::streams::reconcile(s);
 }
 

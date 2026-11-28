@@ -214,6 +214,10 @@ Linux Foundation) : des flux en mémoire partagée, sur le serveur, sans passer 
 - **JPEG XS (ST 2110-22)** : un flux vidéo peut être compressé (`codec: "jpegxs"`, `bpp` : bits par
   pixel, 4 par défaut, soit 5:1 environ). Rien ne change pour l'appli : le flux MXL reste en v210,
   le Core code et décode (greffon SVT-JPEG-XS de MTL). Proposé si la fonction est active.
+- **IPMX** (fonction à activer) : les flux envoyés portent la signalisation IPMX (SDP « IPMX »,
+  horloge de référence PTP ou `localmac` sans PTP) et leurs rapports RTCP (TR-10-1 : un par
+  image, ou toutes les 10 ms pour le son, avec le bloc d'information IPMX) ; leurs images partent
+  à l'instant de leur horodatage RTP. Rien ne change pour l'appli.
 - **Fonctions du Core** : `features` de `/api/hardware/shared` dit lesquelles sont actives
   (`st2110`, `jpegxs`, `ipmx`, `ipmx-privacy`, `hdcp`, `dante`, `ndi`, `streams`) ; une appli
   n'offre que celles-là (réglées dans *Réglages › Fonctions*).

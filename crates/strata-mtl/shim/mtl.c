@@ -358,8 +358,11 @@ void smtl_rx_close(void *rx) {
 
 // Envoie un flux vidéo : `n` pattes, vers `ip` / `udp`.
 // `pacing` : 0 N (étroit, par défaut), 1 W (large), 2 NL (étroit linéaire) — ST 2110-21.
+// `ssrc` (0 : au hasard) ; `user_time` : l'appelant donne l'instant TAI de chaque image (IPMX :
+// ses rapports RTCP partent avant elle, avec le même horodatage).
 void *smtl_tx_open(void *h, const char *name, int n, const int *port_index, const uint8_t (*ip)[4],
-                   const uint16_t *udp, uint8_t pt, smtl_video v, int pacing, char *err, int errlen) {
+                   const uint16_t *udp, uint8_t pt, smtl_video v, int pacing, uint32_t ssrc, int user_time, char *err,
+                   int errlen) {
     smtl *s = (smtl *)h;
     struct st20p_tx_ops ops;
     memset(&ops, 0, sizeof(ops));
@@ -371,6 +374,7 @@ void *smtl_tx_open(void *h, const char *name, int n, const int *port_index, cons
         ops.port.udp_port[i] = udp[i];
     }
     ops.port.payload_type = pt;
+    ops.port.ssrc = ssrc;
     ops.width = v.width;
     ops.height = v.height;
     ops.fps = (enum st_fps)v.fps;
@@ -382,6 +386,9 @@ void *smtl_tx_open(void *h, const char *name, int n, const int *port_index, cons
     ops.device = ST_PLUGIN_DEVICE_AUTO;
     ops.framebuff_cnt = 3;
     ops.flags = ST20P_TX_FLAG_BLOCK_GET;
+    if (user_time) {
+        ops.flags |= ST20P_TX_FLAG_USER_TIMESTAMP | ST20P_TX_FLAG_USER_PACING;
+    }
     st20p_tx_handle tx = p_st20p_tx_create(s->mt, &ops);
     if (!tx) {
         set_err(err, errlen, "cannot send this ST 2110 flow (address, format?)");
@@ -410,9 +417,14 @@ int smtl_tx_get(void *tx, smtl_frame *out) {
 }
 
 // Envoie l'image remplie ; en entrelacé, `second_field` dit quelle trame.
-int smtl_tx_put(void *tx, void *frame, int second_field) {
+// `tai_ns` : l'instant d'envoi (TAI), ou 0 (le rythme de MTL).
+int smtl_tx_put(void *tx, void *frame, int second_field, uint64_t tai_ns) {
     struct st_frame *f = (struct st_frame *)frame;
     f->second_field = second_field != 0;
+    if (tai_ns) {
+        f->tfmt = ST10_TIMESTAMP_FMT_TAI;
+        f->timestamp = tai_ns;
+    }
     return p_st20p_tx_put_frame((st20p_tx_handle)tx, f);
 }
 
@@ -525,7 +537,8 @@ void smtl_arx_close(void *rx) {
 
 // Envoie un flux audio : `n` pattes, vers `ip` / `udp`.
 void *smtl_atx_open(void *h, const char *name, int n, const int *port_index, const uint8_t (*ip)[4],
-                    const uint16_t *udp, const uint8_t (*sip)[4], uint8_t pt, smtl_audio a, char *err, int errlen) {
+                    const uint16_t *udp, const uint8_t (*sip)[4], uint8_t pt, smtl_audio a, uint32_t ssrc, int user_time,
+                    char *err, int errlen) {
     (void)sip;
     smtl *s = (smtl *)h;
     int size = audio_frame_size(a);
@@ -549,7 +562,11 @@ void *smtl_atx_open(void *h, const char *name, int n, const int *port_index, con
     ops.ptime = (enum st30_ptime)a.ptime;
     ops.framebuff_cnt = 4;
     ops.framebuff_size = (uint32_t)size;
+    ops.port.ssrc = ssrc;
     ops.flags = ST30P_TX_FLAG_BLOCK_GET;
+    if (user_time) {
+        ops.flags |= ST30P_TX_FLAG_USER_PACING;
+    }
     st30p_tx_handle tx = p_st30p_tx_create(s->mt, &ops);
     if (!tx) {
         set_err(err, errlen, "cannot send this ST 2110-30 flow (address, format?)");
@@ -573,8 +590,13 @@ int smtl_atx_get(void *tx, smtl_aframe *out) {
     return 1;
 }
 
-int smtl_atx_put(void *tx, void *frame) {
-    return p_st30p_tx_put_frame((st30p_tx_handle)tx, (struct st30_frame *)frame);
+int smtl_atx_put(void *tx, void *frame, uint64_t tai_ns) {
+    struct st30_frame *f = (struct st30_frame *)frame;
+    if (tai_ns) {
+        f->tfmt = ST10_TIMESTAMP_FMT_TAI;
+        f->timestamp = tai_ns;
+    }
+    return p_st30p_tx_put_frame((st30p_tx_handle)tx, f);
 }
 
 void smtl_atx_close(void *tx) {
@@ -842,7 +864,8 @@ void smtl22_rx_close(void *rx) {
 // Envoie un flux JPEG XS : `codestream_size` octets par image (par trame en entrelacé), le
 // débit voulu.
 void *smtl22_tx_open(void *h, const char *name, int n, const int *port_index, const uint8_t (*ip)[4],
-                     const uint16_t *udp, uint8_t pt, smtl_video v, uint64_t codestream_size, char *err, int errlen) {
+                     const uint16_t *udp, uint8_t pt, smtl_video v, uint64_t codestream_size, uint32_t ssrc, int user_time,
+                     char *err, int errlen) {
     if (!has_st22p) {
         set_err(err, errlen, "this MTL has no ST 2110-22");
         return NULL;
@@ -868,8 +891,12 @@ void *smtl22_tx_open(void *h, const char *name, int n, const int *port_index, co
     ops.device = ST_PLUGIN_DEVICE_AUTO;
     ops.quality = ST22_QUALITY_MODE_QUALITY;
     ops.codestream_size = (size_t)codestream_size;
+    ops.port.ssrc = ssrc;
     ops.framebuff_cnt = 3;
     ops.flags = ST22P_TX_FLAG_BLOCK_GET;
+    if (user_time) {
+        ops.flags |= ST22P_TX_FLAG_USER_TIMESTAMP | ST22P_TX_FLAG_USER_PACING;
+    }
     st22p_tx_handle tx = p_st22p_tx_create(s->mt, &ops);
     if (!tx) {
         set_err(err, errlen, "cannot send this JPEG XS flow (plugin, address, format?)");
@@ -889,9 +916,13 @@ int smtl22_tx_get(void *tx, smtl_frame3 *out) {
     return 1;
 }
 
-int smtl22_tx_put(void *tx, void *frame, int second_field) {
+int smtl22_tx_put(void *tx, void *frame, int second_field, uint64_t tai_ns) {
     struct st_frame *f = (struct st_frame *)frame;
     f->second_field = second_field != 0;
+    if (tai_ns) {
+        f->tfmt = ST10_TIMESTAMP_FMT_TAI;
+        f->timestamp = tai_ns;
+    }
     return p_st22p_tx_put_frame((st22p_tx_handle)tx, f);
 }
 

@@ -21,7 +21,7 @@ fn main() -> Result<(), String> {
     let v = Video { width: 1920, height: 1080, rate: (25, 1), interlaced: false };
     let leg = [Leg { port: 0, ip, udp: 20020, source: None }];
     let mut rx = mtl.rx22("jxs-rx", &leg, 112, &v)?;
-    let mut tx = mtl.tx22("jxs-tx", &leg, 112, &v, bpp)?;
+    let mut tx = mtl.tx22("jxs-tx", &leg, 112, &v, bpp, None)?;
     // La mire : Y en dégradé horizontal, chroma neutre.
     let stride = (1920usize).div_ceil(48) * 128;
     let mut pattern = vec![0u8; stride * 1080];
