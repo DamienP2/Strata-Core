@@ -2,7 +2,7 @@
 // (vue d'ensemble, nom et adresses, HTTPS), Applis (la Bibliothèque, puis une page par appli installée)
 // et Personnes (Utilisateurs, Groupes, Annuaire). Les autres sections viendront avec leurs briques
 // Matériel (Cartes SDI, NDI, ST 2110, Réseau, GPU, Horloge) ; Santé (Ressources, Journal, Alertes, SNMP).
-import { Activity, Archive, BellRing, Cast, Clock, Gpu as GpuIcon, Server as ServersIcon, Network as SnmpIcon, CloudDownload, ScrollText, EthernetPort as Ethernet, Globe, HardDrive, KeyRound, LayoutDashboard, LayoutGrid, Lock, MonitorPlay, Radio, Users as UsersIcon, UsersRound, Waves } from 'lucide-react';
+import { Activity, Archive, AudioLines, BellRing, Cast, Clock, Gpu as GpuIcon, Server as ServersIcon, Network as SnmpIcon, CloudDownload, ScrollText, EthernetPort as Ethernet, Globe, HardDrive, KeyRound, LayoutDashboard, LayoutGrid, Lock, MonitorPlay, Radio, Users as UsersIcon, UsersRound, Waves } from 'lucide-react';
 import { Suspense, lazy, useEffect, useState } from 'react';
 import { NavItem, NavSection, SidePage, t } from '@strata/ui';
 import { appIcon } from '../icons';
@@ -20,7 +20,10 @@ import { Servers } from './Servers';
 const hw = () => import('./hardware/Hardware');
 const SdiPage = lazy(() => hw().then((m) => ({ default: m.SdiPage })));
 const NdiPage = lazy(() => hw().then((m) => ({ default: m.NdiPage })));
-const St2110Page = lazy(() => hw().then((m) => ({ default: m.St2110Page })));
+// La page ST 2110 et celle de Dante (AES67) : à part.
+const st2110 = () => import('./hardware/St2110');
+const St2110Page = lazy(() => st2110().then((m) => ({ default: m.St2110Page })));
+const DantePage = lazy(() => st2110().then((m) => ({ default: m.DantePage })));
 const NetworkPage = lazy(() => hw().then((m) => ({ default: m.NetworkPage })));
 const ClockPage = lazy(() => hw().then((m) => ({ default: m.ClockPage })));
 const StreamsPage = lazy(() => import('./Streams').then((m) => ({ default: m.StreamsPage })));
@@ -51,7 +54,7 @@ export function Settings({ path }: { path: string }) {
   const app = appId ? apps?.find((a) => a.id === appId) : undefined;
 
   let page: React.ReactNode = null;
-  const hardware = ['sdi', 'ndi', 'st2110', 'flux', 'reseau', 'gpu', 'horloge'];
+  const hardware = ['sdi', 'ndi', 'dante', 'st2110', 'flux', 'reseau', 'gpu', 'horloge'];
   const health = ['ressources', 'journal', 'alertes', 'snmp'];
   const fixed = [...hardware, ...health, 'serveurs', 'serveur', 'adresses', 'https', 'mises-a-jour', 'sauvegardes', 'stockage', 'utilisateurs', 'groupes', 'annuaire'].includes(path);
   if (path === 'serveur') page = <Overview apps={apps} />;
@@ -61,6 +64,7 @@ export function Settings({ path }: { path: string }) {
   else if (path === 'sdi') page = <SdiPage />;
   else if (path === 'ndi') page = <NdiPage />;
   else if (path === 'st2110') page = <St2110Page />;
+  else if (path === 'dante') page = <DantePage />;
   else if (path === 'flux') page = <StreamsPage />;
   else if (path === 'reseau') page = <NetworkPage />;
   else if (path === 'horloge') page = <ClockPage />;
@@ -101,6 +105,7 @@ export function Settings({ path }: { path: string }) {
         <NavSection title={t('Hardware')} />
         <NavItem icon={MonitorPlay} label={t('SDI cards')} on={path === 'sdi'} onClick={() => navigate('/reglages/sdi')} />
         <NavItem icon={Radio} label="NDI" on={path === 'ndi'} onClick={() => navigate('/reglages/ndi')} />
+        <NavItem icon={AudioLines} label="Dante" on={path === 'dante'} onClick={() => navigate('/reglages/dante')} />
         <NavItem icon={Waves} label="ST 2110" on={path === 'st2110'} onClick={() => navigate('/reglages/st2110')} />
         <NavItem icon={Cast} label={t('Network streams')} on={path === 'flux'} onClick={() => navigate('/reglages/flux')} />
         <NavItem icon={Ethernet} label={t('Network')} on={path === 'reseau'} onClick={() => navigate('/reglages/reseau')} />

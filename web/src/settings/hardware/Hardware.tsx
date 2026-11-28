@@ -1,20 +1,20 @@
 // Réglages › Matériel : Cartes SDI, NDI, ST 2110, Réseau, Horloge. Les réglages sont partagés par
 // les cinq pages (store.ts) et enregistrés d'un coup.
 import { Suspense, lazy, useEffect, useState } from 'react';
-import { Cable, Gauge, MonitorPlay, Network as NetIcon, Pencil, Plus, Radio, RefreshCw, Search, Trash2, Waves } from 'lucide-react';
-import { Badge, Card, Dropdown, Empty, Field, FieldGrid, InfoTip, Modal, NumberField, PageHead, Segmented, SubTabs, Switch, confirmDialog, t, tn, toast, type DropOption } from '@strata/ui';
+import { Cable, Gauge, MonitorPlay, Network as NetIcon, Pencil, Radio, RefreshCw, Search, Trash2, Waves } from 'lucide-react';
+import { Badge, Card, Dropdown, Empty, Field, FieldGrid, InfoTip, Modal, NumberField, PageHead, Segmented, Switch, confirmDialog, t, tn, toast, type DropOption } from '@strata/ui';
 import { navigate } from '../../router';
 import { api, movedTo } from '../../api';
 import { friendly } from '../../errors';
 import { HwSaveBar, useHardware } from './common';
 import { Meter } from '../health/Resources';
 import { TagInput } from '../TagInput';
-import { FlowsCard, InputsCard, OutputsCard, Preview, Tile } from './Inputs';
+import { InputsCard, OutputsCard, Preview, Tile } from './Inputs';
 import { useMounted, usePoll, useRepeat } from '../../poll';
 import { SDI_COLOR, printedOf } from './decklink';
 // La carte en 3D (et three.js) n'est chargée que là où une carte SDI est dessinée.
 const DeckLink3D = lazy(() => import('./Card3D').then((m) => ({ default: m.DeckLink3D })));
-import { cardOf, editCard, editHw, loadHw, type DetectedCard, type Flow, type Fn, type Capacity, type HwConfig, type Nic, type NmosStatus, type Port, type Snapshot } from './store';
+import { cardOf, editCard, editHw, loadHw, type DetectedCard, type Fn, type Capacity, type HwConfig, type Nic, type NmosStatus, type Port, type Snapshot } from './store';
 
 function Rescan() {
   const [busy, setBusy] = useState(false);
@@ -245,7 +245,7 @@ function speed(mb?: number | null) {
   return mb >= 1000 ? `${mb / 1000} Gb/s` : `${mb} Mb/s`;
 }
 
-function nicOptions(nics: Nic[]): DropOption<string>[] {
+export function nicOptions(nics: Nic[]): DropOption<string>[] {
   return [{ value: '', label: t('None') }, ...nics.map((n) => ({ value: n.name, label: n.name, note: n.ipv4[0] ?? '' }))];
 }
 
@@ -576,7 +576,7 @@ function rate(mbps: number): string {
 
 /** La charge des ports média : une tuile par port, la place restante au format maison, le détail
  *  par format replié. */
-function PortsLoad({ cap }: { cap: Capacity | null }) {
+export function PortsLoad({ cap }: { cap: Capacity | null }) {
   if (!cap || cap.ports.length === 0) return null;
   const margin = Math.round(cap.headroom * 100);
   const row = (p: Capacity['ports'][number], dir: 'rx' | 'tx') => {
@@ -661,7 +661,7 @@ const IO_HELP: Record<'off' | 'kernel' | 'afXdp' | 'dpdk', string> = {
 };
 
 /** Les ports média du ST 2110 : leur usage (2022-7 ou séparés), qui les tient (MTL), lesquels. */
-function MediaPortsCard({ draft }: { draft: HwConfig }) {
+export function MediaPortsCard({ draft }: { draft: HwConfig }) {
   const r = draft.network;
   const redundant = r.mediaMode !== 'separate';
   const set = (k: keyof HwConfig['network'], v: string) => editHw((x) => void ((x.network as Record<string, string>)[k] = v));
@@ -740,7 +740,7 @@ function MediaPortsCard({ draft }: { draft: HwConfig }) {
 }
 
 /** NMOS : le Core annoncé en mDNS (sans registre) et branché par un contrôleur (Buttons…). */
-function NmosCard({ draft, opts, status }: { draft: HwConfig; opts: DropOption<string>[]; status: NmosStatus | null }) {
+export function NmosCard({ draft, opts, status }: { draft: HwConfig; opts: DropOption<string>[]; status: NmosStatus | null }) {
   const n = draft.nmos ?? { enabled: false, port: 3212, interface: '' };
   const set = (fn: (x: NonNullable<HwConfig['nmos']>) => void) =>
     editHw((x) => {
@@ -818,362 +818,6 @@ export function NetworkPage() {
       {ip && <PendingIp ip={ip} />}
       <RolesCard nics={snap.nics} cfg={draft} />
       <InterfacesCard nics={snap.nics} cfg={draft} ip={ip} />
-      <HwSaveBar />
-    </>
-  );
-}
-
-// ---------- ST 2110 ----------
-
-const ESSENCE: Record<Flow['essence'], string> = { video: 'Video', audio: 'Audio', data: 'Data' };
-
-function FlowEditor({ flow, redundant, onClose, onSave }: { flow: Flow; redundant: boolean; onClose: () => void; onSave: (f: Flow) => void }) {
-  const [f, setF] = useState<Flow>(flow);
-  const set = <K extends keyof Flow>(k: K, v: Flow[K]) => setF({ ...f, [k]: v });
-  return (
-    <Modal
-      title={flow.name ? t('Edit {name}', { name: flow.name }) : t('New flow')}
-      icon={<Waves size={16} />}
-      onClose={onClose}
-      onSubmit={() => onSave({ ...f, blue: redundant ? f.blue : null })}
-      footer={
-        <>
-          <button type="button" className="st-btn" onClick={onClose}>
-            {t('Cancel')}
-          </button>
-          <button type="submit" className="st-btn primary" disabled={!f.name.trim() || !f.red.trim() || (redundant && !f.blue?.trim())}>
-            {t('OK')}
-          </button>
-        </>
-      }
-    >
-      <Field label={t('Name')}>
-        <input value={f.name} onChange={(e) => set('name', e.target.value)} />
-      </Field>
-      <Switch checked={f.enabled !== false} onChange={(v) => set('enabled', v)} label={t('On: received or sent by the Core')} />
-      <FieldGrid two>
-        <Field label={t('Direction')} group>
-          <Segmented<Flow['direction']> value={f.direction} onChange={(v) => set('direction', v)} options={[{ value: 'input', label: t('Received') }, { value: 'output', label: t('Sent') }]} />
-        </Field>
-        <Field label={t('Essence')} group>
-          <Segmented<Flow['essence']> value={f.essence} onChange={(v) => set('essence', v)} options={(['video', 'audio', 'data'] as const).map((e) => ({ value: e, label: t(ESSENCE[e]) }))} />
-        </Field>
-      </FieldGrid>
-      {f.essence !== 'audio' && (
-        <Field label={f.essence === 'data' ? t('Video format (the timing of the data)') : t('Video format')} group>
-          <Dropdown
-            value={f.format ?? ''}
-            options={[
-              { value: '', label: t('House format') },
-              ...['1080i50', '1080i59.94', '1080p25', '1080p50', '1080p59.94', '720p50', '720p59.94', '2160p25', '2160p50', '2160p59.94'].map((x) => ({ value: x, label: x })),
-            ]}
-            onChange={(v) => set('format', v)}
-          />
-        </Field>
-      )}
-      {f.essence === 'audio' && (
-        <FieldGrid two>
-          <Field label={t('Channels')} group>
-            <Dropdown value={String(f.channels ?? 2)} options={['1', '2', '4', '6', '8', '16'].map((x) => ({ value: x, label: x }))} onChange={(v) => set('channels', Number(v))} />
-          </Field>
-          <Field label={t('Samples and packets')} group>
-            <Dropdown
-              value={`${f.bits ?? 24}/${f.ptimeUs ?? 1000}`}
-              options={[
-                { value: '24/1000', label: t('L24 · 1 ms (AES67)') },
-                { value: '24/125', label: t('L24 · 125 µs') },
-                { value: '16/1000', label: t('L16 · 1 ms') },
-              ]}
-              onChange={(v) => {
-                const [b, p] = v.split('/').map(Number);
-                setF({ ...f, bits: b, ptimeUs: p });
-              }}
-            />
-          </Field>
-        </FieldGrid>
-      )}
-      {redundant ? (
-        <FieldGrid two>
-          <Field label={t('Red address (port 1)')}>
-            <input className="st-mono" value={f.red} placeholder="239.10.2.1:5004" onChange={(e) => set('red', e.target.value)} />
-          </Field>
-          <Field label={t('Blue address (port 2)')}>
-            <input className="st-mono" value={f.blue ?? ''} placeholder="239.20.2.1:5004" onChange={(e) => set('blue', e.target.value)} />
-          </Field>
-        </FieldGrid>
-      ) : (
-        <FieldGrid two>
-          <Field label={t('Multicast address')}>
-            <input className="st-mono" value={f.red} placeholder="239.10.2.1:5004" onChange={(e) => set('red', e.target.value)} />
-          </Field>
-          <Field label={t('Media port')} group>
-            <Segmented<'1' | '2'> value={String(f.port ?? 1) as '1' | '2'} onChange={(v) => set('port', Number(v))} options={[{ value: '1', label: t('Port 1') }, { value: '2', label: t('Port 2') }]} />
-          </Field>
-        </FieldGrid>
-      )}
-    </Modal>
-  );
-}
-
-interface SapHeard {
-  name: string;
-  origin: string;
-  group: string;
-  port: number;
-  source?: string | null;
-  channels?: number | null;
-  bits?: number | null;
-  ptimeUs?: number | null;
-  clock?: string | null;
-  seenSecs: number;
-}
-
-/** SAP : les flux de son AES67 annoncés (Dante, consoles), à recevoir d'un clic ; et l'annonce des
- *  nôtres pour Dante Controller. */
-function SapCard({ draft }: { draft: HwConfig }) {
-  const sap = usePoll<{ heard: SapHeard[]; announced: string[]; listening: string[]; error?: string | null }>('/api/hardware/sap');
-  const announce = draft.sap?.announce ?? false;
-  const taken = (h: SapHeard) => draft.flows.some((f) => f.direction === 'input' && f.red === `${h.group}:${h.port}`);
-  const receive = (h: SapHeard) => {
-    const n = draft.flows.length + 1;
-    editHw((x) => {
-      let id = `flow-${n}`;
-      for (let k = n; x.flows.some((f) => f.id === id); k++) id = `flow-${k + 1}`;
-      x.flows.push({
-        id,
-        name: h.name || `${h.origin} ${h.group}`,
-        direction: 'input',
-        essence: 'audio',
-        red: `${h.group}:${h.port}`,
-        blue: null,
-        port: 1,
-        channels: h.channels ?? 2,
-        bits: h.bits ?? 24,
-        ptimeUs: h.ptimeUs ?? 1000,
-        enabled: true,
-      } as Flow);
-    });
-    toast(t('Flow added: save to receive it'));
-  };
-  return (
-    <Card
-      icon={<Radio size={16} />}
-      title={t('Announced sound flows (AES67 / Dante)')}
-      actions={
-        <Switch
-          checked={announce}
-          onChange={(v) => editHw((x) => void (x.sap = { ...(x.sap ?? {}), announce: v }))}
-          label={t('Announce our sound flows (SAP)')}
-        />
-      }
-    >
-      {sap?.error && <p className="core-warn">{friendly(sap.error)}</p>}
-      {announce && sap && (
-        <p className="st-muted core-note">
-          {sap.announced.length ? t('Announced: {list}', { list: sap.announced.join(', ') }) : t('No sound flow sent to announce.')}
-        </p>
-      )}
-      {!sap ? null : sap.heard.length === 0 ? (
-        <p className="st-muted">{t('No flow announced on the network yet (Dante devices in AES67 mode announce theirs every 30 s).')}</p>
-      ) : (
-        <table className="st-table">
-          <thead>
-            <tr>
-              <th>{t('Flow')}</th>
-              <th>{t('Address')}</th>
-              <th>{t('Format')}</th>
-              <th>{t('Clock')}</th>
-              <th className="r" />
-            </tr>
-          </thead>
-          <tbody>
-            {sap.heard.map((h) => (
-              <tr key={`${h.origin}-${h.group}-${h.port}`}>
-                <td>
-                  <strong>{h.name || '—'}</strong>
-                  <div className="st-muted st-mono">{h.origin}</div>
-                </td>
-                <td className="st-mono">
-                  {h.group}:{h.port}
-                </td>
-                <td>{h.channels ? `${h.channels} ch · L${h.bits ?? 24} · ${(h.ptimeUs ?? 1000) / 1000} ms` : <span className="st-muted">{t('not sound')}</span>}</td>
-                <td className="st-mono st-muted" title={h.clock ?? undefined}>
-                  {h.clock?.replace('ptp=IEEE1588-2008:', 'PTP ') ?? '—'}
-                </td>
-                <td className="r">
-                  {taken(h) ? (
-                    <Badge tone="ok">{t('Received')}</Badge>
-                  ) : h.channels ? (
-                    <button type="button" className="st-btn small" onClick={() => receive(h)}>
-                      {t('Receive')}
-                    </button>
-                  ) : null}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </Card>
-  );
-}
-
-export function St2110Page() {
-  const hw = useHardware();
-  const [editing, setEditing] = useState<{ flow: Flow; index: number } | null>(null);
-  // Le Core tient les flux (MTL) : ce qui passe vraiment, flux par flux.
-  const io = usePoll<{ flows: { id: string; io?: { state: string; format?: string | null; lost: number; error?: string | null } | null }[]; io?: { active: boolean } }>('/api/hardware/flows');
-  const ioOf = (id: string) => (io?.io?.active ? io.flows.find((x) => x.id === id)?.io : undefined);
-  const nmos = usePoll<NmosStatus>('/api/hardware/nmos');
-  const [tab, setTab] = useState<'flows' | 'ports' | 'nmos'>('flows');
-  const cap = usePoll<Capacity>(tab === 'ports' ? '/api/hardware/ports' : null);
-  if (!hw) return null;
-  const [snap, draft] = hw;
-  const redundant = draft.network.mediaMode !== 'separate';
-  const blank: Flow = { id: '', name: '', direction: 'input', essence: 'video', red: '', blue: '', port: 1 };
-  const nmosOn = draft.nmos?.enabled ?? false;
-  return (
-    <>
-      <PageHead title="ST 2110" sub={`${tn(draft.flows.length, '{n} flow', '{n} flows')} · ${redundant ? t('SMPTE 2022-7 (red + blue)') : t('Two separate ports')}`} />
-      <SubTabs<'flows' | 'ports' | 'nmos'>
-        items={[
-          { id: 'flows', label: t('Flows'), count: draft.flows.length },
-          { id: 'ports', label: t('Media ports') },
-          { id: 'nmos', label: nmosOn ? 'NMOS' : t('NMOS (off)') },
-        ]}
-        value={tab}
-        onChange={setTab}
-      >
-        {tab === 'flows' && (
-          <button type="button" className="st-btn primary" onClick={() => setEditing({ flow: blank, index: -1 })}>
-            <Plus size={14} /> {t('New flow')}
-          </button>
-        )}
-      </SubTabs>
-      {tab === 'ports' && (
-        <>
-          <MediaPortsCard draft={draft} />
-          <PortsLoad cap={cap} />
-        </>
-      )}
-      {tab === 'nmos' && <NmosCard draft={draft} opts={nicOptions(snap.nics)} status={nmos} />}
-      {tab === 'flows' && (draft.flows.length === 0 ? (
-        <div className="core-empty">
-          <Empty icon={Waves} text={t('No ST 2110 flow')} />
-        </div>
-      ) : (
-        <table className="st-table">
-          <thead>
-            <tr>
-              <th>{t('Flow')}</th>
-              <th>{t('Direction')}</th>
-              <th>{t('Essence')}</th>
-              {redundant ? (
-                <>
-                  <th>{t('Red')}</th>
-                  <th>{t('Blue')}</th>
-                </>
-              ) : (
-                <>
-                  <th>{t('Multicast')}</th>
-                  <th>{t('Port')}</th>
-                </>
-              )}
-              {io?.io?.active && <th>{t('In the Core')}</th>}
-              <th className="r" />
-            </tr>
-          </thead>
-          <tbody>
-            {draft.flows.map((f, i) => (
-              <tr key={f.id || i}>
-                <td>
-                  <strong>{f.name}</strong>
-                  {f.enabled === false && (
-                    <>
-                      {' '}
-                      <Badge>{t('Off')}</Badge>
-                    </>
-                  )}
-                  {f.direction === 'input' && nmos?.links[f.id]?.peer && (
-                    <>
-                      {' '}
-                      <span title={t('Connected by the NMOS controller to sender {id}', { id: nmos.links[f.id].peer ?? '' })}>
-                        <Badge tone="accent">NMOS</Badge>
-                      </span>
-                    </>
-                  )}
-                </td>
-                <td>{f.direction === 'input' ? t('Received') : t('Sent')}</td>
-                <td>{t(ESSENCE[f.essence])}</td>
-                {redundant ? (
-                  <>
-                    <td className="st-mono">{f.red}</td>
-                    <td className="st-mono">{f.blue || '—'}</td>
-                  </>
-                ) : (
-                  <>
-                    <td className="st-mono">{f.red}</td>
-                    <td>{f.port ?? 1}</td>
-                  </>
-                )}
-                {io?.io?.active && (
-                  <td>
-                    {(() => {
-                      const x = ioOf(f.id);
-                      if (f.enabled === false) return <span className="st-muted">—</span>;
-                      if (!x) return <Badge>{t('Opening…')}</Badge>;
-                      if (x.state === 'error') return <span title={x.error ? friendly(x.error) : undefined}><Badge tone="bad">{t('Error')}</Badge></span>;
-                      if (x.state === 'running')
-                        return (
-                          <span title={x.format ?? undefined}>
-                            <Badge tone="ok">{f.direction === 'input' ? t('Receiving') : t('Sending')}</Badge>
-                            {f.direction === 'input' && x.lost > 0 ? <span className="st-muted"> {tn(x.lost, '{n} packet lost', '{n} packets lost')}</span> : null}
-                          </span>
-                        );
-                      return (
-                        <Badge tone="warn">
-                          {f.direction === 'input' ? t('Nothing received') : f.essence === 'audio' ? t('silence on the output') : f.essence === 'data' ? t('no data from the apps') : t('black on the output')}
-                        </Badge>
-                      );
-                    })()}
-                  </td>
-                )}
-                <td className="r">
-                  <button type="button" className="st-icon-btn ghost" title={t('Edit')} onClick={() => setEditing({ flow: f, index: i })}>
-                    <Pencil size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    className="st-icon-btn ghost"
-                    title={t('Delete')}
-                    onClick={async () => {
-                      if (await confirmDialog({ title: t('Delete {name}?', { name: f.name }), confirm: t('Delete'), danger: true })) editHw((x) => void x.flows.splice(i, 1));
-                    }}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      ))}
-      {tab === 'flows' && <FlowsCard flows={snap.config.flows} state={io as Parameters<typeof FlowsCard>[0]['state']} />}
-      {tab === 'flows' && <SapCard draft={draft} />}
-      {editing && (
-        <FlowEditor
-          flow={editing.flow}
-          redundant={redundant}
-          onClose={() => setEditing(null)}
-          onSave={(f) => {
-            editHw((x) => {
-              if (editing.index < 0) x.flows.push(f);
-              else x.flows[editing.index] = f;
-            });
-            setEditing(null);
-          }}
-        />
-      )}
       <HwSaveBar />
     </>
   );

@@ -15,9 +15,9 @@ fn main() -> Result<(), String> {
     let port = Port { name: format!("kernel:{iface}"), pmd: Pmd::Kernel, ip, mask: Ipv4Addr::new(255, 0, 0, 0), gateway: Ipv4Addr::UNSPECIFIED };
     let mtl = Mtl::open(&[port], 37, None)?;
     let v = Video { width: 1920, height: 1080, rate: (25, 1), interlaced: false };
-    let leg = [Leg { port: 0, ip, udp: 20000 }];
+    let leg = [Leg { port: 0, ip, udp: 20000, source: None }];
     let rx = mtl.rx("loop-rx", &leg, 96, &v)?;
-    let tx = mtl.tx("loop-tx", &leg, 96, &v)?;
+    let tx = mtl.tx("loop-tx", &leg, 96, &v, strata_mtl::Pacing::default())?;
     let start = Instant::now();
     let (mut sent, mut got) = (0u32, 0u32);
     while start.elapsed() < Duration::from_secs(6) {
@@ -36,7 +36,7 @@ fn main() -> Result<(), String> {
             }
         }
     }
-    let (packets, lost) = rx.stats();
+    let strata_mtl::RxStats { received: packets, lost, .. } = rx.stats();
     println!("sent {sent}, received {got}, packets {packets}, lost {lost}");
     if got == 0 {
         return Err("nothing received".into());

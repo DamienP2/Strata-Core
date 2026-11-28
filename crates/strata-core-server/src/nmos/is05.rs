@@ -98,7 +98,10 @@ fn constraints(e: &End) -> Value {
     let legs: Vec<Value> = (0..e.ifaces.len())
         .map(|i| {
             let ip = e.ifaces[i].1.map(|ip| json!({ "enum": [ip.to_string()] })).unwrap_or(json!({}));
-            if e.sender {
+            if e.sender && e.flow.nmos_addresses {
+                // Le contrôleur choisit les adresses (plan d'adressage de l'orchestrateur).
+                json!({ "source_ip": ip, "destination_ip": {}, "source_port": {}, "destination_port": {}, "rtp_enabled": {} })
+            } else if e.sender {
                 let a = leg_addr(e, i).unwrap_or(e.flow.red);
                 json!({
                     "source_ip": ip,
@@ -130,7 +133,18 @@ fn transport_file(s: &AppState, e: &End, cfg: &HardwareConfig) -> Reply {
     let version = s.nmos.lock().versions.get(&e.id).and_then(|v| v.1.split(':').next().and_then(|x| x.parse().ok())).unwrap_or(1);
     let session = u64::from_be_bytes(e.id.as_bytes()[..8].try_into().unwrap_or_default()) >> 1;
     let iface = e.ifaces.first().map(|i| i.0.clone()).unwrap_or_default();
-    Reply::Sdp(sdp::make(&sdp::SenderSdp { name: &f.name, session, version, legs, media, payload_type: f.pt(), refclk: super::refclk(s, cfg, &iface) }))
+    let (name, _) = cfg.nmos_names(f);
+    Reply::Sdp(sdp::make(&sdp::SenderSdp { name: &name, session, version, legs, media, payload_type: f.pt(), refclk: super::refclk(s, cfg, &iface) }))
+}
+
+/// Le SDP d'un flux envoyé (le même que celui donné aux contrôleurs NMOS), pour un appareil sans
+/// NMOS.
+pub(crate) fn sender_sdp(s: &AppState, cfg: &HardwareConfig, flow_id: &str) -> Option<String> {
+    let e = ends(cfg, Saved::load(&s.data_dir).node()).into_iter().find(|e| e.sender && e.flow.id == flow_id)?;
+    match transport_file(s, &e, cfg) {
+        Reply::Sdp(text) => Some(text),
+        _ => None,
+    }
 }
 
 pub(crate) fn read(s: &AppState, rest: &[&str]) -> Reply {
@@ -437,6 +451,21 @@ fn activate(s: &AppState, id: Uuid) -> Result<(), String> {
     if e.sender {
         flow.enabled = master && tps.iter().any(|t| t["rtp_enabled"].as_bool() == Some(true));
         link.peer = st["receiver_id"].as_str().and_then(|x| x.parse().ok());
+        // Les adresses choisies par le contrôleur, quand le flux le lui permet.
+        if flow.nmos_addresses {
+            let dest = |i: usize| -> Option<std::net::SocketAddrV4> {
+                let t = tps.get(i)?;
+                let ip: Ipv4Addr = t["destination_ip"].as_str()?.parse().ok()?;
+                let port = t["destination_port"].as_u64().map_or(DEFAULT_PORT, |p| p as u16);
+                Some(std::net::SocketAddrV4::new(ip, port))
+            };
+            if let Some(a) = dest(0) {
+                flow.red = a;
+            }
+            if let Some(b) = dest(1) {
+                flow.blue = Some(b);
+            }
+        }
     } else {
         let leg = |i: usize| -> Option<(std::net::SocketAddrV4, Option<Ipv4Addr>)> {
             let t = tps.get(i)?;
@@ -449,10 +478,15 @@ fn activate(s: &AppState, id: Uuid) -> Result<(), String> {
         };
         let (l0, l1) = (leg(0), leg(1));
         if master && (l0.is_some() || l1.is_some()) {
-            let Some((red, _)) = l0 else { return Err("the first leg (red network) must be enabled with a multicast address".into()) };
+            let Some((red, src)) = l0 else { return Err("the first leg (red network) must be enabled with a multicast address".into()) };
             flow.red = red;
             flow.blue = l1.map(|l| l.0);
+            // La source annoncée par le contrôleur : seule acceptée (multicast SSM).
+            flow.source = src;
+            flow.source_blue = l1.and_then(|l| l.1);
             flow.enabled = true;
+            flow.set_by = "nmos".into();
+            flow.set_at = crate::logs::now_ms();
         } else {
             flow.enabled = false;
         }

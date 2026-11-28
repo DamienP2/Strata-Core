@@ -2,11 +2,11 @@
 // image par seconde, demandée seulement quand la vignette est à l'écran et l'onglet visible : le
 // serveur ne fabrique rien (et ne reçoit aucun flux) pour une page fermée ou cachée.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Cable, MonitorUp, Waves } from 'lucide-react';
-import { Badge, Card, t, tn } from '@strata/ui';
+import { Cable, MonitorUp } from 'lucide-react';
+import { Badge, Card, t } from '@strata/ui';
 import { usePageVisible, usePoll } from '../../poll';
 import { friendly } from '../../errors';
-import type { Flow, HwConfig } from './store';
+import type { HwConfig } from './store';
 
 export interface InputStatus {
   card: string;
@@ -42,13 +42,6 @@ interface OutputStatus extends Sent {
   playout?: { state: 'opening' | 'playing' | 'black' | 'error'; format?: string | null; error?: string | null; simulated: boolean; audio?: boolean } | null;
 }
 
-interface FlowStatus extends Partial<Sent> {
-  id: string;
-  /** Tenu par le Core (MTL) : ce qui arrive ou part vraiment. */
-  io?: { state: 'opening' | 'running' | 'idle' | 'error'; format?: string | null; frames: number; packets: number; lost: number; error?: string | null } | null;
-  /** Un flux entrant regardé : la réception de l'aperçu. */
-  reception?: { receiving: boolean; leg?: string | null; format?: string | null; error?: string | null } | null;
-}
 
 /** Une image par seconde de `src`, seulement quand la vignette est à l'écran et l'onglet visible. */
 export function Preview({ src, on, empty, children }: { src: string; on: boolean; empty: string; children?: ReactNode }) {
@@ -261,106 +254,6 @@ export function OutputsCard({ cfg }: { cfg: HwConfig }) {
   );
 }
 
-// ---------- ST 2110 ----------
 
-const LEG: Record<string, string> = { red: 'red network', blue: 'blue network', port1: 'port 1', port2: 'port 2' };
-
-/** Les flux vidéo ST 2110 : reçus (le Core les rejoint seulement pendant qu'on regarde) ou envoyés. */
-type FlowsState = { flows: FlowStatus[]; io?: { active: boolean; problem?: string | null } };
 
 /** `state` : déjà relu par la page (une seule lecture par seconde pour les deux). */
-export function FlowsCard({ flows, state }: { flows: Flow[]; state?: FlowsState | null }) {
-  const video = flows.filter((f) => f.essence === 'video' && f.id);
-  const polled = usePoll<FlowsState>(state === undefined ? '/api/hardware/flows' : null);
-  const r = state === undefined ? polled : state;
-  if (video.length === 0) return null;
-  const engine = r?.io;
-  const st = (id: string) => r?.flows.find((x) => x.id === id);
-  return (
-    <Card
-      icon={<Waves size={16} />}
-      title={t('Video flows')}
-    >
-      {engine?.problem && <p className="core-warn">{friendly(engine.problem)}</p>}
-      <div className="core-inputs">
-        {video.map((f) => {
-          const s = st(f.id);
-          const src = `/api/hardware/flows/${enc(f.id)}/preview.jpg`;
-          if (engine?.active) {
-            const io = s?.io;
-            const badge = !io ? (
-              <Badge>{t('Opening…')}</Badge>
-            ) : io.state === 'error' ? (
-              <Badge tone="bad">{t('Error')}</Badge>
-            ) : io.state === 'running' ? (
-              <Badge tone="ok">{io.format || t('Receiving')}</Badge>
-            ) : (
-              <Badge tone="warn">{f.direction === 'input' ? t('Nothing received') : t('black on the output')}</Badge>
-            );
-            const stats = f.direction === 'input' && io ? tn(io.lost, '{n} packet lost', '{n} packets lost') : '';
-            return (
-              <Tile
-                key={f.id}
-                pic={<Preview src={src} on={io?.state === 'running'} empty={t('No picture')} />}
-                head={
-                  <>
-                    <strong className="core-input-wire">{f.name}</strong>
-                    {badge}
-                  </>
-                }
-                sub={[f.direction === 'input' ? t('Received by the Core') : t('Sent by the Core'), f.red, stats].filter(Boolean).join(' · ')}
-                error={io?.error}
-                foot={null}
-              />
-            );
-          }
-          if (f.direction === 'input') {
-            const rx = s?.reception;
-            const badge = rx?.error ? (
-              <Badge tone="bad">{t('Error')}</Badge>
-            ) : !rx ? (
-              <Badge>{t('Joining…')}</Badge>
-            ) : rx.receiving ? (
-              <Badge tone="ok">{rx.format || t('Receiving')}</Badge>
-            ) : (
-              <Badge tone="warn">{t('Nothing received')}</Badge>
-            );
-            return (
-              <Tile
-                key={f.id}
-                pic={<Preview src={src} on empty={rx && !rx.receiving ? t('Nothing received') : t('No picture')} />}
-                head={
-                  <>
-                    <strong className="core-input-wire">{f.name}</strong>
-                    {badge}
-                  </>
-                }
-                sub={[t('Received'), rx?.leg ? t(LEG[rx.leg] ?? rx.leg) : '', f.red].filter(Boolean).join(' · ')}
-                error={rx?.error}
-                foot={null}
-              />
-            );
-          }
-          return (
-            <Tile
-              key={f.id}
-              pic={
-                <Preview src={src} on={!!s?.sending} empty={s?.sending ? t('No picture') : t('Nothing sent')}>
-                  <Tc tc={s?.timecode} />
-                </Preview>
-              }
-              head={
-                <>
-                  <strong className="core-input-wire">{f.name}</strong>
-                  {sentBadge(s ?? {})}
-                </>
-              }
-              sub={[t('Sent'), f.red].join(' · ')}
-              foot={sentApps(s ?? {})}
-            />
-          );
-        })}
-      </div>
-    </Card>
-  );
-}

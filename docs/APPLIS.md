@@ -209,7 +209,13 @@ Linux Foundation) : des flux en mémoire partagée, sur le serveur, sans passer 
   (2110-40 : timecode ATC, sous-titres, SCTE-104…) : un flux de données MXL `video/smpte291`, un
   grain par image (par trame en entrelacé, comme la vidéo), au rythme de `format` ; des blocs
   vides quand l'appli n'écrit pas. `io` de `/api/hardware/flows` dit ce qui passe (paquets reçus,
-  perdus). Réglé sur « Non », les applis reçoivent et envoient elles-mêmes, comme avant.
+  perdus, et par réseau rouge / bleu). Réglé sur « Non », les applis reçoivent et envoient
+  elles-mêmes, comme avant.
+- **Flux 2110 groupés** : un flux 2110 réunit une vidéo, des sons et des données annexes (champ
+  `group` commun dans `/api/hardware/flows`). Chaque essence a son flux MXL : `2110/<flux>` pour la
+  vidéo, `2110/<flux>-audio`, `2110/<flux>-audio2`… pour les sons, `2110/<flux>-anc` pour les
+  données (`mxlFlow` de chaque essence le donne : s'y fier plutôt qu'au nom). Le SDP d'une
+  essence : `GET /api/hardware/flows/<id>/sdp`.
 - **Données annexes** (`strata_mxl::anc`) : un grain porte la charge RFC 8331 à partir du champ
   *Length* (le format de MXL) ; `anc::encode` / `anc::decode` la font et la lisent (paquets ST 291 :
   ligne, DID, SDID, mots sur 8 bits ; parité et somme de contrôle calculées), `atc_packet` et

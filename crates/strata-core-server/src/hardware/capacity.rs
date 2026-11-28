@@ -92,6 +92,8 @@ pub struct FormatRoom {
     /// Flux de ce format qui tiennent encore, reçus et envoyés.
     pub rx: Option<u32>,
     pub tx: Option<u32>,
+    /// Flux de ce format conseillés en tout, par sens (ports vides, sous la marge).
+    pub total: Option<u32>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -249,7 +251,15 @@ fn room(cfg: &HardwareConfig, redundant: bool, ports: &[PortLoad]) -> Vec<Format
         // s'ajoutent.
         Some(if redundant { each.into_iter().min().unwrap_or(0) } else { each.into_iter().sum() })
     };
-    list.into_iter().map(|(name, mbps)| FormatRoom { rx: fit(|b| b.rx, mbps), tx: fit(|b| b.tx, mbps), name, mbps: (mbps * 10.0).round() / 10.0 }).collect()
+    // Sur des ports vides : ce que chacun porte sous la marge.
+    let total = |mbps: f64| -> Option<u32> {
+        let each: Option<Vec<u32>> = ports.iter().map(|p| p.speed.map(|v| (v as f64 * HEADROOM / mbps).floor() as u32)).collect();
+        let each = each.filter(|e| !e.is_empty())?;
+        Some(if redundant { each.into_iter().min().unwrap_or(0) } else { each.into_iter().sum() })
+    };
+    list.into_iter()
+        .map(|(name, mbps)| FormatRoom { rx: fit(|b| b.rx, mbps), tx: fit(|b| b.tx, mbps), total: total(mbps), name, mbps: (mbps * 10.0).round() / 10.0 })
+        .collect()
 }
 
 fn blank() -> Flow {

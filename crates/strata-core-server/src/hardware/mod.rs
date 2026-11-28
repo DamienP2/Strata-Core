@@ -232,6 +232,63 @@ pub struct Flow {
     /// Reçu ou envoyé par le Core ; coupé : réglé seulement (aussi par NMOS, `master_enable`).
     #[serde(default = "yes")]
     pub enabled: bool,
+    /// Le flux ST 2110 dont cette essence fait partie (sa vidéo, ses audios, ses ANC) ; vide :
+    /// un flux à elle seule (les réglages d'avant les flux groupés).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub group: String,
+    /// Le nom de l'essence dans son flux (« programme », « ordres »), facultatif.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+    /// Reçu : la seule source acceptée par patte (multicast SSM : rouge, bleue) ; None : toutes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<Ipv4Addr>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_blue: Option<Ipv4Addr>,
+    /// Envoyé (vidéo) : le cadencement ST 2110-21, « N » (par défaut), « NL » ou « W ».
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub pacing: String,
+    /// Envoyé : un contrôleur NMOS peut aussi choisir les adresses (sinon, seulement couper ou
+    /// rallumer l'émission).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub nmos_addresses: bool,
+    /// Reçu : qui l'a connecté en dernier (« nmos », ou le compte qui l'a réglé ici), et quand
+    /// (ms). Tenu par le Core : ce que la page envoie est ignoré.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub set_by: String,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub set_at: i64,
+}
+
+impl Default for Flow {
+    fn default() -> Flow {
+        Flow {
+            id: String::new(),
+            name: String::new(),
+            direction: Direction::default(),
+            essence: Essence::default(),
+            red: SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0),
+            blue: None,
+            port: 1,
+            format: String::new(),
+            payload_type: 0,
+            channels: 2,
+            bits: 24,
+            ptime_us: 1000,
+            enabled: true,
+            group: String::new(),
+            label: String::new(),
+            source: None,
+            source_blue: None,
+            pacing: String::new(),
+            nmos_addresses: false,
+            set_by: String::new(),
+            set_at: 0,
+        }
+    }
+}
+
+fn is_zero(v: &i64) -> bool {
+    *v == 0
 }
 
 fn yes() -> bool {
@@ -251,6 +308,44 @@ fn one_ms() -> u32 {
 }
 
 impl Flow {
+    /// Le flux dont elle fait partie.
+    pub fn group_id(&self) -> &str {
+        if self.group.is_empty() {
+            &self.id
+        } else {
+            &self.group
+        }
+    }
+
+    /// Reçu sans adresse : en attente d'une connexion (NMOS ou ici).
+    pub fn unset(&self) -> bool {
+        self.red.ip().is_unspecified()
+    }
+
+    /// Son nom pour les autres appareils (NMOS, SAP) : le flux, puis l'essence.
+    pub fn display_name(&self, nth_audio: usize) -> String {
+        let what = match self.essence {
+            Essence::Video => return self.name.clone(),
+            Essence::Audio if nth_audio > 1 => format!("Audio {nth_audio}"),
+            Essence::Audio => "Audio".to_string(),
+            Essence::Data => "ANC".to_string(),
+        };
+        if self.label.is_empty() {
+            format!("{} · {what}", self.name)
+        } else {
+            format!("{} · {what} ({})", self.name, self.label)
+        }
+    }
+
+    /// Le cadencement pour MTL.
+    pub fn mtl_pacing(&self) -> strata_mtl::Pacing {
+        match self.pacing.as_str() {
+            "NL" => strata_mtl::Pacing::NarrowLinear,
+            "W" => strata_mtl::Pacing::Wide,
+            _ => strata_mtl::Pacing::Narrow,
+        }
+    }
+
     /// Le type de charge RTP envoyé. 96 sur un flux de son ou de données vient de l'ancien
     /// défaut (vidéo) : pris comme « selon l'essence ».
     pub fn pt(&self) -> u8 {
@@ -284,6 +379,27 @@ pub fn revision(data_dir: &Path) -> String {
 }
 
 impl HardwareConfig {
+    /// Son rang parmi les audios de son flux (1 pour le premier).
+    pub fn nth_audio(&self, f: &Flow) -> usize {
+        self.flows
+            .iter()
+            .filter(|o| o.group_id() == f.group_id() && o.direction == f.direction && o.essence == Essence::Audio)
+            .position(|o| o.id == f.id)
+            .map_or(1, |i| i + 1)
+    }
+
+    /// Son nom pour les autres appareils, et son étiquette de groupe NMOS (BCP-002-01 :
+    /// « flux:essence »), pour que les contrôleurs montrent ses essences ensemble.
+    pub fn nmos_names(&self, f: &Flow) -> (String, String) {
+        let n = self.nth_audio(f);
+        let what = match f.essence {
+            Essence::Video => "Video".to_string(),
+            Essence::Audio => format!("Audio {n}"),
+            Essence::Data => "ANC".to_string(),
+        };
+        (f.display_name(n), format!("{}:{what}", f.name))
+    }
+
     /// La vidéo d'un flux : son format, ou sinon le format maison en 1080.
     pub fn video_of(&self, f: &Flow) -> Option<(u32, u32, (u32, u32), bool)> {
         if f.format.trim().is_empty() {
@@ -458,8 +574,28 @@ impl HardwareConfig {
         let mut used = HashSet::new();
         for f in &mut self.flows {
             f.name = f.name.trim().to_string();
+            f.label = f.label.trim().to_string();
             if f.name.is_empty() {
                 return Err("each flow needs a name".into());
+            }
+            if !f.group.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c)) || f.group.len() > 64 {
+                return Err(format!("{}: bad flow group", f.name));
+            }
+            if !["", "N", "NL", "W"].contains(&f.pacing.as_str()) {
+                return Err(format!("{}: the pacing is N, NL or W", f.name));
+            }
+            if f.direction == Direction::Output {
+                f.source = None;
+                f.source_blue = None;
+            } else {
+                f.pacing.clear();
+                f.nmos_addresses = false;
+            }
+            // Reçu sans adresse : en attente d'une connexion, donc ni reçu ni vérifié.
+            if f.direction == Direction::Input && f.unset() {
+                f.enabled = false;
+                f.blue = None;
+                continue;
             }
             if redundant {
                 f.port = 1;
@@ -572,6 +708,8 @@ pub fn routes() -> Router<Shared> {
         .route("/api/hardware/ip/revert", axum::routing::post(ip_revert))
         .route("/api/hardware/ip/{name}", axum::routing::put(ip_set))
         .route("/api/hardware/flows/{id}/preview.jpg", get(flow_preview))
+        .route("/api/hardware/flows/{id}/sdp", get(flow_sdp))
+        .route("/api/hardware/sdp", axum::routing::post(read_sdp))
 }
 
 /// Tient les captures en accord avec les réglages et les cartes présentes (bloquant).
@@ -790,6 +928,35 @@ fn flow_key(cfg: &HardwareConfig, f: &Flow) -> String {
 
 /// Les flux ST 2110 : pour un flux sortant, ce que l'appli y envoie ; pour un flux entrant
 /// regardé, la réception de l'aperçu.
+/// Un SDP collé dans la page (celui d'un autre appareil) : l'essence, son format, ses pattes.
+async fn read_sdp(CurrentUser(me): CurrentUser, body: String) -> ApiResult<Json<Value>> {
+    require(me.admin)?;
+    let p = crate::nmos::sdp::parse(&body).map_err(bad)?;
+    let legs: Vec<Value> = p.legs.iter().map(|l| json!({ "group": l.group.to_string(), "port": l.port, "source": l.source.map(|x| x.to_string()) })).collect();
+    let media = match p.media {
+        crate::nmos::sdp::Media::Video(v) => json!({ "essence": "video", "format": crate::nmos::sdp::format_name(v) }),
+        crate::nmos::sdp::Media::Audio { channels, bits, ptime_us } => json!({ "essence": "audio", "channels": channels, "bits": bits, "ptimeUs": ptime_us }),
+        crate::nmos::sdp::Media::Data { rate, interlaced } => {
+            json!({ "essence": "data", "format": rate.map(|r| crate::nmos::sdp::format_name((1920, 1080, r, interlaced))) })
+        }
+        crate::nmos::sdp::Media::Other(m) => return Err(bad(format!("not an ST 2110 flow: {m}"))),
+    };
+    Ok(Json(json!({ "media": media, "legs": legs, "payloadType": p.payload_type })))
+}
+
+/// Le SDP d'un flux envoyé (à copier ou télécharger pour un appareil sans NMOS).
+async fn flow_sdp(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<axum::response::Response> {
+    require(me.admin)?;
+    let s2 = s.clone();
+    let text = blocking(move || {
+        let cfg = HardwareConfig::load(&s2.data_dir);
+        crate::nmos::is05::sender_sdp(&s2, &cfg, &id)
+    })
+    .await?
+    .ok_or((StatusCode::NOT_FOUND, "no such sent flow".to_string()))?;
+    Ok(([(header::CONTENT_TYPE, "application/sdp")], text).into_response())
+}
+
 async fn flows(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
     require(me.admin)?;
     let s2 = s.clone();
@@ -995,6 +1162,29 @@ struct WriteQuery {
     rev: Option<String>,
 }
 
+/// Qui a connecté chaque flux reçu en dernier : le compte qui en change les adresses ici ; sinon
+/// ce qui était noté (NMOS, ou un réglage d'avant). Ce que la page envoie n'est pas cru.
+fn note_who_set(cfg: &mut HardwareConfig, before: &HardwareConfig, user: &str) {
+    for f in cfg.flows.iter_mut().filter(|f| f.direction == Direction::Input) {
+        let old = before.flows.iter().find(|o| o.id == f.id && o.direction == Direction::Input);
+        let same = old.is_some_and(|o| (o.red, o.blue, o.source, o.source_blue) == (f.red, f.blue, f.source, f.source_blue));
+        match old {
+            Some(o) if same => {
+                f.set_by = o.set_by.clone();
+                f.set_at = o.set_at;
+            }
+            _ if f.unset() => {
+                f.set_by.clear();
+                f.set_at = 0;
+            }
+            _ => {
+                f.set_by = user.to_string();
+                f.set_at = crate::logs::now_ms();
+            }
+        }
+    }
+}
+
 async fn write(
     State(s): State<Shared>,
     CurrentUser(me): CurrentUser,
@@ -1003,6 +1193,7 @@ async fn write(
 ) -> ApiResult<Json<Value>> {
     require(me.admin)?;
     let s2 = s.clone();
+    let who = me.username.clone();
     let saved = blocking(move || {
         let (cards, _, _) = decklink::detect();
         cfg.check(&cards).map_err(bad)?;
@@ -1012,6 +1203,7 @@ async fn write(
                 return Err((StatusCode::CONFLICT, "the hardware settings changed meanwhile (NMOS or another administrator)".to_string()));
             }
             let before = HardwareConfig::load(&s2.data_dir);
+            note_who_set(&mut cfg, &before, &who);
             strata_core::files::write_json(&HardwareConfig::path(&s2.data_dir), &cfg, false)
                 .map_err(|e| bad(format!("cannot save the hardware settings: {e}")))?;
             before
@@ -1188,7 +1380,37 @@ mod tests {
             bits: 24,
             ptime_us: 1000,
             enabled: true,
+            ..Default::default()
         }
+    }
+
+    #[test]
+    fn grouped_flows_and_who_set_them() {
+        let mut v = flow("CAM 1", "239.1.0.1:5004", Some("239.2.0.1:5004"));
+        v.direction = Direction::Input;
+        v.group = "cam1".into();
+        let mut a1 = Flow { essence: Essence::Audio, red: "239.1.0.2:5004".parse().unwrap(), blue: Some("239.2.0.2:5004".parse().unwrap()), ..v.clone() };
+        a1.id = "cam1-audio".into();
+        let mut a2 = Flow { label: "ordres".into(), red: "239.1.0.3:5004".parse().unwrap(), blue: Some("239.2.0.3:5004".parse().unwrap()), ..a1.clone() };
+        a2.id = "cam1-audio2".into();
+        let waiting = Flow { id: "cam2".into(), name: "CAM 2".into(), red: "0.0.0.0:0".parse().unwrap(), blue: None, group: "cam2".into(), ..v.clone() };
+        v.id = "cam1".into();
+        let mut hw = HardwareConfig { flows: vec![v, a1, a2, waiting], ..Default::default() };
+        hw.check(&[]).unwrap();
+        assert!(!hw.flows[3].enabled, "no address yet: waiting, not received");
+        assert_eq!(hw.nmos_names(&hw.flows[2]), ("CAM 1 · Audio 2 (ordres)".to_string(), "CAM 1:Audio 2".to_string()));
+        assert_eq!(hw.nmos_names(&hw.flows[0]).1, "CAM 1:Video");
+        // Changé ici : noté au nom du compte ; inchangé : ce qui était noté (NMOS).
+        let mut before = hw.clone();
+        before.flows[0].set_by = "nmos".into();
+        before.flows[0].set_at = 7;
+        let mut after = before.clone();
+        after.flows[0].set_by = "faux".into();
+        after.flows[1].red = "239.1.0.9:5004".parse().unwrap();
+        note_who_set(&mut after, &before, "damien");
+        assert_eq!((after.flows[0].set_by.as_str(), after.flows[0].set_at), ("nmos", 7));
+        assert_eq!(after.flows[1].set_by, "damien");
+        assert!(after.flows[1].set_at > 0);
     }
 
     #[test]

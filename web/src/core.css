@@ -259,3 +259,47 @@ button.core-hw-role.on { border-style: solid; background: color-mix(in srgb, var
 .core-catalog-state { flex: none; display: flex; justify-content: flex-end; max-width: 45%; text-align: right; }
 .core-catalog-why { font-size: var(--fs-12, 12px); }
 @media (max-width: 640px) { .core-catalog-item { flex-wrap: wrap; } .core-catalog-state { max-width: none; width: 100%; justify-content: flex-start; padding-left: 48px; } }
+
+/* Matériel › ST 2110 : un flux, ses essences */
+.core-2110-status { display: flex; gap: 8px; flex-wrap: wrap; margin: -8px 0 14px; }
+.core-flux { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; margin-bottom: 14px; }
+.core-flux-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.core-flux-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.core-flux-head > .st-muted { font-size: var(--fs-13, 13px); }
+.core-flux-scroll { overflow-x: auto; }
+.core-flux-rows { min-width: 720px; }
+.core-flux-row { display: grid; grid-template-columns: 150px minmax(140px, 1fr) minmax(320px, 1.9fr) 96px; gap: 12px; align-items: center; padding: 9px 16px; border-top: 1px solid var(--line); font-size: var(--fs-13, 13px); }
+.core-flux-row.head { border-top: 0; background: var(--panel-2); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--text-3); padding: 7px 16px; }
+.core-flux-row.off { opacity: .6; }
+.core-flux-kind { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.core-flux-kind > .st-muted { font-size: var(--fs-12, 12px); }
+.core-flux-legs { display: flex; flex-direction: column; gap: 3px; }
+.core-flux-leg { display: grid; grid-template-columns: 14px minmax(110px, auto) 52px 1fr; gap: 8px; align-items: center; font-size: var(--fs-12, 12px); }
+.core-flux-dot.r { color: var(--t-red); }
+.core-flux-dot.b { color: var(--t-blue); }
+.core-flux-port { color: var(--text-2); border-left: 1px solid var(--line-2); padding-left: 8px; }
+.core-flux-st { font-weight: 600; }
+.core-flux-st.ok { color: var(--pvw); }
+.core-flux-st.warn { color: var(--warn); }
+.core-flux-st.bad { color: var(--t-red); }
+.core-flux-st.muted { color: var(--text-3); font-weight: 400; }
+.core-flux-pic { width: 88px; }
+.core-flux-pic .core-input-pic { aspect-ratio: 16 / 9; border-radius: 6px; }
+.core-flux-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 16px; border-top: 1px solid var(--line); background: var(--panel-2); font-size: var(--fs-12, 12px); }
+.core-sdp { border: 1px solid var(--line); border-radius: 10px; margin-bottom: 10px; overflow: hidden; }
+.core-sdp-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--panel-2); }
+.core-sdp-text { margin: 0; padding: 10px 12px; font: 12px var(--mono); white-space: pre-wrap; word-break: break-all; max-height: 220px; overflow: auto; }
+.core-sdp-paste { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.core-sdp-paste textarea { width: 100%; box-sizing: border-box; font-size: 12px; }
+.core-ess { border: 1px solid var(--line); border-radius: 10px; padding: 4px 12px 10px; margin: 6px 0 12px; }
+.core-ess-row { display: grid; grid-template-columns: 200px minmax(0, 1fr) minmax(0, 1fr) 30px; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+.core-ess-row.one { grid-template-columns: 200px minmax(0, 1fr) 30px; }
+.core-ess-row.head { border-top: 0; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--text-3); }
+.core-ess-ipp { display: grid; grid-template-columns: minmax(0, 1fr) 70px; gap: 6px; }
+.core-ess-audio { display: flex; gap: 6px; flex-wrap: wrap; }
+.core-ess-label { margin-top: 4px; height: 28px; font-size: 12px; }
+.core-ess-tools { display: flex; gap: 8px; flex-wrap: wrap; padding-top: 8px; }
+.core-adv { border: 1px solid var(--line); border-radius: 10px; margin-top: 12px; }
+.core-adv > summary { padding: 10px 12px; cursor: pointer; font-weight: 600; color: var(--text-2); }
+.core-adv-body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 10px; }
+@media (max-width: 700px) { .core-ess-row, .core-ess-row.one { grid-template-columns: 1fr; } }

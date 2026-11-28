@@ -322,8 +322,9 @@ fn our_sdps(s: &crate::state::AppState, cfg: &HardwareConfig) -> Vec<(String, St
             }
             let iface = if f.port == 2 { cfg.network.media2.clone() } else { cfg.network.media1.clone() };
             let session = hash_of(&f.id) as u64;
+            let (name, _) = cfg.nmos_names(f);
             let text = sdp::make(&sdp::SenderSdp {
-                name: &f.name,
+                name: &name,
                 session,
                 version: 1,
                 legs,

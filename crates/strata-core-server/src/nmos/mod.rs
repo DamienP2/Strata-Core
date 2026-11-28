@@ -317,6 +317,8 @@ pub(crate) fn model(s: &AppState, cfg: &HardwareConfig, saved: &Saved, api: Sock
         let f = &e.flow;
         let link = saved.links.get(&f.id).cloned().unwrap_or_default();
         let bindings: Vec<&String> = e.ifaces.iter().map(|(n, _)| n).collect();
+        let (label, hint) = cfg.nmos_names(f);
+        let tags = json!({ "urn:x-nmos:tag:grouphint/v1.0": [hint] });
         let (format, media_types) = match f.essence {
             Essence::Audio => ("urn:x-nmos:format:audio", json!(["audio/L24", "audio/L16"])),
             Essence::Data => ("urn:x-nmos:format:data", json!(["video/smpte291"])),
@@ -325,9 +327,9 @@ pub(crate) fn model(s: &AppState, cfg: &HardwareConfig, saved: &Saved, api: Sock
         if !e.sender {
             receivers.push(json!({
                 "id": e.id,
-                "label": f.name,
+                "label": label,
                 "description": "",
-                "tags": {},
+                "tags": tags,
                 "device_id": device_id,
                 "transport": "urn:x-nmos:transport:rtp.mcast",
                 "interface_bindings": bindings,
@@ -339,7 +341,7 @@ pub(crate) fn model(s: &AppState, cfg: &HardwareConfig, saved: &Saved, api: Sock
         }
         let source_id = id_of(node_id, "source", &f.id);
         let flow_id = id_of(node_id, "flow", &f.id);
-        let common = |id: Uuid| json!({ "id": id, "label": f.name, "description": "", "tags": {}, "device_id": device_id, "parents": [] });
+        let common = |id: Uuid| json!({ "id": id, "label": label, "description": "", "tags": tags, "device_id": device_id, "parents": [] });
         match f.essence {
             Essence::Audio => {
                 let mut src = common(source_id);
@@ -401,9 +403,9 @@ pub(crate) fn model(s: &AppState, cfg: &HardwareConfig, saved: &Saved, api: Sock
         }
         senders.push(json!({
             "id": e.id,
-            "label": f.name,
+            "label": label,
             "description": "",
-            "tags": {},
+            "tags": tags,
             "flow_id": flow_id,
             "transport": "urn:x-nmos:transport:rtp.mcast",
             "device_id": device_id,

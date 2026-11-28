@@ -48,10 +48,29 @@ pub struct IoStatus {
     pub state: IoState,
     pub format: Option<String>,
     pub frames: u64,
-    /// Reçu : paquets reçus et perdus (après 2022-7).
+    /// Reçu : paquets acceptés, manquants sur une patte (avant 2022-7), perdus pour de bon.
     pub packets: u64,
     pub lost: u64,
+    pub unrecovered: u64,
+    /// Reçu, par patte (rouge, bleue) : paquets reçus, manquants.
+    pub legs: Vec<LegIo>,
     pub error: Option<String>,
+}
+
+#[derive(Serialize, Clone, Copy, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LegIo {
+    pub packets: u64,
+    pub lost: u64,
+}
+
+impl IoStatus {
+    fn count(&mut self, st: strata_mtl::RxStats, legs: usize) {
+        self.packets = st.received;
+        self.lost = st.lost;
+        self.unrecovered = st.unrecovered;
+        self.legs = st.legs.iter().take(legs).map(|&(packets, lost)| LegIo { packets, lost }).collect();
+    }
 }
 
 /// Ce qui fait ouvrir MTL : les ports et les flux. Un changement rouvre tout.
@@ -69,9 +88,10 @@ struct FlowPlan {
     id: String,
     name: String,
     input: bool,
-    legs: Vec<(usize, Ipv4Addr, u16)>,
+    legs: Vec<(usize, Ipv4Addr, u16, Option<Ipv4Addr>)>,
     payload_type: u8,
     kind: Kind,
+    pacing: strata_mtl::Pacing,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -142,7 +162,7 @@ fn plan(cfg: &HardwareConfig) -> Result<Option<Plan>, String> {
     if r.media_io == MediaIo::Off {
         return Ok(None);
     }
-    let video: Vec<_> = cfg.flows.iter().filter(|f| f.enabled).collect();
+    let video: Vec<_> = cfg.flows.iter().filter(|f| f.enabled && !(f.direction == Direction::Input && f.unset())).collect();
     if video.is_empty() && r.media1.is_empty() {
         return Ok(None);
     }
@@ -176,11 +196,19 @@ fn plan(cfg: &HardwareConfig) -> Result<Option<Plan>, String> {
             }
         };
         let legs = match (r.media_mode, f.blue) {
-            (MediaMode::Redundant, Some(b)) => vec![(0, *f.red.ip(), f.red.port()), (1, *b.ip(), b.port())],
-            (MediaMode::Separate, _) if f.port == 2 => vec![(1.min(ports.len() - 1), *f.red.ip(), f.red.port())],
-            _ => vec![(0, *f.red.ip(), f.red.port())],
+            (MediaMode::Redundant, Some(b)) => vec![(0, *f.red.ip(), f.red.port(), f.source), (1, *b.ip(), b.port(), f.source_blue)],
+            (MediaMode::Separate, _) if f.port == 2 => vec![(1.min(ports.len() - 1), *f.red.ip(), f.red.port(), f.source)],
+            _ => vec![(0, *f.red.ip(), f.red.port(), f.source)],
         };
-        flows.push(FlowPlan { id: f.id.clone(), name: f.name.clone(), input: f.direction == Direction::Input, legs, payload_type: f.pt(), kind });
+        flows.push(FlowPlan {
+            id: f.id.clone(),
+            name: f.name.clone(),
+            input: f.direction == Direction::Input,
+            legs,
+            payload_type: f.pt(),
+            kind,
+            pacing: f.mtl_pacing(),
+        });
     }
     Ok(Some(Plan { ports, flows, tai_offset: cfg.ptp.tai_offset, bad }))
 }
@@ -367,12 +395,11 @@ fn receive_audio(f: &FlowPlan, a: &strata_mtl::Audio, mtl: &Mtl, mxl: &Mxl, stop
             None => false,
         };
         if last.elapsed() >= Duration::from_secs(1) || !got {
-            let (packets, lost) = rx.stats();
+            let st = rx.stats();
             set(&|s| {
                 s.state = if got { IoState::Running } else { IoState::Idle };
                 s.frames = blocks;
-                s.packets = packets;
-                s.lost = lost;
+                s.count(st, f.legs.len());
                 s.error = None;
             });
             last = Instant::now();
@@ -467,12 +494,11 @@ fn receive_data(f: &FlowPlan, v: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop:
             None => false,
         };
         if last.elapsed() >= Duration::from_secs(1) || !got {
-            let (packets, lost) = rx.stats();
+            let st = rx.stats();
             set(&|s| {
                 s.state = if got { IoState::Running } else { IoState::Idle };
                 s.frames = blocks;
-                s.packets = packets;
-                s.lost = lost;
+                s.count(st, f.legs.len());
                 s.error = None;
             });
             last = Instant::now();
@@ -569,7 +595,7 @@ fn format_name(v: &strata_mtl::Video) -> String {
 }
 
 fn legs(f: &FlowPlan) -> Vec<Leg> {
-    f.legs.iter().map(|(port, ip, udp)| Leg { port: *port, ip: *ip, udp: *udp }).collect()
+    f.legs.iter().map(|&(port, ip, udp, source)| Leg { port, ip, udp, source }).collect()
 }
 
 /// Change l'état d'un flux.
@@ -603,12 +629,11 @@ fn receive(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: 
             None => false,
         };
         if last.elapsed() >= Duration::from_secs(1) || !got {
-            let (packets, lost) = rx.stats();
+            let st = rx.stats();
             set(&|s| {
                 s.state = if got { IoState::Running } else { IoState::Idle };
                 s.frames = frames;
-                s.packets = packets;
-                s.lost = lost;
+                s.count(st, f.legs.len());
                 s.error = None;
             });
             last = Instant::now();
@@ -619,7 +644,7 @@ fn receive(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: 
 
 /// Envoyé : flux MXL `2110/<flux>` (écrit par l'appli) → MTL ; du noir quand rien n'arrive.
 fn send(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: &AtomicBool, set: Setter) -> Result<(), String> {
-    let tx = mtl.tx(&f.name, &legs(f), f.payload_type, video)?;
+    let tx = mtl.tx(&f.name, &legs(f), f.payload_type, video, f.pacing)?;
     let id = strata_mxl::flow_id(&format!("2110/{}", f.id));
     let v = *video;
     set(&|s| s.format = Some(format_name(&v)));

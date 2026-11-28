@@ -256,7 +256,7 @@ void smtl_close(void *h) {
 // Reçoit un flux vidéo : `n` pattes (rouge, et bleue en 2022-7) ;
 // `port_index[i]` : le port média de chaque patte.
 void *smtl_rx_open(void *h, const char *name, int n, const int *port_index, const uint8_t (*ip)[4],
-                   const uint16_t *udp, uint8_t pt, smtl_video v, char *err, int errlen) {
+                   const uint16_t *udp, const uint8_t (*sip)[4], uint8_t pt, smtl_video v, char *err, int errlen) {
     smtl *s = (smtl *)h;
     struct st20p_rx_ops ops;
     memset(&ops, 0, sizeof(ops));
@@ -266,6 +266,10 @@ void *smtl_rx_open(void *h, const char *name, int n, const int *port_index, cons
         snprintf(ops.port.port[i], sizeof(ops.port.port[i]), "%s", s->ports[port_index[i]]);
         memcpy(ops.port.ip_addr[i], ip[i], 4);
         ops.port.udp_port[i] = udp[i];
+        // Une source précise (multicast SSM, IGMPv3) : les autres sont ignorées.
+        if (sip && (sip[i][0] | sip[i][1] | sip[i][2] | sip[i][3])) {
+            memcpy(ops.port.mcast_sip_addr[i], sip[i], 4);
+        }
     }
     ops.port.payload_type = pt;
     ops.width = v.width;
@@ -308,13 +312,18 @@ void smtl_rx_put(void *rx, void *frame) {
     p_st20p_rx_put_frame((st20p_rx_handle)rx, (struct st_frame *)frame);
 }
 
-// Paquets reçus et perdus depuis l'ouverture.
-void smtl_rx_stats(void *rx, uint64_t *received, uint64_t *lost) {
+// Reçus, perdus (avant 2022-7), perdus pour de bon (après 2022-7), puis par patte : reçus, perdus.
+void smtl_rx_stats(void *rx, uint64_t *out) {
     struct st20_rx_user_stats st;
     memset(&st, 0, sizeof(st));
     if (p_st20p_rx_get_session_stats((st20p_rx_handle)rx, &st) == 0) {
-        *received = st.common.stat_pkts_received;
-        *lost = st.common.stat_lost_packets;
+        out[0] = st.common.stat_pkts_received;
+        out[1] = st.common.stat_lost_packets;
+        out[2] = st.common.stat_pkts_unrecovered;
+        for (int i = 0; i < 2 && i < MTL_SESSION_PORT_MAX; i++) {
+            out[3 + 2 * i] = st.common.port[i].packets;
+            out[4 + 2 * i] = st.common.port[i].lost_packets;
+        }
     }
 }
 
@@ -323,8 +332,9 @@ void smtl_rx_close(void *rx) {
 }
 
 // Envoie un flux vidéo : `n` pattes, vers `ip` / `udp`.
+// `pacing` : 0 N (étroit, par défaut), 1 W (large), 2 NL (étroit linéaire) — ST 2110-21.
 void *smtl_tx_open(void *h, const char *name, int n, const int *port_index, const uint8_t (*ip)[4],
-                   const uint16_t *udp, uint8_t pt, smtl_video v, char *err, int errlen) {
+                   const uint16_t *udp, uint8_t pt, smtl_video v, int pacing, char *err, int errlen) {
     smtl *s = (smtl *)h;
     struct st20p_tx_ops ops;
     memset(&ops, 0, sizeof(ops));
@@ -342,7 +352,7 @@ void *smtl_tx_open(void *h, const char *name, int n, const int *port_index, cons
     ops.interlaced = v.interlaced != 0;
     ops.input_fmt = ST_FRAME_FMT_V210;
     ops.transport_fmt = ST20_FMT_YUV_422_10BIT;
-    ops.transport_pacing = ST21_PACING_NARROW;
+    ops.transport_pacing = pacing == 1 ? ST21_PACING_WIDE : pacing == 2 ? ST21_PACING_LINEAR : ST21_PACING_NARROW;
     ops.transport_packing = ST20_PACKING_BPM;
     ops.device = ST_PLUGIN_DEVICE_AUTO;
     ops.framebuff_cnt = 3;
@@ -414,7 +424,7 @@ static int audio_frame_size(smtl_audio a) {
 
 // Reçoit un flux audio : `n` pattes (2022-7 comme la vidéo).
 void *smtl_arx_open(void *h, const char *name, int n, const int *port_index, const uint8_t (*ip)[4],
-                    const uint16_t *udp, uint8_t pt, smtl_audio a, char *err, int errlen) {
+                    const uint16_t *udp, const uint8_t (*sip)[4], uint8_t pt, smtl_audio a, char *err, int errlen) {
     smtl *s = (smtl *)h;
     int size = audio_frame_size(a);
     if (size <= 0) {
@@ -429,6 +439,10 @@ void *smtl_arx_open(void *h, const char *name, int n, const int *port_index, con
         snprintf(ops.port.port[i], sizeof(ops.port.port[i]), "%s", s->ports[port_index[i]]);
         memcpy(ops.port.ip_addr[i], ip[i], 4);
         ops.port.udp_port[i] = udp[i];
+        // Une source précise (multicast SSM, IGMPv3) : les autres sont ignorées.
+        if (sip && (sip[i][0] | sip[i][1] | sip[i][2] | sip[i][3])) {
+            memcpy(ops.port.mcast_sip_addr[i], sip[i], 4);
+        }
     }
     ops.port.payload_type = pt;
     ops.fmt = (enum st30_fmt)a.fmt;
@@ -465,12 +479,18 @@ void smtl_arx_put(void *rx, void *frame) {
     p_st30p_rx_put_frame((st30p_rx_handle)rx, (struct st30_frame *)frame);
 }
 
-void smtl_arx_stats(void *rx, uint64_t *received, uint64_t *lost) {
+// Reçus, perdus (avant 2022-7), perdus pour de bon (après 2022-7), puis par patte : reçus, perdus.
+void smtl_arx_stats(void *rx, uint64_t *out) {
     struct st30_rx_user_stats st;
     memset(&st, 0, sizeof(st));
     if (p_st30p_rx_get_session_stats((st30p_rx_handle)rx, &st) == 0) {
-        *received = st.common.stat_pkts_received;
-        *lost = st.common.stat_lost_packets;
+        out[0] = st.common.stat_pkts_received;
+        out[1] = st.common.stat_lost_packets;
+        out[2] = st.common.stat_pkts_unrecovered;
+        for (int i = 0; i < 2 && i < MTL_SESSION_PORT_MAX; i++) {
+            out[3 + 2 * i] = st.common.port[i].packets;
+            out[4 + 2 * i] = st.common.port[i].lost_packets;
+        }
     }
 }
 
@@ -480,7 +500,8 @@ void smtl_arx_close(void *rx) {
 
 // Envoie un flux audio : `n` pattes, vers `ip` / `udp`.
 void *smtl_atx_open(void *h, const char *name, int n, const int *port_index, const uint8_t (*ip)[4],
-                    const uint16_t *udp, uint8_t pt, smtl_audio a, char *err, int errlen) {
+                    const uint16_t *udp, const uint8_t (*sip)[4], uint8_t pt, smtl_audio a, char *err, int errlen) {
+    (void)sip;
     smtl *s = (smtl *)h;
     int size = audio_frame_size(a);
     if (size <= 0) {
@@ -555,7 +576,7 @@ static int data_open_check(char *err, int errlen) {
 
 // Reçoit un flux de données (le format, entrelacé ou non, se lit dans les paquets).
 void *smtl_drx_open(void *h, const char *name, int n, const int *port_index, const uint8_t (*ip)[4],
-                    const uint16_t *udp, uint8_t pt, int interlaced, char *err, int errlen) {
+                    const uint16_t *udp, const uint8_t (*sip)[4], uint8_t pt, int interlaced, char *err, int errlen) {
     smtl *s = (smtl *)h;
     if (data_open_check(err, errlen)) {
         return NULL;
@@ -568,6 +589,10 @@ void *smtl_drx_open(void *h, const char *name, int n, const int *port_index, con
         snprintf(ops.port.port[i], sizeof(ops.port.port[i]), "%s", s->ports[port_index[i]]);
         memcpy(ops.port.ip_addr[i], ip[i], 4);
         ops.port.udp_port[i] = udp[i];
+        // Une source précise (multicast SSM, IGMPv3) : les autres sont ignorées.
+        if (sip && (sip[i][0] | sip[i][1] | sip[i][2] | sip[i][3])) {
+            memcpy(ops.port.mcast_sip_addr[i], sip[i], 4);
+        }
     }
     ops.port.payload_type = pt;
     ops.interlaced = interlaced != 0;
@@ -614,12 +639,18 @@ int smtl_drx_get(void *rx, smtl_anc *out, int max, int *field) {
     return n;
 }
 
-void smtl_drx_stats(void *rx, uint64_t *received, uint64_t *lost) {
+// Reçus, perdus (avant 2022-7), perdus pour de bon (après 2022-7), puis par patte : reçus, perdus.
+void smtl_drx_stats(void *rx, uint64_t *out) {
     struct st40_rx_user_stats st;
     memset(&st, 0, sizeof(st));
     if (p_st40p_rx_get_session_stats((st40p_rx_handle)rx, &st) == 0) {
-        *received = st.common.stat_pkts_received;
-        *lost = st.common.stat_lost_packets;
+        out[0] = st.common.stat_pkts_received;
+        out[1] = st.common.stat_lost_packets;
+        out[2] = st.common.stat_pkts_unrecovered;
+        for (int i = 0; i < 2 && i < MTL_SESSION_PORT_MAX; i++) {
+            out[3 + 2 * i] = st.common.port[i].packets;
+            out[4 + 2 * i] = st.common.port[i].lost_packets;
+        }
     }
 }
 

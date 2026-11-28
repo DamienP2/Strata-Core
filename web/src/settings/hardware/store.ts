@@ -86,6 +86,20 @@ export interface Flow {
   ptimeUs?: number;
   /** Reçu ou envoyé par le Core ; coupé : réglé seulement (aussi par NMOS). */
   enabled?: boolean;
+  /** Le flux ST 2110 dont l'essence fait partie (vide : un flux à elle seule). */
+  group?: string;
+  /** Le nom de l'essence dans son flux (« programme », « ordres »). */
+  label?: string;
+  /** Reçu : la seule source acceptée (multicast SSM), rouge et bleue. */
+  source?: string | null;
+  sourceBlue?: string | null;
+  /** Envoyé (vidéo) : cadencement ST 2110-21, N (défaut), NL ou W. */
+  pacing?: '' | 'N' | 'NL' | 'W';
+  /** Envoyé : un contrôleur NMOS peut aussi en choisir les adresses. */
+  nmosAddresses?: boolean;
+  /** Reçu : qui l'a connecté en dernier (« nmos » ou un compte), et quand (ms). Tenu par le Core. */
+  setBy?: string;
+  setAt?: number;
 }
 
 export type Role = 'management' | 'ndi' | 'media1' | 'media2' | 'ptp';
@@ -272,5 +286,6 @@ export interface Capacity {
   house?: string | null;
   headroom: number;
   ports: PortLoad[];
-  formats: { name: string; mbps: number; rx?: number | null; tx?: number | null }[];
+  /** Par format : flux qui tiennent encore (reçus, envoyés), et conseillés en tout par sens. */
+  formats: { name: string; mbps: number; rx?: number | null; tx?: number | null; total?: number | null }[];
 }

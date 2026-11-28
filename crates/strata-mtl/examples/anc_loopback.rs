@@ -15,7 +15,7 @@ fn main() -> Result<(), String> {
     let port = Port { name: "kernel:lo".into(), pmd: Pmd::Kernel, ip, mask: Ipv4Addr::new(255, 0, 0, 0), gateway: Ipv4Addr::UNSPECIFIED };
     let mtl = Mtl::open(&[port], 37, None)?;
     let v = Video { width: 1920, height: 1080, rate: (25, 1), interlaced };
-    let leg = [Leg { port: 0, ip, udp: 20040 }];
+    let leg = [Leg { port: 0, ip, udp: 20040, source: None }];
     let rx = mtl.drx("anc-rx", &leg, 0, interlaced)?;
     let tx = std::sync::Arc::new(mtl.dtx("anc-tx", &leg, 100, &v)?);
     let t2 = tx.clone();
@@ -51,7 +51,7 @@ fn main() -> Result<(), String> {
         }
     }
     let sent = sender.join().unwrap();
-    let (packets, lost) = rx.stats();
+    let strata_mtl::RxStats { received: packets, lost, .. } = rx.stats();
     println!("sent {sent}, received {got} (F: {fields:?}), packets {packets}, lost {lost}");
     drop(rx);
     drop(tx);

@@ -61,6 +61,7 @@ mod ffi {
             port_index: *const c_int,
             ip: *const [u8; 4],
             udp: *const u16,
+            sip: *const [u8; 4],
             pt: u8,
             v: Video,
             err: *mut c_char,
@@ -68,7 +69,7 @@ mod ffi {
         ) -> *mut c_void;
         pub fn smtl_rx_get(rx: *mut c_void, out: *mut Frame) -> c_int;
         pub fn smtl_rx_put(rx: *mut c_void, frame: *mut c_void);
-        pub fn smtl_rx_stats(rx: *mut c_void, received: *mut u64, lost: *mut u64);
+        pub fn smtl_rx_stats(rx: *mut c_void, out: *mut u64);
         pub fn smtl_rx_close(rx: *mut c_void);
         pub fn smtl_tx_open(
             h: *mut c_void,
@@ -79,6 +80,7 @@ mod ffi {
             udp: *const u16,
             pt: u8,
             v: Video,
+            pacing: c_int,
             err: *mut c_char,
             errlen: c_int,
         ) -> *mut c_void;
@@ -205,6 +207,40 @@ pub struct Leg {
     pub port: usize,
     pub ip: Ipv4Addr,
     pub udp: u16,
+    /// Réception : la seule source acceptée (multicast SSM, IGMPv3) ; None : toutes.
+    pub source: Option<Ipv4Addr>,
+}
+
+/// Le cadencement d'un émetteur vidéo (ST 2110-21).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Pacing {
+    /// N : étroit (le plus courant).
+    #[default]
+    Narrow,
+    /// NL : étroit linéaire.
+    NarrowLinear,
+    /// W : large.
+    Wide,
+}
+
+/// Les compteurs d'une réception, depuis son ouverture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RxStats {
+    /// Paquets acceptés (après 2022-7).
+    pub received: u64,
+    /// Paquets manquants sur l'une ou l'autre patte (avant 2022-7).
+    pub lost: u64,
+    /// Paquets perdus pour de bon (que l'autre patte n'a pas rattrapés).
+    pub unrecovered: u64,
+    /// Par patte (rouge, bleue) : paquets reçus, manquants.
+    pub legs: [(u64, u64); 2],
+}
+
+impl RxStats {
+    #[cfg(mtl_shim)]
+    fn of(o: [u64; 7]) -> RxStats {
+        RxStats { received: o[0], lost: o[1], unrecovered: o[2], legs: [(o[3], o[4]), (o[5], o[6])] }
+    }
 }
 
 /// L'instance MTL du serveur.
@@ -264,7 +300,7 @@ impl Mtl {
         let fps = st_fps(v).ok_or("MTL has no such frame rate")?;
         #[cfg(mtl_shim)]
         {
-            let (idx, ips, udps) = legs_of(legs);
+            let (idx, ips, udps, sips) = legs_of(legs);
             let n = CString::new(name).unwrap_or_default();
             let mut err = [0 as c_char; 256];
             let vv = ffi::Video { width: v.width, height: v.height, fps, interlaced: v.interlaced as c_int };
@@ -277,6 +313,7 @@ impl Mtl {
                     idx.as_ptr(),
                     ips.as_ptr(),
                     udps.as_ptr(),
+                    sips.as_ptr(),
                     payload_type,
                     vv,
                     err.as_mut_ptr(),
@@ -297,11 +334,11 @@ impl Mtl {
     }
 
     /// Envoie un flux vidéo.
-    pub fn tx(&self, name: &str, legs: &[Leg], payload_type: u8, v: &Video) -> Result<Tx, String> {
+    pub fn tx(&self, name: &str, legs: &[Leg], payload_type: u8, v: &Video, pacing: Pacing) -> Result<Tx, String> {
         let fps = st_fps(v).ok_or("MTL has no such frame rate")?;
         #[cfg(mtl_shim)]
         {
-            let (idx, ips, udps) = legs_of(legs);
+            let (idx, ips, udps, _) = legs_of(legs);
             let n = CString::new(name).unwrap_or_default();
             let mut err = [0 as c_char; 256];
             let vv = ffi::Video { width: v.width, height: v.height, fps, interlaced: v.interlaced as c_int };
@@ -316,6 +353,11 @@ impl Mtl {
                     udps.as_ptr(),
                     payload_type,
                     vv,
+                    match pacing {
+                        Pacing::Narrow => 0,
+                        Pacing::Wide => 1,
+                        Pacing::NarrowLinear => 2,
+                    },
                     err.as_mut_ptr(),
                     err.len() as c_int,
                 )
@@ -328,15 +370,21 @@ impl Mtl {
         }
         #[cfg(not(mtl_shim))]
         {
-            let _ = (name, legs, payload_type, fps);
+            let _ = (name, legs, payload_type, fps, pacing);
             Err(NOT_BUILT.into())
         }
     }
 }
 
 #[cfg(mtl_shim)]
-fn legs_of(legs: &[Leg]) -> (Vec<c_int>, Vec<[u8; 4]>, Vec<u16>) {
-    (legs.iter().map(|l| l.port as c_int).collect(), legs.iter().map(|l| l.ip.octets()).collect(), legs.iter().map(|l| l.udp).collect())
+#[allow(clippy::type_complexity)]
+fn legs_of(legs: &[Leg]) -> (Vec<c_int>, Vec<[u8; 4]>, Vec<u16>, Vec<[u8; 4]>) {
+    (
+        legs.iter().map(|l| l.port as c_int).collect(),
+        legs.iter().map(|l| l.ip.octets()).collect(),
+        legs.iter().map(|l| l.udp).collect(),
+        legs.iter().map(|l| l.source.map_or([0; 4], |a| a.octets())).collect(),
+    )
 }
 
 /// Les compteurs d'un port média vus par MTL.
@@ -475,17 +523,17 @@ impl Rx {
         None
     }
 
-    /// Paquets reçus, perdus.
-    pub fn stats(&self) -> (u64, u64) {
+    /// Les compteurs de la réception (par patte aussi).
+    pub fn stats(&self) -> RxStats {
         #[cfg(mtl_shim)]
         {
-            let (mut r, mut l) = (0u64, 0u64);
-            // SAFETY: open session; valid out pointers.
-            unsafe { ffi::smtl_rx_stats(self.h, &mut r, &mut l) };
-            (r, l)
+            let mut o = [0u64; 7];
+            // SAFETY: open session; `o` holds the 7 counters the shim writes.
+            unsafe { ffi::smtl_rx_stats(self.h, o.as_mut_ptr()) };
+            RxStats::of(o)
         }
         #[cfg(not(mtl_shim))]
-        (0, 0)
+        RxStats::default()
     }
 }
 
@@ -611,6 +659,7 @@ mod affi {
             port_index: *const c_int,
             ip: *const [u8; 4],
             udp: *const u16,
+            sip: *const [u8; 4],
             pt: u8,
             a: Audio,
             err: *mut c_char,
@@ -618,7 +667,7 @@ mod affi {
         ) -> *mut c_void;
         pub fn smtl_arx_get(rx: *mut c_void, out: *mut AFrame) -> c_int;
         pub fn smtl_arx_put(rx: *mut c_void, frame: *mut c_void);
-        pub fn smtl_arx_stats(rx: *mut c_void, received: *mut u64, lost: *mut u64);
+        pub fn smtl_arx_stats(rx: *mut c_void, out: *mut u64);
         pub fn smtl_arx_close(rx: *mut c_void);
         pub fn smtl_atx_open(
             h: *mut c_void,
@@ -627,6 +676,7 @@ mod affi {
             port_index: *const c_int,
             ip: *const [u8; 4],
             udp: *const u16,
+            sip: *const [u8; 4],
             pt: u8,
             a: Audio,
             err: *mut c_char,
@@ -647,14 +697,26 @@ impl Mtl {
     fn audio_open(&self, tx: bool, name: &str, legs: &[Leg], payload_type: u8, a: &Audio) -> Result<(*mut c_void, CString), String> {
         let fmt = a.fmt().ok_or("ST 2110-30: 16 or 24-bit samples")?;
         let ptime = a.ptime().ok_or("ST 2110-30: 1 ms or 125 µs packets")?;
-        let (idx, ips, udps) = legs_of(legs);
+        let (idx, ips, udps, sips) = legs_of(legs);
         let n = CString::new(name).unwrap_or_default();
         let mut err = [0 as c_char; 256];
         let aa = affi::Audio { channels: a.channels, fmt, ptime, frame_ms: a.frame_ms.max(1) };
         let open = if tx { affi::smtl_atx_open } else { affi::smtl_arx_open };
         // SAFETY: arrays of `legs.len()` entries; `err` sized as passed.
         let h = unsafe {
-            open(self.h, n.as_ptr(), legs.len() as c_int, idx.as_ptr(), ips.as_ptr(), udps.as_ptr(), payload_type, aa, err.as_mut_ptr(), err.len() as c_int)
+            open(
+                self.h,
+                n.as_ptr(),
+                legs.len() as c_int,
+                idx.as_ptr(),
+                ips.as_ptr(),
+                udps.as_ptr(),
+                sips.as_ptr(),
+                payload_type,
+                aa,
+                err.as_mut_ptr(),
+                err.len() as c_int,
+            )
         };
         if h.is_null() {
             Err(ffi::text(&err))
@@ -722,17 +784,17 @@ impl ARx {
         None
     }
 
-    /// Paquets reçus, perdus.
-    pub fn stats(&self) -> (u64, u64) {
+    /// Les compteurs de la réception (par patte aussi).
+    pub fn stats(&self) -> RxStats {
         #[cfg(mtl_shim)]
         {
-            let (mut r, mut l) = (0u64, 0u64);
-            // SAFETY: open session; valid out pointers.
-            unsafe { affi::smtl_arx_stats(self.h, &mut r, &mut l) };
-            (r, l)
+            let mut o = [0u64; 7];
+            // SAFETY: open session; `o` holds the 7 counters the shim writes.
+            unsafe { affi::smtl_arx_stats(self.h, o.as_mut_ptr()) };
+            RxStats::of(o)
         }
         #[cfg(not(mtl_shim))]
-        (0, 0)
+        RxStats::default()
     }
 }
 
@@ -844,13 +906,14 @@ mod dffi {
             port_index: *const c_int,
             ip: *const [u8; 4],
             udp: *const u16,
+            sip: *const [u8; 4],
             pt: u8,
             interlaced: c_int,
             err: *mut c_char,
             errlen: c_int,
         ) -> *mut c_void;
         pub fn smtl_drx_get(rx: *mut c_void, out: *mut Anc, max: c_int, field: *mut c_int) -> c_int;
-        pub fn smtl_drx_stats(rx: *mut c_void, received: *mut u64, lost: *mut u64);
+        pub fn smtl_drx_stats(rx: *mut c_void, out: *mut u64);
         pub fn smtl_drx_close(rx: *mut c_void);
         pub fn smtl_dtx_open(
             h: *mut c_void,
@@ -875,7 +938,7 @@ impl Mtl {
     pub fn drx(&self, name: &str, legs: &[Leg], payload_type: u8, interlaced: bool) -> Result<DRx, String> {
         #[cfg(mtl_shim)]
         {
-            let (idx, ips, udps) = legs_of(legs);
+            let (idx, ips, udps, sips) = legs_of(legs);
             let n = CString::new(name).unwrap_or_default();
             let mut err = [0 as c_char; 256];
             // SAFETY: arrays of `legs.len()` entries; `err` sized as passed.
@@ -887,6 +950,7 @@ impl Mtl {
                     idx.as_ptr(),
                     ips.as_ptr(),
                     udps.as_ptr(),
+                    sips.as_ptr(),
                     payload_type,
                     interlaced as c_int,
                     err.as_mut_ptr(),
@@ -910,7 +974,7 @@ impl Mtl {
         #[cfg(mtl_shim)]
         {
             let fps = st_fps(v).ok_or("ST 2110-40: unsupported frame rate")?;
-            let (idx, ips, udps) = legs_of(legs);
+            let (idx, ips, udps, _) = legs_of(legs);
             let n = CString::new(name).unwrap_or_default();
             let mut err = [0 as c_char; 256];
             // SAFETY: arrays of `legs.len()` entries; `err` sized as passed.
@@ -987,17 +1051,17 @@ impl DRx {
         None
     }
 
-    /// Paquets reçus, perdus.
-    pub fn stats(&self) -> (u64, u64) {
+    /// Les compteurs de la réception (par patte aussi).
+    pub fn stats(&self) -> RxStats {
         #[cfg(mtl_shim)]
         {
-            let (mut r, mut l) = (0u64, 0u64);
-            // SAFETY: open session; valid out pointers.
-            unsafe { dffi::smtl_drx_stats(self.h, &mut r, &mut l) };
-            (r, l)
+            let mut o = [0u64; 7];
+            // SAFETY: open session; `o` holds the 7 counters the shim writes.
+            unsafe { dffi::smtl_drx_stats(self.h, o.as_mut_ptr()) };
+            RxStats::of(o)
         }
         #[cfg(not(mtl_shim))]
-        (0, 0)
+        RxStats::default()
     }
 }
 
