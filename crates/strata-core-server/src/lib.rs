@@ -4,6 +4,7 @@
 //! les groupes, les préférences des utilisateurs, la Bibliothèque, le lancement des applis et le
 //! relais vers elles, l'interface web embarquée. À venir (brief) : installer une appli, matériel,
 //! santé, mises à jour, plusieurs serveurs.
+pub mod access;
 pub mod alerts;
 pub mod api;
 pub mod apps;

@@ -302,12 +302,14 @@ async fn log(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id):
 /// sur un maître, celles de ses membres (brief § 4 bis) ; une tuile par appli, une instance par
 /// serveur où elle tourne.
 ///
-/// Les droits sont gérés dans chaque appli : le Core leur demandera « cet utilisateur a-t-il accès ? »
-/// quand elles sauront répondre ; d'ici là, toute appli active est montrée à tout utilisateur connecté.
+/// Les droits sont gérés dans chaque appli : le Core leur demande « cette personne a-t-elle accès ? »
+/// (leur point `access`), ici et sur les membres ; une appli qui ne sait pas le dire est montrée.
 async fn cockpit(State(s): State<Shared>, CurrentUser(me): CurrentUser, headers: HeaderMap) -> Json<Value> {
     let cfg = s.config.load();
     let me_id = s.cluster.id.clone();
+    let who = crate::access::Who::of(&s, &me);
     let local: Vec<Installed> = s.apps.list().into_iter().filter(|a| a.active && a.compatible).collect();
+    let (local, permitted) = tokio::join!(crate::access::filter(local, &who), crate::cluster::members_access(&s, &who));
     let mut apps: Vec<Value> = local.iter().map(|a| json!({"id": a.manifest.id, "name": a.manifest.name, "icon": a.manifest.icon})).collect();
     let mut instances = Vec::new();
     for a in &local {
@@ -321,7 +323,11 @@ async fn cockpit(State(s): State<Shared>, CurrentUser(me): CurrentUser, headers:
     for (m, beat) in s.cluster.live_members() {
         let machine = m.url.split("://").nth(1).unwrap_or(&m.url).split(['/', ':']).next().unwrap_or_default().to_string();
         servers.push(json!({"id": m.id, "name": beat.as_ref().map_or(m.name.clone(), |b| b.name.clone()), "host": machine, "up": beat.is_some(), "alerts": beat.as_ref().map_or(0, |b| b.problems), "master": false, "url": m.url}));
+        let allowed = permitted.get(&m.id).cloned().flatten();
         for a in beat.map(|b| b.apps).unwrap_or_default() {
+            if allowed.as_ref().is_some_and(|ok| !ok.contains(&a.id)) {
+                continue;
+            }
             if !apps.iter().any(|x| x["id"] == a.id.as_str()) {
                 apps.push(json!({"id": a.id, "name": a.name, "icon": a.icon}));
             }

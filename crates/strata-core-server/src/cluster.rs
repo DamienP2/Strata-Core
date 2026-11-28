@@ -263,6 +263,28 @@ impl Cluster {
         Ok(m)
     }
 
+    /// Côté membre : vérifie une requête signée par son maître.
+    fn check_master(&self, method: &str, path: &str, headers: &HeaderMap, body: &[u8]) -> Result<MasterRef, (StatusCode, String)> {
+        let get = |k: &str| headers.get(k).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
+        let (id, date, sig) = (get("x-strata-server"), get("x-strata-date").parse::<i64>().unwrap_or(0), get("x-strata-signature"));
+        if (now_ms() - date).abs() > SKEW_MS {
+            return Err((StatusCode::UNAUTHORIZED, "the clocks of the two servers differ by more than a minute".into()));
+        }
+        let Some(m) = self.master().filter(|m| m.id == id) else {
+            return Err((StatusCode::GONE, "unknown server".into()));
+        };
+        if !verify(&m.key, &request_msg(method, path, date, body), &sig) {
+            return Err((StatusCode::UNAUTHORIZED, "bad signature".into()));
+        }
+        let mut seen = self.seen.lock().unwrap();
+        let now = now_ms();
+        seen.retain(|_, at| now - *at <= 2 * SKEW_MS);
+        if seen.insert(sig, now).is_some() {
+            return Err((StatusCode::UNAUTHORIZED, "this request was already received".into()));
+        }
+        Ok(m)
+    }
+
     /// Une réponse signée par ce serveur.
     fn signed(&self, status: StatusCode, v: Value) -> Response {
         let body = v.to_string().into_bytes();
@@ -329,6 +351,78 @@ fn call_master(c: &Cluster, m: &MasterRef, path: &str, body: &Value) -> Result<(
         return Err(format!("the answer of {} is not signed by it (HTTP {status})", m.name));
     }
     Ok((status, serde_json::from_slice(&rbody).unwrap_or(Value::Null)))
+}
+
+// ---------- Les appels vers un membre (côté maître) ----------
+
+/// Un appel signé à un membre, réponse vérifiée par sa clé. Son certificat n'est pas vérifié
+/// (HTTPS fait par Strata, sans autorité connue du maître) : la signature de la réponse suffit.
+fn call_member(c: &Cluster, m: &Member, path: &str, body: &Value) -> Result<(u16, Value), String> {
+    let bytes = body.to_string().into_bytes();
+    let date = now_ms();
+    let sig = c.sign(&request_msg("POST", path, date, &bytes));
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .tls_config(ureq::tls::TlsConfig::builder().disable_verification(true).build())
+        .timeout_global(Some(Duration::from_millis(2500)))
+        .http_status_as_error(false)
+        .build()
+        .into();
+    let res = agent
+        .post(&join_url(&m.url, path))
+        .header("content-type", "application/json")
+        .header("x-strata-server", &c.id)
+        .header("x-strata-date", &date.to_string())
+        .header("x-strata-signature", &sig)
+        .send(&bytes[..])
+        .map_err(|e| e.to_string())?;
+    let status = res.status().as_u16();
+    let rdate: i64 = res.headers().get("x-strata-date").and_then(|v| v.to_str().ok()).and_then(|v| v.parse().ok()).unwrap_or(0);
+    let rsig = res.headers().get("x-strata-signature").and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
+    let rbody = res.into_body().read_to_vec().map_err(|e| e.to_string())?;
+    if (now_ms() - rdate).abs() > SKEW_MS || !verify(&m.key, &response_msg(rdate, &rbody), &rsig) {
+        return Err(format!("the answer of {} is not signed by it (HTTP {status})", m.name));
+    }
+    Ok((status, serde_json::from_slice(&rbody).unwrap_or(Value::Null)))
+}
+
+/// Côté maître : pour chaque membre, les applis permises à cette personne ; None quand le membre
+/// ne répond pas (ou est d'une version qui ne sait pas) : ses applis sont alors toutes montrées.
+pub async fn members_access(s: &Shared, who: &crate::access::Who) -> HashMap<String, Option<Vec<String>>> {
+    let body = json!({ "who": who });
+    let calls = s.cluster.live_members().into_iter().filter(|(_, b)| b.as_ref().is_some_and(|b| !b.apps.is_empty())).map(|(m, _)| {
+        let (s, body) = (s.clone(), body.clone());
+        async move {
+            let id = m.id.clone();
+            let r = match tokio::task::spawn_blocking(move || call_member(&s.cluster, &m, "/api/cluster/access", &body)).await {
+                Ok(Ok(r)) => Some(r),
+                Ok(Err(e)) => {
+                    tracing::debug!("who has access on {id}: {e}");
+                    None
+                }
+                Err(_) => None,
+            };
+            let apps = r.filter(|(st, _)| *st == 200).and_then(|(_, v)| serde_json::from_value::<Vec<String>>(v["apps"].clone()).ok());
+            (id, apps)
+        }
+    });
+    futures_util::future::join_all(calls).await.into_iter().collect()
+}
+
+/// Côté membre : les applis permises à une personne connectée au maître.
+async fn access(State(s): State<Shared>, headers: HeaderMap, body: Bytes) -> Response {
+    if let Err(e) = s.cluster.check_master("POST", "/api/cluster/access", &headers, &body) {
+        return e.into_response();
+    }
+    #[derive(Deserialize)]
+    struct Ask {
+        who: crate::access::Who,
+    }
+    let Ok(ask) = serde_json::from_slice::<Ask>(&body) else {
+        return s.cluster.signed(StatusCode::BAD_REQUEST, json!({ "error": "bad request" }));
+    };
+    let local: Vec<_> = s.apps.list().into_iter().filter(|a| a.active && a.compatible).collect();
+    let ok = crate::access::filter(local, &ask.who).await;
+    s.cluster.signed(StatusCode::OK, json!({ "apps": ok.iter().map(|a| a.manifest.id.clone()).collect::<Vec<_>>() }))
 }
 
 /// Ce que le membre dit de lui.
@@ -418,6 +512,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/cluster/invite", post(invite))
         .route("/api/cluster/enrol", post(enrol))
         .route("/api/cluster/beat", post(beat))
+        .route("/api/cluster/access", post(access))
         .route("/api/cluster/leave", post(leave))
         .route("/api/cluster/members/{id}", delete(remove))
         .route("/api/cluster/join", post(join))

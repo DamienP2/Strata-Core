@@ -21,6 +21,7 @@ name = "LiveCut"
 version = "0.3.0"
 icon = "scissors"       # une icône lucide
 port = 8101             # son port interne, unique sur le serveur, 1024 ou plus
+access = "/strata/access"  # facultatif : où elle dit si quelqu'un y a accès (voir plus bas)
 
 [requires]
 core = ">=0.3, <1"      # les versions du Core acceptées (semver)
@@ -367,6 +368,22 @@ POST $STRATA_CORE_URL/api/health/alerts/app
 - Problème fini : la même requête avec `"active": false`.
 - Les alertes d'une appli tombent quand elle est désactivée.
 
+## Qui voit l'appli dans le cockpit
+
+Avec `access = "/strata/access"` dans la fiche, le Core demande à l'appli, pour chaque personne qui
+ouvre le cockpit : `GET http://127.0.0.1:<port>/strata/access`, avec les mêmes en-têtes
+`X-Strata-*` qu'une requête relayée. L'appli répond :
+
+- `200` et `{"access": true}` (ou un `200` sans corps lisible) : montrée ;
+- `200` et `{"access": false}`, ou `403` / `401` : cachée à cette personne.
+
+La réponse est gardée 30 s par personne (et par ses groupes). Sur un maître, il pose la question à
+chaque membre pour ses applis (appel signé), qui la pose à ses applis.
+
+Rien ne bloque : sans `access`, ou si l'appli ne répond pas en 1,5 s (arrêtée, lente, autre statut),
+elle est **montrée** ; de même pour les applis d'un membre qui ne répond pas. Le cockpit ne fait que
+cacher : l'appli refuse elle-même ce qui n'est pas permis.
+
 ## Ce que l'appli garde pour elle
 
 - **Les droits** : qui peut faire quoi dans ses écrans, par groupe ou par personne, en s'appuyant sur
@@ -377,9 +394,4 @@ POST $STRATA_CORE_URL/api/health/alerts/app
 
 ## Ce qui viendra
 
-- L'appli dira au Core si un utilisateur y a accès, pour que le cockpit ne montre que les applis
-  permises.
-- Le format de chaque entrée SDI réglable à la main (aujourd'hui : détecté).
-- Les serveurs de stockage (Ce serveur › Stockage) proposés aux applis, pour y déposer leurs
-  fichiers.
 - Une liste des applis Strata dans la Bibliothèque, quand chacune publiera des releases à ce format.

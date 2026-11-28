@@ -59,6 +59,11 @@ pub struct AppManifest {
     pub run: Option<Run>,
     #[serde(default)]
     pub relay: Relay,
+    /// Le chemin où l'appli dit si quelqu'un y a accès (`/strata/access`) ; absent : tout le monde.
+    /// Le Core l'appelle avec les en-têtes `X-Strata-*` de la personne ; l'appli répond
+    /// `{"access": true|false}` (ou 403). Le cockpit ne montre que les applis permises.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -122,6 +127,11 @@ impl AppManifest {
         }
         if self.port < 1024 {
             return Err("the app's port must be 1024 or more".into());
+        }
+        if let Some(a) = &self.access {
+            if !a.starts_with('/') || a.contains(['?', '#', ' ']) {
+                return Err("access must be a path (/strata/access)".into());
+            }
         }
         if let Some(run) = &self.run {
             if run.command.trim().is_empty() {
