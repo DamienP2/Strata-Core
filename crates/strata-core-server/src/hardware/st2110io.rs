@@ -531,6 +531,39 @@ fn audio_name(a: &strata_mtl::Audio) -> String {
     format!("{} ch · L{}", a.channels, a.bits)
 }
 
+/// Les horodatages RTP d'un flux reçu, ramenés à l'heure TAI du serveur (en ticks de l'horloge
+/// média) : l'image et le son reçus sont posés dans MXL à l'instant où ils ont été pris, pas à leur
+/// arrivée (une image n'arrive entière qu'après sa durée, le son par petits blocs) ; ils restent
+/// calés comme à l'émission. L'émetteur et nous sur le même PTP (ST 2059), à des secondes entières
+/// près (TAI et UTC mélangés) : sinon, posé à l'arrivée.
+pub(crate) struct RtpTime {
+    clock: i64,
+    /// Le décalage en secondes entières, appris au premier horodatage.
+    shift: Option<i64>,
+}
+
+impl RtpTime {
+    pub(crate) fn new(clock: u32) -> RtpTime {
+        RtpTime { clock: clock as i64, shift: None }
+    }
+
+    /// L'instant (ticks TAI) d'un horodatage RTP, `now` : maintenant en ticks. None : pas la même
+    /// horloge (l'écart n'est pas de quelques ms à quelques secondes entières près).
+    pub(crate) fn ticks(&mut self, rtp: u32, now: u64) -> Option<u64> {
+        // L'horodatage complet le plus proche de maintenant (RTP n'en garde que 32 bits).
+        let d = rtp.wrapping_sub(now as u32) as i32 as i64;
+        let sec = self.clock;
+        let shift = *self.shift.get_or_insert_with(|| (d as f64 / sec as f64).round() as i64 * sec);
+        let late = shift - d;
+        // Pris jusqu'à 150 ms avant (le réseau, l'image entière) et 40 ms après (horloges).
+        if late < -sec / 25 || late > sec * 3 / 20 {
+            self.shift = None;
+            return None;
+        }
+        Some((now as i64 + d - shift) as u64)
+    }
+}
+
 /// Son reçu : MTL → flux audio MXL `2110/<flux>`.
 fn receive_audio(f: &FlowPlan, a: &strata_mtl::Audio, mtl: &Mtl, mxl: &Mxl, stop: &AtomicBool, set: Setter) -> Result<(), String> {
     // À la réception, tout type de charge est accepté : l'adresse et le port suffisent.
@@ -540,10 +573,15 @@ fn receive_audio(f: &FlowPlan, a: &strata_mtl::Audio, mtl: &Mtl, mxl: &Mxl, stop
     set(&|s| s.format = Some(audio_name(a)));
     let mut last = Instant::now();
     let mut blocks = 0u64;
+    let mut clock = RtpTime::new(48_000);
     while !stop.load(Ordering::Relaxed) {
-        let got = match rx.next() {
-            Some(pcm) => {
-                w.write_interleaved(&pcm)?;
+        let got = match rx.next_stamped() {
+            Some((pcm, rtp)) => {
+                // À l'instant de son horodatage (calé sur l'image) ; sinon à la suite.
+                match clock.ticks(rtp, w.now()) {
+                    Some(at) => w.write_at(at, &pcm)?,
+                    None => w.write_interleaved(&pcm)?,
+                }
                 blocks += 1;
                 true
             }
@@ -775,15 +813,18 @@ fn receive(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: 
     set(&|s| s.format = Some(format_name(video)));
     let mut last = Instant::now();
     let mut frames = 0u64;
+    let mut clock = RtpTime::new(90_000);
+    let (num, den) = w.grain_rate();
     while !stop.load(Ordering::Relaxed) {
         let got = match rx.next_frame() {
             Some(fr) => {
                 if fr.complete {
-                    if video.interlaced {
-                        w.write_field_v210(fr.data, fr.linesize, fr.second_field)?;
-                    } else {
-                        w.write_v210(fr.data, fr.linesize)?;
-                    }
+                    // Le grain de son horodatage (l'instant où l'image a été prise) ; sinon celui
+                    // de son arrivée.
+                    let at = clock
+                        .ticks(fr.timestamp as u32, w.tai_ticks(90_000))
+                        .map(|t| ((t as u128 * num as u128 + 45_000 * den as u128) / (90_000 * den as u128)) as u64);
+                    w.write_grain_v210_at(fr.data, fr.linesize, video.interlaced && fr.second_field, at)?;
                     frames += 1;
                 }
                 true
@@ -928,4 +969,25 @@ fn send(f: &FlowPlan, video: &strata_mtl::Video, mtl: &Mtl, mxl: &Mxl, stop: &At
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rtp_time_to_tai() {
+        let now = 90_000u64 * 1_000_000_000;
+        // Pris 30 ms avant maintenant.
+        let mut c = RtpTime::new(90_000);
+        assert_eq!(c.ticks((now - 2_700) as u32, now), Some(now - 2_700));
+        // 37 s de décalage (TAI et UTC) : appris, puis retiré.
+        let mut c = RtpTime::new(90_000);
+        let shifted = now + 37 * 90_000 - 2_700;
+        assert_eq!(c.ticks(shifted as u32, now), Some(now - 2_700));
+        assert_eq!(c.ticks((shifted + 1_800) as u32, now + 1_800), Some(now - 900));
+        // Une autre horloge (0,3 s d'écart) : posé à l'arrivée.
+        let mut c = RtpTime::new(48_000);
+        assert_eq!(c.ticks((now / 2 - 14_400) as u32, now / 2), None);
+    }
 }

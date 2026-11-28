@@ -278,6 +278,12 @@ void smtl_close(void *h) {
     }
 }
 
+// MTL ne sait faire du v210 que pour une largeur multiple de 6 (1920, 3840) : sinon (1280), le
+// format du réseau tel quel (RFC 4175, 4:2:2 10 bits gros-boutiste), converti par l'appelant.
+static enum st_frame_fmt frame_fmt(smtl_video v) {
+    return v.width % 6 == 0 ? ST_FRAME_FMT_V210 : ST_FRAME_FMT_YUV422RFC4175PG2BE10;
+}
+
 // Reçoit un flux vidéo : `n` pattes (rouge, et bleue en 2022-7) ;
 // `port_index[i]` : le port média de chaque patte.
 void *smtl_rx_open(void *h, const char *name, int n, const int *port_index, const uint8_t (*ip)[4],
@@ -302,7 +308,7 @@ void *smtl_rx_open(void *h, const char *name, int n, const int *port_index, cons
     ops.fps = (enum st_fps)v.fps;
     ops.interlaced = v.interlaced != 0;
     ops.transport_fmt = ST20_FMT_YUV_422_10BIT;
-    ops.output_fmt = ST_FRAME_FMT_V210;
+    ops.output_fmt = frame_fmt(v);
     ops.device = ST_PLUGIN_DEVICE_AUTO;
     ops.framebuff_cnt = 3;
     ops.flags = ST20P_RX_FLAG_BLOCK_GET;
@@ -379,7 +385,7 @@ void *smtl_tx_open(void *h, const char *name, int n, const int *port_index, cons
     ops.height = v.height;
     ops.fps = (enum st_fps)v.fps;
     ops.interlaced = v.interlaced != 0;
-    ops.input_fmt = ST_FRAME_FMT_V210;
+    ops.input_fmt = frame_fmt(v);
     ops.transport_fmt = ST20_FMT_YUV_422_10BIT;
     ops.transport_pacing = pacing == 1 ? ST21_PACING_WIDE : pacing == 2 ? ST21_PACING_LINEAR : ST21_PACING_NARROW;
     ops.transport_packing = ST20_PACKING_BPM;

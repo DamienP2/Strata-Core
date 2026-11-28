@@ -22,6 +22,20 @@ pub enum TestCmd {
         /// Canaux du bip.
         #[arg(long, default_value_t = 2)]
         channels: u32,
+        /// Le flux de son où poser le bip, calé sur l'image : `2110/<flux de son envoyé>` (ST 2110
+        /// envoie l'image et le son dans deux flux).
+        #[arg(long)]
+        audio: Option<String>,
+    },
+    /// Le calage image/son de ce qui est reçu, mesuré comme une appli le lit : la mire de `bars`
+    /// (éclair et bip coupé) dans un flux vidéo et un flux de son, `2110/<flux>` ou les
+    /// identifiants MXL. Positif : le son est en retard sur l'image.
+    Sync {
+        video: String,
+        audio: String,
+        /// Combien de secondes.
+        #[arg(long, default_value_t = 20)]
+        seconds: u64,
     },
     /// Un bip 1 kHz à -18 dBFS seul : `sdi/<carte>/<connecteur>` ou `2110/<flux>` (flux de son envoyé).
     Tone {
@@ -86,11 +100,19 @@ fn flows(target: &str, output: bool) -> Result<(Uuid, Uuid), String> {
 pub fn run(c: TestCmd) -> anyhow::Result<()> {
     let mxl = Mxl::open().map_err(|e| anyhow::anyhow!(e))?;
     match c {
-        TestCmd::Bars { target, format, no_tone, channels } => {
+        TestCmd::Bars { target, format, no_tone, channels, audio } => {
             let (w, h, rate, interlaced) = crate::hardware::parse_format(&format).ok_or_else(|| anyhow::anyhow!("format inconnu : {format}"))?;
-            let (vid, aid) = flows(&target, true).map_err(|e| anyhow::anyhow!(e))?;
-            let tone = !no_tone && ["sdi/", "stream/", "ndi/"].iter().any(|p| target.starts_with(p));
+            let (vid, mut aid) = flows(&target, true).map_err(|e| anyhow::anyhow!(e))?;
+            if let Some(a) = &audio {
+                aid = flows(a, true).map_err(|e| anyhow::anyhow!(e))?.1;
+            }
+            let tone = !no_tone && (audio.is_some() || ["sdi/", "stream/", "ndi/"].iter().any(|p| target.starts_with(p)));
             bars(&mxl, vid, tone.then_some((aid, channels.clamp(1, 16))), Video { width: w, height: h, rate, interlaced }).map_err(|e| anyhow::anyhow!(e))
+        }
+        TestCmd::Sync { video, audio, seconds } => {
+            let (vid, _) = flows(&video, false).map_err(|e| anyhow::anyhow!(e))?;
+            let (_, aid) = flows(&audio, false).map_err(|e| anyhow::anyhow!(e))?;
+            sync(&mxl, vid, aid, seconds).map_err(|e| anyhow::anyhow!(e))
         }
         TestCmd::Tone { target, channels } => {
             let (_, aid) = flows(&target, true).map_err(|e| anyhow::anyhow!(e))?;
@@ -173,6 +195,102 @@ fn bars(mxl: &Mxl, vid: Uuid, tone: Option<(Uuid, u32)>, v: Video) -> Result<(),
         let due = start + Duration::from_nanos((n + 1) * 1_000_000_000 * den / num);
         std::thread::sleep(due.saturating_duration_since(Instant::now()));
     }
+    Ok(())
+}
+
+/// Le début du trou de silence (24 échantillons nuls de suite après du son) dans `pcm` (entrelacé,
+/// `ch` canaux, premier canal), en échantillons depuis le début.
+fn silence_onset(pcm: &[f32], ch: usize) -> Option<usize> {
+    let (mut run, mut start, mut tone) = (0usize, 0usize, false);
+    for (k, x) in pcm.iter().step_by(ch.max(1)).enumerate() {
+        if x.abs() < 1e-6 {
+            if run == 0 {
+                start = k;
+            }
+            run += 1;
+            if run == 24 && tone {
+                return Some(start);
+            }
+        } else {
+            run = 0;
+            tone = true;
+        }
+    }
+    None
+}
+
+fn sync(mxl: &Mxl, vid: Uuid, aid: Uuid, seconds: u64) -> Result<(), String> {
+    let r = mxl.video_reader(vid).map_err(|e| format!("{e} (rien n'écrit le flux vidéo ?)"))?;
+    let a = mxl.audio_reader(aid).map_err(|e| format!("{e} (rien n'écrit le flux de son ?)"))?;
+    let v = r.video;
+    let period = Duration::from_secs_f64(v.rate.1.max(1) as f64 / v.rate.0.max(1) as f64);
+    println!("Calage de {vid} (image, {}x{}{}) et {aid} (son), {seconds} s.", v.width, v.height, if v.interlaced { "i" } else { "p" });
+    let stride = strata_mxl::v210_stride(v.width);
+    let row = v.grain_lines() as usize / 2;
+    let mut line = vec![0u8; v.width as usize * 2];
+    // L'image et le son se lisent comme une appli : l'instant de l'image (en échantillons) puis le
+    // son à cet instant. ±50 ms autour (MXL garde peu de son).
+    const SPAN: u64 = 2_400;
+    let mut pending: std::collections::VecDeque<u64> = Default::default();
+    let (mut last, mut was_flash) = (None, false);
+    let mut offsets: Vec<f64> = Vec::new();
+    let mut buf = Vec::new();
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(seconds) {
+        std::thread::sleep(period / 4);
+        let luma = r.with_latest(period * 3, |f, _| {
+            strata_mxl::v210_to_uyvy(&f[row * stride..(row + 1) * stride], &mut line, v.width as usize);
+            line[v.width as usize / 2 * 2 + 1]
+        });
+        let at = r.last_frame_audio_index();
+        if let (Some(luma), Some(at)) = (luma, at) {
+            if last != Some(at) {
+                last = Some(at);
+                let flash = luma > 200;
+                if flash && !was_flash {
+                    pending.push_back(at);
+                }
+                was_flash = flash;
+            }
+        }
+        while let Some(&at) = pending.front() {
+            let Some(written) = a.written() else { break };
+            if written < at + SPAN {
+                break;
+            }
+            pending.pop_front();
+            // Par morceaux de 50 ms (MXL limite une lecture).
+            let mut ok = at >= SPAN;
+            buf.clear();
+            let mut part = Vec::new();
+            for k in (0..2 * SPAN).step_by(2_400) {
+                ok = ok && a.read_at(at - SPAN + k, 2_400, &mut part);
+                buf.extend_from_slice(&part);
+            }
+            if !ok {
+                println!("éclair à {at} : son plus là");
+                continue;
+            }
+            match silence_onset(&buf, a.channels) {
+                Some(k) => {
+                    let ms = (k as f64 - SPAN as f64) / 48.0;
+                    offsets.push(ms);
+                    println!("éclair à {at} : silence à {:+.2} ms", ms);
+                }
+                None => println!("éclair à {at} : pas de silence à ±50 ms"),
+            }
+        }
+    }
+    if offsets.is_empty() {
+        return Err("aucune mesure (la mire et son bip arrivent-ils ?)".into());
+    }
+    let mean = offsets.iter().sum::<f64>() / offsets.len() as f64;
+    let (lo, hi) = offsets.iter().fold((f64::MAX, f64::MIN), |(l, h), x| (l.min(*x), h.max(*x)));
+    println!(
+        "{} mesures : moyenne {mean:+.2} ms, de {lo:+.2} à {hi:+.2} ms (positif : son en retard ; une image = {:.1} ms)",
+        offsets.len(),
+        period.as_secs_f64() * 1000.0
+    );
     Ok(())
 }
 

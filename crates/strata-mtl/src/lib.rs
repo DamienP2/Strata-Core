@@ -390,7 +390,7 @@ impl Mtl {
             if h.is_null() {
                 Err(ffi::text(&err))
             } else {
-                Ok(Rx { h, _name: n })
+                Ok(Rx { h, _name: n, native: !v.width.is_multiple_of(6), staging: Vec::new() })
             }
         }
         #[cfg(not(mtl_shim))]
@@ -435,7 +435,7 @@ impl Mtl {
             if h.is_null() {
                 Err(ffi::text(&err))
             } else {
-                Ok(Tx { h, _name: n })
+                Ok(Tx { h, _name: n, native: !v.width.is_multiple_of(6), staging: Vec::new() })
             }
         }
         #[cfg(not(mtl_shim))]
@@ -523,6 +523,17 @@ enum Kind {
     Rx22,
     #[cfg_attr(not(mtl_shim), allow(dead_code))]
     Tx22(Planes),
+    #[cfg_attr(not(mtl_shim), allow(dead_code))]
+    TxNative(Native),
+}
+
+/// Une image MTL au format du réseau (RFC 4175), remplie depuis le v210 à l'envoi.
+#[cfg_attr(not(mtl_shim), allow(dead_code))]
+struct Native {
+    ptr: *mut u8,
+    linesize: usize,
+    width: usize,
+    lines: usize,
 }
 
 /// Les trois plans d'une image du greffon.
@@ -562,6 +573,13 @@ impl Frame<'_> {
                     ffi::smtl_tx_put(self.owner, self.raw, second as c_int, self.timestamp);
                 }
                 Kind::Rx22 => ffi::smtl22_rx_put(self.owner, self.raw),
+                Kind::TxNative(n) => {
+                    let dst = std::slice::from_raw_parts_mut(n.ptr, n.linesize * n.lines);
+                    for (s, d) in self.data.chunks_exact(self.linesize).zip(dst.chunks_exact_mut(n.linesize)) {
+                        v210_to_rfc4175(s, d, n.width);
+                    }
+                    ffi::smtl_tx_put(self.owner, self.raw, second as c_int, self.timestamp);
+                }
                 Kind::Tx22(p) => {
                     let [y, cb, cr] = p.slices();
                     v210_to_planar(self.data, self.linesize, p.width, p.lines, [y, cb, cr], p.linesize);
@@ -595,7 +613,8 @@ fn frame_of<'a>(f: ffi::Frame, owner: *mut c_void, tx: bool) -> Frame<'a> {
         height: f.height,
         second_field: f.second_field != 0,
         complete: f.complete != 0,
-        timestamp: 0,
+        // Reçue : son horodatage RTP.
+        timestamp: if tx { 0 } else { f.timestamp },
         raw: f.frame,
         owner,
         kind,
@@ -609,13 +628,18 @@ pub struct Rx {
     h: *mut c_void,
     #[cfg(mtl_shim)]
     _name: CString,
+    /// MTL rend le format du réseau (RFC 4175 : largeur non multiple de 6), converti ici en v210.
+    #[cfg(mtl_shim)]
+    native: bool,
+    #[cfg(mtl_shim)]
+    staging: Vec<u8>,
 }
 
 unsafe impl Send for Rx {}
 
 impl Rx {
-    /// La prochaine image (200 ms au plus).
-    pub fn next(&self) -> Option<Frame<'_>> {
+    /// La prochaine image (200 ms au plus), en v210 ; `timestamp` : son horodatage RTP (90 kHz).
+    pub fn frame(&mut self) -> Option<Frame<'_>> {
         #[cfg(mtl_shim)]
         {
             let mut f = ffi::Frame {
@@ -629,7 +653,33 @@ impl Rx {
                 timestamp: 0,
             };
             // SAFETY: open session; `f` is a valid out pointer.
-            (unsafe { ffi::smtl_rx_get(self.h, &mut f) } == 1).then(|| frame_of(f, self.h, false))
+            if unsafe { ffi::smtl_rx_get(self.h, &mut f) } != 1 {
+                return None;
+            }
+            if !self.native {
+                return Some(frame_of(f, self.h, false));
+            }
+            let (w, lines, ls) = (f.width as usize, f.height as usize, f.linesize as usize);
+            let stride = v210_stride(f.width);
+            self.staging.resize(stride * lines, 0);
+            // SAFETY: MTL hands `lines` rows of `linesize` bytes, ours until put back.
+            let src = unsafe { std::slice::from_raw_parts(f.data, ls * lines) };
+            for (s, d) in src.chunks_exact(ls).zip(self.staging.chunks_exact_mut(stride)) {
+                rfc4175_to_v210(s, d, w);
+            }
+            Some(Frame {
+                data: &mut self.staging[..],
+                linesize: stride,
+                width: f.width,
+                height: f.height,
+                second_field: f.second_field != 0,
+                complete: f.complete != 0,
+                timestamp: f.timestamp,
+                raw: f.frame,
+                owner: self.h,
+                kind: Kind::Rx,
+                sent: false,
+            })
         }
         #[cfg(not(mtl_shim))]
         None
@@ -665,13 +715,19 @@ pub struct Tx {
     h: *mut c_void,
     #[cfg(mtl_shim)]
     _name: CString,
+    /// MTL attend le format du réseau (RFC 4175 : largeur non multiple de 6) : l'image remplie en
+    /// v210 est convertie à l'envoi.
+    #[cfg(mtl_shim)]
+    native: bool,
+    #[cfg(mtl_shim)]
+    staging: Vec<u8>,
 }
 
 unsafe impl Send for Tx {}
 
 impl Tx {
-    /// Une image à remplir (200 ms au plus), puis [`Frame::send`].
-    pub fn next(&self) -> Option<Frame<'_>> {
+    /// Une image à remplir en v210 (200 ms au plus), puis [`Frame::send_field`].
+    pub fn frame(&mut self) -> Option<Frame<'_>> {
         #[cfg(mtl_shim)]
         {
             let mut f = ffi::Frame {
@@ -685,7 +741,28 @@ impl Tx {
                 timestamp: 0,
             };
             // SAFETY: open session; `f` is a valid out pointer.
-            (unsafe { ffi::smtl_tx_get(self.h, &mut f) } == 1).then(|| frame_of(f, self.h, true))
+            if unsafe { ffi::smtl_tx_get(self.h, &mut f) } != 1 {
+                return None;
+            }
+            if !self.native {
+                return Some(frame_of(f, self.h, true));
+            }
+            let lines = f.height as usize;
+            let stride = v210_stride(f.width);
+            self.staging.resize(stride * lines, 0);
+            Some(Frame {
+                data: &mut self.staging[..],
+                linesize: stride,
+                width: f.width,
+                height: f.height,
+                second_field: false,
+                complete: true,
+                timestamp: 0,
+                raw: f.frame,
+                owner: self.h,
+                kind: Kind::TxNative(Native { ptr: f.data, linesize: f.linesize as usize, width: f.width as usize, lines }),
+                sent: false,
+            })
         }
         #[cfg(not(mtl_shim))]
         None
@@ -752,6 +829,46 @@ fn get16(b: &[u8], i: usize) -> u32 {
 fn v210_sample(line: &[u8], k: usize) -> u32 {
     let w = u32::from_le_bytes(line[4 * (k / 3)..4 * (k / 3) + 4].try_into().unwrap());
     (w >> (10 * (k % 3))) & 0x3ff
+}
+
+/// Une ligne RFC 4175 (4:2:2 10 bits gros-boutiste : Cb Y Cr Y en 5 octets pour 2 pixels) en
+/// v210 (les mêmes composantes, trois par mot de 32 bits petit-boutiste ; la fin de ligne à 0).
+pub fn rfc4175_to_v210(src: &[u8], dst: &mut [u8], width: usize) {
+    let groups = width / 2;
+    let (mut word, mut k, mut o) = (0u32, 0u32, 0usize);
+    for g in src[..groups * 5].as_chunks::<5>().0 {
+        let (b0, b1, b2, b3, b4) = (g[0] as u32, g[1] as u32, g[2] as u32, g[3] as u32, g[4] as u32);
+        for c in [(b0 << 2) | (b1 >> 6), ((b1 & 0x3f) << 4) | (b2 >> 4), ((b2 & 0x0f) << 6) | (b3 >> 2), ((b3 & 0x03) << 8) | b4] {
+            word |= c << (10 * k);
+            k += 1;
+            if k == 3 {
+                dst[o..o + 4].copy_from_slice(&word.to_le_bytes());
+                (word, k, o) = (0, 0, o + 4);
+            }
+        }
+    }
+    if k > 0 {
+        dst[o..o + 4].copy_from_slice(&word.to_le_bytes());
+        o += 4;
+    }
+    dst[o..].fill(0);
+}
+
+/// Une ligne v210 en RFC 4175 (l'inverse de [`rfc4175_to_v210`]).
+pub fn v210_to_rfc4175(src: &[u8], dst: &mut [u8], width: usize) {
+    let n = width / 2 * 4;
+    let comp = |i: usize| {
+        let w = u32::from_le_bytes(src[4 * (i / 3)..4 * (i / 3) + 4].try_into().unwrap());
+        (w >> (10 * (i % 3))) & 0x3ff
+    };
+    for (g, d) in (0..n).step_by(4).zip(dst.as_chunks_mut::<5>().0) {
+        let (c0, c1, c2, c3) = (comp(g), comp(g + 1), comp(g + 2), comp(g + 3));
+        d[0] = (c0 >> 2) as u8;
+        d[1] = ((c0 << 6) | (c1 >> 4)) as u8;
+        d[2] = ((c1 << 4) | (c2 >> 6)) as u8;
+        d[3] = ((c2 << 2) | (c3 >> 8)) as u8;
+        d[4] = c3 as u8;
+    }
 }
 
 #[inline]
@@ -964,7 +1081,7 @@ impl Rx22 {
                 height: f.height,
                 second_field: f.second_field != 0,
                 complete: f.complete != 0,
-                timestamp: 0,
+                timestamp: f.timestamp,
                 raw: f.frame,
                 owner: self.h,
                 kind: Kind::Rx22,
@@ -1054,7 +1171,7 @@ pub trait VideoTx: Send {
 
 impl VideoTx for Tx {
     fn next_frame(&mut self) -> Option<Frame<'_>> {
-        self.next()
+        self.frame()
     }
 }
 
@@ -1072,7 +1189,7 @@ pub trait VideoRx: Send {
 
 impl VideoRx for Rx {
     fn next_frame(&mut self) -> Option<Frame<'_>> {
-        self.next()
+        self.frame()
     }
     fn counters(&self) -> RxStats {
         self.stats()
@@ -1283,6 +1400,11 @@ unsafe impl Send for ARx {}
 impl ARx {
     /// Le prochain bloc (200 ms au plus), en float entrelacés.
     pub fn next(&self) -> Option<Vec<f32>> {
+        self.next_stamped().map(|(pcm, _)| pcm)
+    }
+
+    /// Le prochain bloc et son horodatage RTP (48 kHz : son premier échantillon).
+    pub fn next_stamped(&self) -> Option<(Vec<f32>, u32)> {
         #[cfg(mtl_shim)]
         {
             let mut f = affi::empty();
@@ -1295,7 +1417,7 @@ impl ARx {
             let pcm = from_pcm(data, self.audio.bits);
             // SAFETY: a frame taken from this session, given back once.
             unsafe { affi::smtl_arx_put(self.h, f.frame) };
-            Some(pcm)
+            Some((pcm, f.timestamp as u32))
         }
         #[cfg(not(mtl_shim))]
         None
@@ -1684,6 +1806,27 @@ pub fn to_pcm(pcm: &[f32], out: &mut [u8], bits: u8) {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn rfc4175_and_v210() {
+        // Deux pixels : Cb 0x200, Y 0x040, Cr 0x200, Y 0x3ac.
+        let pg = [0x80, 0x04, 0x08, 0x03, 0xac];
+        let mut v = vec![0xffu8; 16];
+        rfc4175_to_v210(&pg, &mut v, 2);
+        let w0 = u32::from_le_bytes(v[0..4].try_into().unwrap());
+        assert_eq!((w0 & 0x3ff, (w0 >> 10) & 0x3ff, (w0 >> 20) & 0x3ff), (0x200, 0x040, 0x200));
+        assert_eq!(u32::from_le_bytes(v[4..8].try_into().unwrap()), 0x3ac);
+        assert!(v[8..].iter().all(|&b| b == 0), "end of line zeroed");
+        // Aller-retour en 1280 (non multiple de 6).
+        let w = 1280;
+        let src: Vec<u8> = (0..w / 2 * 5).map(|i| (i * 37 % 251) as u8).collect();
+        let mut line = vec![0u8; v210_stride(w as u32)];
+        rfc4175_to_v210(&src, &mut line, w);
+        let mut back = vec![0u8; w / 2 * 5];
+        v210_to_rfc4175(&line, &mut back, w);
+        assert_eq!(src, back);
+    }
 
     /// v210 → plans → v210 : identique, largeur multiple de 6 ou non (1280).
     #[test]
@@ -1723,8 +1866,6 @@ mod tests {
         let i = Video { interlaced: true, ..v };
         assert_eq!(codestream_size(&i, 2.0), 1920 * 540 * 2 / 8);
     }
-
-    use super::*;
 
     #[test]
     fn frame_rates_for_mtl() {

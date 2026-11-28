@@ -257,12 +257,26 @@ impl VideoWriter {
         Some((first as u128 * AUDIO_RATE as u128 * den / num) as u64)
     }
 
-    /// L'index du prochain grain : celui de maintenant, jamais un déjà écrit. En entrelacé, une
-    /// image commence sur un index pair (trame du haut), sa seconde trame sur l'impair qui suit.
-    fn next_index(&mut self, first_field: bool) -> u64 {
+    /// L'heure TAI du serveur en ticks d'une horloge de `clock` Hz (90 000 : l'horloge RTP vidéo).
+    pub fn tai_ticks(&self, clock: u32) -> u64 {
+        self.inst.get_current_index(&mxl::Rational { numerator: clock as i64, denominator: 1 })
+    }
+
+    /// La cadence des grains (des trames en entrelacé).
+    pub fn grain_rate(&self) -> (u64, u64) {
+        (self.rate.numerator.max(1) as u64, self.rate.denominator.max(1) as u64)
+    }
+
+    /// L'index du prochain grain : `want` s'il est donné et après le dernier écrit (une image
+    /// reçue posée à l'instant de son horodatage), sinon celui de maintenant ; jamais un déjà
+    /// écrit. En entrelacé, une image commence sur un index pair (trame du haut), sa seconde trame
+    /// sur l'impair qui suit.
+    fn next_index(&mut self, first_field: bool, want: Option<u64>) -> u64 {
         let now = self.inst.get_current_index(&self.rate);
-        let mut i = match self.last {
-            Some(l) if now <= l => l + 1,
+        let mut i = match (want, self.last) {
+            (Some(w), Some(l)) if w > l => w,
+            (Some(w), None) => w,
+            (_, Some(l)) if now <= l => l + 1,
             _ => now,
         };
         if self.video.interlaced {
@@ -279,8 +293,8 @@ impl VideoWriter {
         i
     }
 
-    fn grain(&mut self, first_field: bool, lines: &mut dyn Iterator<Item = &[u8]>) -> Result<(), String> {
-        self.grain_fill(first_field, &mut |_, dst| {
+    fn grain(&mut self, first_field: bool, want: Option<u64>, lines: &mut dyn Iterator<Item = &[u8]>) -> Result<(), String> {
+        self.grain_fill_at(first_field, want, &mut |_, dst| {
             if let Some(src) = lines.next() {
                 let n = src.len().min(dst.len());
                 dst[..n].copy_from_slice(&src[..n]);
@@ -290,7 +304,11 @@ impl VideoWriter {
 
     /// Un grain rempli ligne par ligne, sur place (`fill(n° de ligne du grain, ligne)`).
     fn grain_fill(&mut self, first_field: bool, fill: &mut dyn FnMut(usize, &mut [u8])) -> Result<(), String> {
-        let index = self.next_index(first_field);
+        self.grain_fill_at(first_field, None, fill)
+    }
+
+    fn grain_fill_at(&mut self, first_field: bool, want: Option<u64>, fill: &mut dyn FnMut(usize, &mut [u8])) -> Result<(), String> {
+        let index = self.next_index(first_field, want);
         let stride = v210_stride(self.video.width);
         let mut g = self.grains.open_grain(index).map_err(|e| format!("cannot open MXL grain {index}: {e}"))?;
         let slices = g.total_slices();
@@ -306,18 +324,24 @@ impl VideoWriter {
         let h = self.video.height as usize;
         let row = |y: usize| &frame[y * stride..(y * stride + stride).min(frame.len())];
         if self.video.interlaced {
-            self.grain(true, &mut (0..h).step_by(2).map(row))?;
-            self.grain(false, &mut (1..h).step_by(2).map(row))
+            self.grain(true, None, &mut (0..h).step_by(2).map(row))?;
+            self.grain(false, None, &mut (1..h).step_by(2).map(row))
         } else {
-            self.grain(true, &mut (0..h).map(row))
+            self.grain(true, None, &mut (0..h).map(row))
         }
     }
 
     /// Une trame v210 seule (entrelacé : `second` pour la trame du bas), un grain.
     pub fn write_field_v210(&mut self, field: &[u8], stride: usize, second: bool) -> Result<(), String> {
+        self.write_grain_v210_at(field, stride, second, None)
+    }
+
+    /// Un grain v210 (une image, ou une trame en entrelacé : `second` pour celle du bas) posé à
+    /// l'index `at` s'il est donné (l'instant de son horodatage) et après le dernier écrit.
+    pub fn write_grain_v210_at(&mut self, grain: &[u8], stride: usize, second: bool, at: Option<u64>) -> Result<(), String> {
         let lines = self.video.grain_lines() as usize;
-        let row = |y: usize| &field[y * stride..(y * stride + stride).min(field.len())];
-        self.grain(!second, &mut (0..lines).map(row))
+        let row = |y: usize| &grain[y * stride..(y * stride + stride).min(grain.len())];
+        self.grain(!second, at, &mut (0..lines).map(row))
     }
 
     /// Une image UYVY 8 bits, passée en v210 directement dans le grain (sans image intermédiaire).
@@ -508,6 +532,11 @@ pub struct AudioWriter {
 impl AudioWriter {
     pub fn channels(&self) -> usize {
         self.channels
+    }
+
+    /// L'index de l'échantillon de maintenant (horloge TAI, 48 kHz).
+    pub fn now(&self) -> u64 {
+        self.inst.get_current_index(&AUDIO_RATIONAL)
     }
 
     /// Des échantillons entrelacés posés à partir de l'index `start` (celui d'une image : le son
