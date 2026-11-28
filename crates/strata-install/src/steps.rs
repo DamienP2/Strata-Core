@@ -351,6 +351,61 @@ net.core.netdev_max_backlog = 16384\n";
 /// Ce dont MTL et DPDK (livrés avec le Core, ST 2110) ont besoin sur le système.
 const MTL_PKGS: [&str; 5] = ["libnuma1", "libjson-c5", "libxdp1", "libbpf1", "libelf1t64"];
 
+/// Les paquets du système dont le Core a besoin : l'heure (chrony, ptp4l), ethtool, polkit,
+/// ffmpeg (les flux réseau) et ce qu'il faut à MTL (ST 2110).
+fn system_pkgs(ndi: bool) -> Vec<String> {
+    let mut pkgs = vec!["chrony", "linuxptp", "ethtool", "polkitd", "ffmpeg"];
+    pkgs.extend(MTL_PKGS);
+    if ndi {
+        pkgs.push("avahi-daemon");
+    }
+    pkgs.into_iter().map(String::from).collect()
+}
+
+/// Le dépôt « universe » d'Ubuntu (ffmpeg, linuxptp y sont) : ajouté aux sources s'il n'y est pas.
+fn enable_universe(ctx: &Ctx) -> Result<bool, String> {
+    let deb822 = ctx.p("/etc/apt/sources.list.d/ubuntu.sources");
+    if let Ok(text) = std::fs::read_to_string(&deb822) {
+        if text.lines().filter(|l| l.starts_with("Components:")).all(|l| l.split_whitespace().any(|c| c == "universe")) {
+            return Ok(false);
+        }
+        let fixed: Vec<String> = text
+            .lines()
+            .map(|l| if l.starts_with("Components:") && !l.split_whitespace().any(|c| c == "universe") { format!("{l} universe") } else { l.to_string() })
+            .collect();
+        ctx.write("/etc/apt/sources.list.d/ubuntu.sources", &(fixed.join("\n") + "\n"), 0o644)?;
+        return Ok(true);
+    }
+    // L'ancienne forme (sources.list).
+    ctx.run("add-apt-repository", &["-y", "universe"]).map(|_| true)
+}
+
+/// Installe les paquets du système, puis vérifie que ffmpeg répond.
+fn system_packages(ctx: &Ctx, pkgs: &[String], say: &dyn Fn(String)) -> Result<String, String> {
+    say("mise à jour de la liste des paquets…".into());
+    ctx.run("apt-get", &["update", "-q"])?;
+    if !ctx.dry() {
+        let candidate =
+            Command::new("apt-cache").args(["policy", "ffmpeg"]).output().map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+        if !candidate.contains("Candidate:") || candidate.contains("Candidate: (none)") {
+            say("ajout du dépôt universe d'Ubuntu (ffmpeg)…".into());
+            if enable_universe(ctx)? {
+                ctx.run("apt-get", &["update", "-q"])?;
+            }
+        }
+    }
+    let mut args = vec!["install", "-y", "-q"];
+    args.extend(pkgs.iter().map(String::as_str));
+    ctx.run_live("apt-get", &args, say)?;
+    if !ctx.dry() {
+        let ok = Command::new("ffmpeg").arg("-version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success());
+        if !ok {
+            return Err("ffmpeg does not run after its installation (apt-get install ffmpeg)".into());
+        }
+    }
+    Ok(pkgs.join(", "))
+}
+
 // ---------- Les étapes ----------
 
 /// Ce que fait une étape : `say` donne l'avancement ; le résultat dit ce qui a été fait.
@@ -720,21 +775,8 @@ pub fn steps(plan: &Plan) -> Vec<Step> {
     let mut v: Vec<Step> = Vec::new();
     match plan.action.clone() {
         Action::Install => {
-            // ffmpeg : les flux réseau (SRT, RTMP, HLS…) reçus et envoyés par le Core.
-            let mut pkgs = vec!["chrony", "linuxptp", "ethtool", "polkitd", "ffmpeg"];
-            pkgs.extend(MTL_PKGS);
-            if plan.ndi.is_some() {
-                pkgs.push("avahi-daemon");
-            }
-            let pkgs: Vec<String> = pkgs.into_iter().map(String::from).collect();
-            v.push(step("Paquets du système", false, move |ctx, say| {
-                say("mise à jour de la liste des paquets…".into());
-                ctx.run("apt-get", &["update", "-q"])?;
-                let mut args = vec!["install", "-y", "-q"];
-                args.extend(pkgs.iter().map(String::as_str));
-                ctx.run_live("apt-get", &args, say)?;
-                Ok(pkgs.join(", "))
-            }));
+            let pkgs = system_pkgs(plan.ndi.is_some());
+            v.push(step("Paquets du système", false, move |ctx, say| system_packages(ctx, &pkgs, say)));
             v.push(step("Compte du service", false, |ctx, _| service_user(ctx)));
             let p = plan.clone();
             v.push(step("Strata Core", false, move |ctx, say| put_core(ctx, &p, say)));
@@ -772,12 +814,9 @@ pub fn steps(plan: &Plan) -> Vec<Step> {
             v.push(step("Démarrage du service", false, |ctx, _| start(ctx, false)));
         }
         Action::Update => {
-            v.push(step("Bibliothèques du ST 2110 et ffmpeg", true, |ctx, say| {
-                let mut args = vec!["install", "-y", "-q", "ffmpeg"];
-                args.extend(MTL_PKGS);
-                ctx.run_live("apt-get", &args, say)?;
-                Ok(format!("ffmpeg, {}", MTL_PKGS.join(", ")))
-            }));
+            // Un Core plus récent peut demander de nouveaux paquets (ffmpeg, MTL…).
+            let pkgs = system_pkgs(plan.ndi.is_some());
+            v.push(step("Paquets du système", true, move |ctx, say| system_packages(ctx, &pkgs, say)));
             let p = plan.clone();
             v.push(step("Strata Core", false, move |ctx, say| put_core(ctx, &p, say)));
             v.push(step("Fichiers du système", false, |ctx, _| system_files(ctx)));
@@ -803,6 +842,8 @@ pub fn steps(plan: &Plan) -> Vec<Step> {
             v.push(step("Redémarrage du service", false, |ctx, _| start(ctx, true)));
         }
         Action::Repair => {
+            let pkgs = system_pkgs(plan.ndi.is_some());
+            v.push(step("Paquets du système", true, move |ctx, say| system_packages(ctx, &pkgs, say)));
             v.push(step("Compte du service", false, |ctx, _| service_user(ctx)));
             v.push(step("Fichiers du système", false, |ctx, _| system_files(ctx)));
             v.push(step("Droits", false, |ctx, _| {

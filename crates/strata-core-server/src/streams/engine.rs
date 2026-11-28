@@ -163,13 +163,22 @@ pub struct Engine {
     out_status: Arc<Mutex<HashMap<String, OutputStatus>>>,
     /// Pourquoi rien ne tourne (ffmpeg ou MXL absent).
     problem: Mutex<Option<String>>,
-    ffmpeg: std::sync::OnceLock<Result<String, String>>,
+    /// La version de ffmpeg, gardée ; son absence revue toutes les 30 s (installé entre-temps).
+    ffmpeg: Mutex<Option<(std::time::Instant, Result<String, String>)>>,
 }
 
 impl Engine {
     /// La version de ffmpeg, ou pourquoi il manque.
     pub fn ffmpeg(&self) -> Result<String, String> {
-        self.ffmpeg.get_or_init(ffmpeg::version).clone()
+        let mut c = self.ffmpeg.lock().unwrap_or_else(|e| e.into_inner());
+        match &*c {
+            Some((_, Ok(v))) => return Ok(v.clone()),
+            Some((at, Err(e))) if at.elapsed() < std::time::Duration::from_secs(30) => return Err(e.clone()),
+            _ => {}
+        }
+        let r = ffmpeg::version();
+        *c = Some((std::time::Instant::now(), r.clone()));
+        r
     }
 
     /// Tient les flux en accord avec les réglages (bloquant).
@@ -178,7 +187,7 @@ impl Engine {
         let problem = if !any {
             None
         } else if let Err(e) = self.ffmpeg() {
-            Some(format!("ffmpeg is missing ({e}): install it (sudo apt install ffmpeg)"))
+            Some(format!("ffmpeg is missing ({e}): run the installer again and choose Repair, or sudo apt install ffmpeg"))
         } else if env.is_none() {
             Some("the network streams need MXL (the pictures are shared with the apps through it)".to_string())
         } else {

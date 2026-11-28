@@ -888,4 +888,6 @@ export const fr: Record<string, string> = {
   '{n} KB': '{n} Ko',
   'Video format (the timing of the data)': 'Format vidéo (le rythme des données)',
   'no data from the apps': 'aucune donnée des applis',
+  'ffmpeg is missing ({why}): run the installer again and choose Repair, or sudo apt install ffmpeg': 'ffmpeg manque ({why}) : relancez l’installateur et choisissez « Réparer », ou sudo apt install ffmpeg',
+  'the network streams need MXL (the pictures are shared with the apps through it)': 'les flux réseau ont besoin de MXL (les images passent par lui vers les applis)',
 };

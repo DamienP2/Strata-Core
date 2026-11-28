@@ -42,6 +42,8 @@ const SHAPED: [RegExp, string, string[]][] = [
   [/^(.+) is used by two flows$/, '{address} is used by two flows', ['address']],
   [/^(.+): in SMPTE 2022-7, a flow has an address on each network \(red and blue\)$/, '{flow}: in SMPTE 2022-7, a flow has an address on each network (red and blue)', ['flow']],
   [/^(.+): the media port is 1 or 2$/, '{flow}: the media port is 1 or 2', ['flow']],
+  // Flux réseau
+  [/^ffmpeg is missing \((.+)\): run the installer again and choose Repair, or sudo apt install ffmpeg$/, 'ffmpeg is missing ({why}): run the installer again and choose Repair, or sudo apt install ffmpeg', ['why']],
   // Mises à jour
   [/^(.+) has no release of the Core$/, '{repo} has no release of the Core', ['repo']],
   [/^this Core is already the latest \((.+)\)$/, 'This Core is already the latest ({version})', ['version']],
