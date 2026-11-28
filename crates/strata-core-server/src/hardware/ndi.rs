@@ -127,7 +127,49 @@ struct Lib {
     find_wait: unsafe extern "C" fn(Instance, u32) -> bool,
     find_sources: unsafe extern "C" fn(Instance, *mut u32) -> *const Source,
     recv: Option<RecvFns>,
+    send: Option<SendFns>,
 }
+
+/// L'envoi (destinations NDI) : facultatif aussi.
+struct SendFns {
+    create: unsafe extern "C" fn(*const SendCreate) -> Instance,
+    video: unsafe extern "C" fn(Instance, *const VideoFrame),
+    /// `NDIlib_send_send_audio_v3` (NDI 5 et 6).
+    audio: Option<unsafe extern "C" fn(Instance, *const AudioFrameV3)>,
+    connections: Option<unsafe extern "C" fn(Instance, u32) -> i32>,
+    destroy: unsafe extern "C" fn(Instance),
+}
+
+/// `NDIlib_send_create_t`.
+#[repr(C)]
+struct SendCreate {
+    p_ndi_name: *const c_char,
+    p_groups: *const c_char,
+    clock_video: bool,
+    clock_audio: bool,
+}
+
+/// `NDIlib_audio_frame_v3_t`.
+#[repr(C)]
+struct AudioFrameV3 {
+    sample_rate: i32,
+    no_channels: i32,
+    no_samples: i32,
+    timecode: i64,
+    fourcc: u32,
+    p_data: *mut u8,
+    channel_stride_in_bytes: i32,
+    p_metadata: *const c_char,
+    timestamp: i64,
+}
+
+const fn fourcc(s: &[u8; 4]) -> u32 {
+    s[0] as u32 | (s[1] as u32) << 8 | (s[2] as u32) << 16 | (s[3] as u32) << 24
+}
+const FOURCC_UYVY: u32 = fourcc(b"UYVY");
+const FOURCC_FLTP: u32 = fourcc(b"FLTP");
+/// NDI fabrique le timecode.
+const TIMECODE_SYNTHESIZE: i64 = i64::MAX;
 
 /// La réception (aperçus) : facultative, une bibliothèque sans elle garde la recherche.
 struct RecvFns {
@@ -179,6 +221,15 @@ fn load() -> Result<Lib, String> {
                         capture: *lib.get(b"NDIlib_recv_capture_v2\0").ok()?,
                         free_video: *lib.get(b"NDIlib_recv_free_video_v2\0").ok()?,
                         destroy: *lib.get(b"NDIlib_recv_destroy\0").ok()?,
+                    })
+                })(),
+                send: (|| {
+                    Some(SendFns {
+                        create: *lib.get(b"NDIlib_send_create\0").ok()?,
+                        video: *lib.get(b"NDIlib_send_send_video_v2\0").ok()?,
+                        audio: lib.get(b"NDIlib_send_send_audio_v3\0").ok().map(|f| *f),
+                        connections: lib.get(b"NDIlib_send_get_no_connections\0").ok().map(|f| *f),
+                        destroy: *lib.get(b"NDIlib_send_destroy\0").ok()?,
                     })
                 })(),
                 path: path.clone(),
@@ -356,6 +407,108 @@ impl Drop for Receiver {
     }
 }
 
+/// Une source NDI envoyée par le Core (une destination NDI). NDI cadence l'image (`clock_video`) :
+/// chaque envoi attend son tour, à la cadence annoncée.
+pub struct Sender {
+    inst: Instance,
+    _name: std::ffi::CString,
+    _groups: std::ffi::CString,
+}
+
+// Utilisé par le fil de sa destination seulement.
+unsafe impl Send for Sender {}
+
+/// L'envoi est possible : la bibliothèque est là et sait envoyer.
+pub fn can_send() -> Result<(), String> {
+    lib()?.send.as_ref().map(|_| ()).ok_or_else(|| "this NDI library cannot send".to_string())
+}
+
+impl Sender {
+    /// `name` : le nom de la source (les récepteurs voient « MACHINE (name) ») ; `groups` : ses
+    /// groupes NDI, séparés par des virgules (vide : le groupe public).
+    pub fn open(name: &str, groups: &str) -> Result<Sender, String> {
+        let r = lib()?;
+        let f = r.send.as_ref().ok_or("this NDI library cannot send")?;
+        let n = std::ffi::CString::new(name).map_err(|_| "bad NDI name")?;
+        let g = std::ffi::CString::new(groups.trim()).map_err(|_| "bad NDI groups")?;
+        let create = SendCreate {
+            p_ndi_name: n.as_ptr(),
+            p_groups: if groups.trim().is_empty() { std::ptr::null() } else { g.as_ptr() },
+            clock_video: true,
+            clock_audio: false,
+        };
+        // SAFETY : la structure et les chaînes vivent le temps de l'appel ; NDI les copie.
+        let inst = unsafe { (f.create)(&create) };
+        if inst.is_null() {
+            return Err("NDI cannot create this source (name already used?)".into());
+        }
+        Ok(Sender { inst, _name: n, _groups: g })
+    }
+
+    /// Une image UYVY 8 bits (`stride` octets par ligne) ; en entrelacé, les deux trames
+    /// entrelacées dans l'image ; `rate` : images par seconde.
+    pub fn video(&self, uyvy: &[u8], width: u32, height: u32, stride: usize, rate: (u32, u32), interlaced: bool) {
+        let Some(f) = lib().ok().and_then(|r| r.send.as_ref()) else { return };
+        if uyvy.len() < stride * height as usize {
+            return;
+        }
+        let frame = VideoFrame {
+            xres: width as i32,
+            yres: height as i32,
+            fourcc: FOURCC_UYVY,
+            frame_rate_n: rate.0 as i32,
+            frame_rate_d: rate.1.max(1) as i32,
+            aspect: width as f32 / height.max(1) as f32,
+            // 0 : entrelacé (deux trames dans l'image), 1 : progressif.
+            frame_format: if interlaced { 0 } else { 1 },
+            timecode: TIMECODE_SYNTHESIZE,
+            p_data: uyvy.as_ptr() as *mut u8,
+            line_stride: stride as i32,
+            p_metadata: std::ptr::null(),
+            timestamp: 0,
+        };
+        // SAFETY : l'image vit le temps de l'appel (envoi synchrone, `send_video_v2`).
+        unsafe { (f.video)(self.inst, &frame) };
+    }
+
+    /// Du son 48 kHz, un plan par canal (`channels` plans de `samples` float).
+    pub fn audio(&self, planar: &mut [f32], channels: usize, samples: usize) {
+        let Some(send) = lib().ok().and_then(|r| r.send.as_ref()).and_then(|f| f.audio) else { return };
+        if channels == 0 || samples == 0 || planar.len() < channels * samples {
+            return;
+        }
+        let frame = AudioFrameV3 {
+            sample_rate: 48_000,
+            no_channels: channels as i32,
+            no_samples: samples as i32,
+            timecode: TIMECODE_SYNTHESIZE,
+            fourcc: FOURCC_FLTP,
+            p_data: planar.as_mut_ptr() as *mut u8,
+            channel_stride_in_bytes: (samples * 4) as i32,
+            p_metadata: std::ptr::null(),
+            timestamp: 0,
+        };
+        // SAFETY : le son vit le temps de l'appel (NDI le copie).
+        unsafe { send(self.inst, &frame) };
+    }
+
+    /// Les récepteurs branchés sur cette source.
+    pub fn connections(&self) -> Option<u32> {
+        let f = lib().ok()?.send.as_ref()?.connections?;
+        // SAFETY : instance vivante ; pas d'attente.
+        Some(unsafe { f(self.inst, 0) }.max(0) as u32)
+    }
+}
+
+impl Drop for Sender {
+    fn drop(&mut self) {
+        if let Some(f) = lib().ok().and_then(|r| r.send.as_ref()) {
+            // SAFETY : créée par `open`, détruite une fois.
+            unsafe { (f.destroy)(self.inst) };
+        }
+    }
+}
+
 /// Un JPEG de `width` de large au plus, depuis du RGBX.
 pub fn jpeg_rgbx(px: &[u8], w: u32, h: u32, width: u32) -> Result<Vec<u8>, String> {
     let step = w.div_ceil(width.max(16)).max(1);
@@ -390,5 +543,11 @@ mod tests {
         assert!(v["ndi"].get("machinename").is_none(), "the computer's name");
         let v = settings(&NdiSettings { machine: " REGIE-1 ".into(), ..NdiSettings::default() }, "");
         assert_eq!(v["ndi"]["machinename"], "REGIE-1");
+    }
+
+    #[test]
+    fn four_cc_codes() {
+        assert_eq!(FOURCC_UYVY, 0x5956_5955);
+        assert_eq!(FOURCC_FLTP, 0x5054_4c46);
     }
 }

@@ -10,7 +10,7 @@ pub enum TestCmd {
     /// Une mire (barres qui défilent, un éclair blanc chaque seconde) sur une sortie, avec un bip
     /// 1 kHz à -18 dBFS sur une sortie SDI ou de flux réseau (coupé pendant l'éclair : on voit le
     /// calage du son). La cible : `sdi/<carte>/<connecteur>`, `2110/<flux>` (flux vidéo envoyé)
-    /// ou `stream/<sortie>` (sortie de flux réseau).
+    /// `stream/<sortie>` (sortie de flux réseau) ou `ndi/<destination>` (destination NDI).
     Bars {
         target: String,
         /// Le format : 1080i50, 1080p25, 720p50, 1080i59.94, 2160p50…
@@ -74,7 +74,12 @@ fn flows(target: &str, output: bool) -> Result<(Uuid, Uuid), String> {
             let base = crate::streams::output_flow(out);
             Ok((strata_mxl::flow_id(&base), strata_mxl::flow_id(&crate::streams::audio_of(&base))))
         }
-        _ => Err(format!("« {target} » : attendu sdi/<carte>/<connecteur>, 2110/<flux>, stream/<sortie> ou un identifiant MXL")),
+        // Une destination NDI (celle qu'une appli alimente).
+        ["ndi", out] if output => {
+            let base = crate::hardware::ndi_out::out_flow(out);
+            Ok((strata_mxl::flow_id(&base), strata_mxl::flow_id(&crate::streams::audio_of(&base))))
+        }
+        _ => Err(format!("« {target} » : attendu sdi/<carte>/<connecteur>, 2110/<flux>, stream/<sortie>, ndi/<destination> ou un identifiant MXL")),
     }
 }
 
@@ -84,7 +89,7 @@ pub fn run(c: TestCmd) -> anyhow::Result<()> {
         TestCmd::Bars { target, format, no_tone, channels } => {
             let (w, h, rate, interlaced) = crate::hardware::parse_format(&format).ok_or_else(|| anyhow::anyhow!("format inconnu : {format}"))?;
             let (vid, aid) = flows(&target, true).map_err(|e| anyhow::anyhow!(e))?;
-            let tone = !no_tone && (target.starts_with("sdi/") || target.starts_with("stream/"));
+            let tone = !no_tone && ["sdi/", "stream/", "ndi/"].iter().any(|p| target.starts_with(p));
             bars(&mxl, vid, tone.then_some((aid, channels.clamp(1, 16))), Video { width: w, height: h, rate, interlaced }).map_err(|e| anyhow::anyhow!(e))
         }
         TestCmd::Tone { target, channels } => {

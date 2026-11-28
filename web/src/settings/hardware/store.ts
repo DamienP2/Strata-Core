@@ -108,6 +108,17 @@ export interface Flow {
 
 export type Role = 'management' | 'ndi' | 'media1' | 'media2' | 'ptp';
 
+/** Une destination NDI : un flux du serveur (ou celui qu'une appli écrit) envoyé en NDI. */
+export interface NdiOutput {
+  id: string;
+  name: string;
+  enabled: boolean;
+  /** Vide : le flux `ndi-out/<id>` qu'une appli écrit. */
+  source: string;
+  /** Groupes NDI, séparés par des virgules ; vide : le groupe public. */
+  groups: string;
+}
+
 export interface HwConfig {
   cards: Card[];
   network: Record<Role, string> & {
@@ -118,6 +129,8 @@ export interface HwConfig {
     media2Address?: string;
   };
   ndi: { discovery: string; machine: string };
+  /** Les destinations NDI : des flux du serveur envoyés en NDI. */
+  ndiOutputs?: NdiOutput[];
   flows: Flow[];
   ptp: { domain: number; taiOffset: number };
   clock: ClockSettings;

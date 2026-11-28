@@ -27,6 +27,7 @@ pub mod ip;
 pub mod ipmx;
 pub mod media;
 pub mod ndi;
+pub mod ndi_out;
 pub mod net;
 pub mod playout;
 pub mod preview;
@@ -72,6 +73,8 @@ pub struct HardwareConfig {
     pub nmos: crate::nmos::NmosSettings,
     /// SAP : nos flux de son envoyés annoncés (Dante, AES67).
     pub sap: SapSettings,
+    /// Les destinations NDI : des flux du serveur envoyés en NDI.
+    pub ndi_outputs: Vec<ndi_out::NdiOutput>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq, Hash)]
@@ -607,6 +610,7 @@ impl HardwareConfig {
         }
         self.ndi.discovery = discovery;
         self.ndi.machine = self.ndi.machine.trim().to_string();
+        ndi_out::check(&mut self.ndi_outputs)?;
         let mut used = HashSet::new();
         for f in &mut self.flows {
             f.name = f.name.trim().to_string();
@@ -741,6 +745,8 @@ pub fn routes() -> Router<Shared> {
         .route("/api/hardware/clock/apply", axum::routing::post(clock_apply))
         .route("/api/hardware/ndi/sources", get(ndi_sources))
         .route("/api/hardware/ndi/{source}/preview.jpg", get(ndi_preview))
+        .route("/api/hardware/ndi/outputs", get(ndi_outputs))
+        .route("/api/hardware/ndi/outputs/{id}/preview.jpg", get(ndi_output_preview))
         .route("/api/hardware/shared", get(shared))
         .route("/api/hardware/inputs", get(inputs))
         .route("/api/hardware/inputs/{card}/{n}/preview.jpg", get(preview))
@@ -811,6 +817,9 @@ pub fn reconcile_inputs(s: &crate::state::AppState) {
     };
     let refclk = ipmx.then(|| crate::nmos::refclk(s, &cfg, &cfg.network.media1));
     s.st2110.apply(&st2110_cfg, mtl, mxl_of(s), refclk);
+    // NDI coupé (Réglages › Fonctions) : aucune destination.
+    let ndi_wanted = if s.features.on(crate::features::NDI) { ndi_out::wanted(&cfg) } else { Vec::new() };
+    s.ndi_outputs.reconcile(ndi_wanted, mxl_of(s));
     crate::streams::reconcile(s);
 }
 
@@ -1348,6 +1357,61 @@ async fn ndi_preview(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlP
     Ok(jpeg_response(jpeg))
 }
 
+/// Les destinations NDI : réglages, état, et les flux du serveur qu'elles peuvent envoyer.
+async fn ndi_outputs(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
+    require(me.admin)?;
+    let s2 = s.clone();
+    let v = blocking(move || {
+        let cfg = HardwareConfig::load(&s2.data_dir);
+        let on = s2.features.on(crate::features::NDI);
+        let outputs: Vec<Value> = cfg
+            .ndi_outputs
+            .iter()
+            .map(|o| {
+                let mut v = json!(o);
+                v["flow"] = json!(o.flow());
+                v["status"] = json!(s2.ndi_outputs.status_of(&o.id));
+                if o.source.is_empty() {
+                    v["mxlFlow"] = json!(out_flow(&o.flow()).to_string());
+                    v["audioFlow"] = json!(out_flow(&crate::streams::audio_of(&o.flow())).to_string());
+                }
+                v
+            })
+            .collect();
+        // Les flux du serveur, et ceux qu'une appli écrit pour une autre destination NDI.
+        let mut sources = crate::streams::api::sources(&s2, &crate::streams::StreamsConfig::load(&s2.data_dir));
+        for o in cfg.ndi_outputs.iter().filter(|o| o.source.is_empty()) {
+            sources.push(json!({"flow": o.flow(), "label": o.name, "kind": "ndi", "output": o.id}));
+        }
+        json!({
+            "outputs": outputs,
+            "sources": sources,
+            "on": on,
+            "mxl": mxl_of(&s2).is_some(),
+            // Sans bibliothèque (ou une qui n'envoie pas) : rien ne part, la page le dit.
+            "sendError": ndi::can_send().err(),
+        })
+    })
+    .await?;
+    Ok(Json(v))
+}
+
+/// L'aperçu de ce qui part en NDI (le flux MXL envoyé).
+async fn ndi_output_preview(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<impl IntoResponse> {
+    require(me.admin)?;
+    let s2 = s.clone();
+    let jpeg = blocking(move || {
+        let cfg = HardwareConfig::load(&s2.data_dir);
+        let o = cfg.ndi_outputs.iter().find(|o| o.id == id).ok_or("no such NDI destination")?;
+        let mxl = mxl_of(&s2).ok_or("no MXL")?;
+        let flow = o.flow();
+        s2.previews.jpeg(&format!("ndi-out/{id}"), || preview::Feed::Mxl { mxl, id: strata_mxl::flow_id(&flow), reader: None })
+    })
+    .await?
+    .map_err(|e| (StatusCode::NOT_FOUND, e))?;
+    Ok(jpeg_response(jpeg))
+}
+
 /// Ce que les applis lisent du matériel : réservé à la machine elle-même (les applis, lancées
 /// par le Core) et aux administrateurs. Chaque connecteur porte le numéro d'appareil Desktop Video
 /// à ouvrir.
@@ -1412,6 +1476,21 @@ async fn shared(State(s): State<Shared>, ConnectInfo(peer): ConnectInfo<SocketAd
                 "ptp": {"interface": r.ptp, "ip": ip(&r.ptp)},
             },
             "ndi": {"configDir": ndi::config_dir(&s2.data_dir), "discovery": cfg.ndi.discovery, "machine": cfg.ndi.machine},
+            // Les destinations NDI qu'une appli alimente : le flux MXL à écrire (image et son).
+            "ndiOutputs": if s2.features.on(crate::features::NDI) && mxl.is_some() {
+                cfg.ndi_outputs.iter().filter(|o| o.enabled && o.source.is_empty()).map(|o| {
+                    let st = s2.ndi_outputs.status_of(&o.id);
+                    json!({
+                        "id": o.id,
+                        "name": o.name,
+                        "mxlFlow": out_flow(&o.flow()).to_string(),
+                        "audioFlow": out_flow(&crate::streams::audio_of(&o.flow())).to_string(),
+                        "connections": st.as_ref().and_then(|x| x.connections),
+                    })
+                }).collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            },
             // Un flux sortant : où l'appli qui l'envoie publie aussi ses images (pour l'aperçu).
             "flows": cfg.flows.iter().map(|f| {
                 let mut v = json!(f);

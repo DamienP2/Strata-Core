@@ -33,6 +33,8 @@ pub struct AppState {
     pub captures: crate::hardware::capture::Captures,
     /// Les sorties SDI tenues par le Core (avec MXL).
     pub playouts: crate::hardware::playout::Playouts,
+    /// Les destinations NDI.
+    pub ndi_outputs: crate::hardware::ndi_out::NdiOutputs,
     /// Les aperçus des réglages (entrées, sorties, flux), seulement pendant qu'on regarde.
     pub previews: crate::hardware::preview::Previews,
     /// Les flux ST 2110 reçus et envoyés par le Core (MTL).
@@ -91,6 +93,7 @@ impl AppState {
             clock: Default::default(),
             captures: Default::default(),
             playouts: Default::default(),
+            ndi_outputs: Default::default(),
             previews: Default::default(),
             mxl: Default::default(),
             st2110: Default::default(),

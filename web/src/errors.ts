@@ -50,6 +50,12 @@ const SHAPED: [RegExp, string, string[]][] = [
   [/^ffmpeg is missing \((.+)\): run the installer again and choose Repair, or sudo apt install ffmpeg$/, 'ffmpeg is missing ({why}): run the installer again and choose Repair, or sudo apt install ffmpeg', ['why']],
   [/^MXL cannot open its folder \((.+)\): run the installer again and choose Repair, then restart the Core$/, 'MXL cannot open its folder ({why}): run the installer again and choose Repair, then restart the Core', ['why']],
   [/^MXL does not load \((.+)\): run the installer again and choose Update$/, 'MXL does not load ({why}): run the installer again and choose Update', ['why']],
+  // Destinations NDI
+  [/^(.+): bad NDI destination id$/, '{name}: bad NDI destination id', ['name']],
+  [/^two NDI destinations have the id (.+)$/, 'Two NDI destinations have the id {id}', ['id']],
+  [/^(.+): an NDI name has no brackets and at most 100 characters$/, '{name}: an NDI name has no brackets and at most 100 characters', ['name']],
+  [/^two NDI destinations are called (.+)$/, 'Two NDI destinations are called {name}', ['name']],
+  [/^(.+): NDI groups are names separated by commas$/, '{name}: NDI groups are names separated by commas', ['name']],
   [/^(.+): the SRT mode is caller, listener or rendezvous$/, '{name}: the SRT mode is caller, listener or rendezvous', ['name']],
   [/^(.+): the SRT passphrase has 10 to 79 characters$/, '{name}: the SRT passphrase has 10 to 79 characters', ['name']],
   [/^(.+): the SRT key length is 16, 24 or 32$/, '{name}: the SRT key length is 16, 24 or 32', ['name']],

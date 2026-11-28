@@ -101,7 +101,7 @@ fn view(s: &Shared, cfg: &StreamsConfig) -> Value {
 }
 
 /// Les flux du serveur qu'une sortie peut envoyer : entrées réseau, SDI, ST 2110 reçus.
-fn sources(s: &Shared, cfg: &StreamsConfig) -> Vec<Value> {
+pub(crate) fn sources(s: &Shared, cfg: &StreamsConfig) -> Vec<Value> {
     let mut v: Vec<Value> = cfg.inputs.iter().map(|i| json!({"flow": input_flow(&i.id), "label": i.name, "kind": "stream"})).collect();
     let hw = crate::hardware::HardwareConfig::load(&s.data_dir);
     for c in &hw.cards {

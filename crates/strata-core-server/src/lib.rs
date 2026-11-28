@@ -288,6 +288,7 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
         s2.streams.stop_all();
         s2.st2110.stop_all();
         s2.playouts.stop_all();
+        s2.ndi_outputs.stop_all();
         s2.captures.stop_all();
     })
     .await;

@@ -1,7 +1,7 @@
 // Réglages › Matériel : Cartes SDI, NDI, ST 2110, Réseau, Horloge. Les réglages sont partagés par
 // les cinq pages (store.ts) et enregistrés d'un coup.
 import { Suspense, lazy, useEffect, useState } from 'react';
-import { Cable, Gauge, MonitorPlay, Network as NetIcon, Pencil, Radio, RefreshCw, Search, Trash2, Waves } from 'lucide-react';
+import { Cable, Gauge, MonitorPlay, Network as NetIcon, Pencil, RefreshCw, Trash2, Waves } from 'lucide-react';
 import { Badge, Card, Dropdown, Empty, Field, FieldGrid, InfoTip, Modal, NumberField, PageHead, Segmented, Switch, confirmDialog, t, tn, toast, type DropOption } from '@strata/ui';
 import { navigate } from '../../router';
 import { api, movedTo } from '../../api';
@@ -9,8 +9,8 @@ import { friendly } from '../../errors';
 import { HwSaveBar, useHardware } from './common';
 import { Meter } from '../health/Resources';
 import { TagInput } from '../TagInput';
-import { InputsCard, OutputsCard, Preview, Tile } from './Inputs';
-import { useMounted, usePoll, useRepeat } from '../../poll';
+import { InputsCard, OutputsCard } from './Inputs';
+import { usePoll } from '../../poll';
 import { SDI_COLOR, printedOf } from './decklink';
 // La carte en 3D (et three.js) n'est chargée que là où une carte SDI est dessinée.
 const DeckLink3D = lazy(() => import('./Card3D').then((m) => ({ default: m.DeckLink3D })));
@@ -827,95 +827,5 @@ export function NetworkPage() {
 
 /** Les sources NDI du réseau, cherchées à l'ouverture puis toutes les 10 s, chacune avec son
  *  aperçu (reçu en basse qualité pendant qu'on regarde). */
-function NdiSources() {
-  const [sources, setSources] = useState<string[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [looking, setLooking] = useState(false);
-  const mounted = useMounted();
-  // `alive` : faux une fois la page quittée (ou la recherche régulière arrêtée) ; rien ne change alors.
-  const look = async (alive: () => boolean = mounted) => {
-    setLooking(true);
-    try {
-      const r = await api<{ sources: string[] }>('GET', '/api/hardware/ndi/sources');
-      if (alive()) {
-        setSources((cur) => (JSON.stringify(cur) === JSON.stringify(r.sources) ? cur : r.sources));
-        setError(null);
-      }
-    } catch (e) {
-      if (alive()) setError(friendly(e));
-    }
-    if (mounted()) setLooking(false);
-  };
-  useRepeat('ndi', 10000, (alive) => look(alive));
-  return (
-    <Card
-      icon={<Search size={16} />}
-      title={sources ? tn(sources.length, '{n} visible source', '{n} visible sources') : t('Visible sources')}
-      actions={
-        <button type="button" className="st-btn small" disabled={looking} onClick={() => void look()}>
-          <RefreshCw size={13} className={looking ? 'st-spin' : undefined} /> {t('Look again')}
-        </button>
-      }
-    >
-      {error && <p className="core-warn">{error}</p>}
-      {sources === null ? (
-        <span className="st-muted">{t('Looking…')}</span>
-      ) : sources.length === 0 ? (
-        <span className="st-muted">{t('No source seen')}</span>
-      ) : (
-        <div className="core-inputs">
-          {sources.map((name) => {
-            const m = /^(.*?) \((.*)\)$/.exec(name);
-            return (
-              <Tile
-                key={name}
-                pic={<Preview src={`/api/hardware/ndi/${encodeURIComponent(name)}/preview.jpg`} on empty={t('No picture')} />}
-                head={<strong>{m ? m[2] : name}</strong>}
-                sub={m ? m[1] : undefined}
-                foot={null}
-              />
-            );
-          })}
-        </div>
-      )}
-    </Card>
-  );
-}
-
-export function NdiPage() {
-  const hw = useHardware();
-  if (!hw) return null;
-  const [snap, draft] = hw;
-  return (
-    <>
-      <PageHead title="NDI" sub={snap.ndi.path ? `${t('NDI library')}${snap.ndi.version ? ` · ${snap.ndi.version}` : ''}` : t('NDI library not installed')} />
-      <Card icon={<Radio size={16} />} title={t('NDI library')}>
-        {snap.ndi.path ? (
-          <div className="core-service">
-            <Badge tone="ok">{t('Installed')}</Badge>
-            <span className="st-mono st-muted">{snap.ndi.path}</span>
-          </div>
-        ) : (
-          <p className="st-muted core-note">{t('The NDI library (libndi) is not installed: the installer sets it up, after its licence is accepted.')}</p>
-        )}
-      </Card>
-      <Card icon={<NetIcon size={16} />} title={t('NDI network')}>
-        <FieldGrid>
-          <Field label={t('Interface')} hint={t('Also set in Network.')} group>
-            <Dropdown value={draft.network.ndi} options={nicOptions(snap.nics)} onChange={(v) => editHw((x) => void (x.network.ndi = v))} />
-          </Field>
-          <Field label={t('Discovery server')} hint={t('Empty: the sources announce themselves (mDNS).')}>
-            <input className="st-mono" value={draft.ndi.discovery} placeholder="10.0.0.2" onChange={(e) => editHw((x) => void (x.ndi.discovery = e.target.value))} />
-          </Field>
-          <Field label={t('Machine name')} hint={t('Receivers see “NAME (source)”.')}>
-            <input value={draft.ndi.machine} placeholder={t('The computer’s')} onChange={(e) => editHw((x) => void (x.ndi.machine = e.target.value))} />
-          </Field>
-        </FieldGrid>
-      </Card>
-      {snap.ndi.path && <NdiSources />}
-      <HwSaveBar />
-    </>
-  );
-}
-
+export { NdiPage } from './Ndi';
 export { ClockPage } from './Clock';

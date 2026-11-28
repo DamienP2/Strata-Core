@@ -169,7 +169,7 @@ impl Drop for Playouts {
     }
 }
 
-fn format_of(v: &Video) -> String {
+pub(crate) fn format_of(v: &Video) -> String {
     let r = v.rate.0 as f64 / v.rate.1.max(1) as f64 * if v.interlaced { 2.0 } else { 1.0 };
     let r = (r * 100.0).round() / 100.0;
     format!("{}{}{}", v.height, if v.interlaced { 'i' } else { 'p' }, if r.fract() == 0.0 { format!("{r:.0}") } else { format!("{r}") })

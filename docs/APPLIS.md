@@ -148,12 +148,20 @@ GET $STRATA_CORE_URL/api/hardware/shared
 | `network` | les interfaces et leur adresse : `management`, `ndi`, `media1`, `media2`, `ptp` ; `mediaMode` : `redundant` (SMPTE 2022-7 : `media1` rouge, `media2` bleu) ou `separate` (deux ports indépendants) |
 | `flows` | les flux ST 2110 : identifiant (`id`), nom, sens, essence, `red` (et `blue` en 2022-7), `port` (1 ou 2, ports indépendants) ; pour un flux envoyé, le fichier où publier ses images (`share`) |
 | `ndi` | le dossier des réglages NDI (`configDir`), le serveur de découverte, le nom de machine |
+| `ndiOutputs` | les destinations NDI qu'une appli alimente (Réglages › NDI › Destinations) : `id`, `name` (la source NDI), `mxlFlow` (l'image, v210) et `audioFlow` (le son, float32 48 kHz) à écrire, `connections` (récepteurs branchés) |
 | `ptp` | le domaine PTP, le décalage TAI − UTC |
 | `gpus` | les GPU : fabricant, nom, pilote, nœud de rendu (`renderNode`), interface (`nvenc` ou `vaapi`), codecs encodés et décodés, prêt ou non |
 | `clock` | d'où le serveur prend l'heure (`ptp` ou `ntp`), le timecode maison (`house` : cadence, heure locale / UTC / décalage, drop frame, recalage quotidien) et le fuseau du serveur |
 
 NDI : le Core donne `NDI_CONFIG_DIR` à l'appli qu'il lance ; la bibliothèque NDI y lit l'interface,
 le serveur de découverte et le nom de machine, les mêmes pour toutes les applis.
+
+Destinations NDI : plutôt que d'ouvrir un émetteur NDI elle-même, une appli peut écrire ses images et
+son son dans les flux MXL d'une destination de `ndiOutputs` ; le Core les envoie en NDI (UYVY 8 bits,
+cadencé par NDI, son float plan par plan, calé sur l'image comme pour les flux réseau), avec du noir
+quand rien n'arrive. Une destination peut aussi envoyer un flux du serveur (entrée SDI, ST 2110,
+flux réseau) sans appli. Sans bibliothèque NDI, rien ne part et la page le dit ; le reste du Core
+tourne normalement.
 
 ## Le timecode maison
 
