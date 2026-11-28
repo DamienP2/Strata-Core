@@ -44,6 +44,15 @@ pub fn routes() -> Router<Shared> {
         .route("/live/{id}/player.js", get(live_player))
 }
 
+/// L'adresse d'une destination servie par le Core (HLS, HTML5).
+fn served_url(o: &OutputCfg) -> Value {
+    match o.url.as_str() {
+        "hls" => json!(format!("/hls/{}/index.m3u8", o.id)),
+        "html5" => json!(format!("/live/{}/", o.id)),
+        _ => Value::Null,
+    }
+}
+
 fn mxl_id(name: &str) -> String {
     strata_mxl::flow_id(name).to_string()
 }
@@ -69,18 +78,15 @@ fn view(s: &Shared, cfg: &StreamsConfig) -> Value {
         .iter()
         .map(|o| {
             let mut o = o.clone();
-            for d in &mut o.destinations {
-                if !d.key.is_empty() {
-                    d.key = MASK.into();
-                }
-                d.opts.mask(MASK);
+            if !o.key.is_empty() {
+                o.key = MASK.into();
             }
+            o.opts.mask(MASK);
             let mut v = serde_json::to_value(&o).unwrap_or_default();
             let src = if o.source.trim().is_empty() { output_flow(&o.id) } else { o.source.clone() };
             v["mxlFlow"] = json!(mxl_id(&src));
             v["audioFlow"] = json!(mxl_id(&audio_of(&src)));
-            v["hlsUrl"] = if o.destinations.iter().any(|d| d.url == "hls") { json!(format!("/hls/{}/index.m3u8", o.id)) } else { Value::Null };
-            v["liveUrl"] = if o.destinations.iter().any(|d| d.url == "html5") { json!(format!("/live/{}/", o.id)) } else { Value::Null };
+            v["servedUrl"] = served_url(&o);
             v["status"] = json!(s.streams.output_status(&o.id));
             v
         })
@@ -108,6 +114,10 @@ fn sources(s: &Shared, cfg: &StreamsConfig) -> Vec<Value> {
     }
     for f in hw.flows.iter().filter(|f| f.essence == crate::hardware::Essence::Video && f.direction == crate::hardware::Direction::Input) {
         v.push(json!({"flow": format!("2110/{}", f.id), "label": f.name, "kind": "2110"}));
+    }
+    // Le flux qu'une appli écrit pour une destination : envoyé aussi ailleurs.
+    for o in cfg.outputs.iter().filter(|o| o.source.trim().is_empty()) {
+        v.push(json!({"flow": output_flow(&o.id), "label": o.name, "kind": "app", "output": o.id}));
     }
     v
 }
@@ -167,13 +177,10 @@ async fn read(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResul
 fn keep_keys(new: &mut StreamsConfig, old: &StreamsConfig) {
     for o in &mut new.outputs {
         let before = old.outputs.iter().find(|x| x.id == o.id);
-        for d in &mut o.destinations {
-            let old_d = before.and_then(|b| b.destinations.iter().find(|x| x.id == d.id));
-            if d.key == MASK {
-                d.key = old_d.map(|x| x.key.clone()).unwrap_or_default();
-            }
-            d.opts.keep(old_d.map(|x| &x.opts), MASK);
+        if o.key == MASK {
+            o.key = before.map(|x| x.key.clone()).unwrap_or_default();
         }
+        o.opts.keep(before.map(|x| &x.opts), MASK);
     }
     for i in &mut new.inputs {
         let old_i = old.inputs.iter().find(|x| x.id == i.id);
@@ -198,6 +205,7 @@ async fn write(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(mut c
     blocking(move || {
         let _w = super::write_lock();
         let old = StreamsConfig::load(&s2.data_dir);
+        cfg.split_old_outputs();
         keep_app_outputs(&mut cfg, &old);
         keep_keys(&mut cfg, &old);
         cfg.check().map_err(bad)?;
@@ -249,12 +257,25 @@ struct AppOutput {
     enabled: bool,
     #[serde(default)]
     format: String,
+    /// Le flux MXL envoyé : vide, le sien (`stream-out/<appli>-<id>`) ; sinon un autre (celui
+    /// d'une autre de ses destinations : le même flux envoyé à plusieurs endroits).
+    #[serde(default)]
+    source: String,
     #[serde(default)]
     video_kbps: Option<u32>,
     #[serde(default)]
     audio_kbps: Option<u32>,
     #[serde(default)]
     encoder: Option<String>,
+    /// Où elle part : `rtmp://…`, `srt://…`, `udp://…`, `rtp://…`, `rist://…`, `hls`, `html5`.
+    #[serde(default)]
+    url: String,
+    /// La clé de diffusion ; absente : la précédente.
+    #[serde(default)]
+    key: String,
+    #[serde(default)]
+    opts: super::ProtoOpts,
+    /// L'ancien format (plusieurs destinations) : découpé en plusieurs sorties.
     #[serde(default)]
     destinations: Vec<Destination>,
 }
@@ -291,7 +312,8 @@ fn app_view(s: &Shared, o: &OutputCfg) -> Value {
         "enabled": o.enabled,
         "mxlFlow": mxl_id(&output_flow(&o.id)),
         "audioFlow": mxl_id(&audio_of(&output_flow(&o.id))),
-        "destinations": o.destinations.iter().map(|d| json!({"id": d.id, "name": d.name, "enabled": d.enabled})).collect::<Vec<_>>(),
+        "url": super::redacted(&o.url),
+        "servedUrl": served_url(o),
         "status": s.streams.output_status(&o.id),
     })
 }
@@ -335,6 +357,10 @@ async fn app_put(
             name: if b.name.trim().is_empty() { id.clone() } else { b.name.clone() },
             enabled: b.enabled,
             format: b.format.clone(),
+            source: b.source.trim().to_string(),
+            url: b.url.clone(),
+            key: if b.key.is_empty() { MASK.into() } else { b.key.clone() },
+            opts: b.opts.clone(),
             destinations: b.destinations.clone(),
             app: Some(b.app.clone()),
             ..OutputCfg::default()
@@ -354,10 +380,16 @@ async fn app_put(
                 d.key = MASK.into();
             }
         }
+        // L'ancien format redonné : ses sorties découpées la fois d'avant sont remplacées.
+        if o.destinations.len() > 1 {
+            let tail = format!("{oid}-");
+            cfg.outputs.retain(|x| !(x.app.as_deref() == Some(b.app.as_str()) && x.id.starts_with(&tail)));
+        }
         match cfg.outputs.iter_mut().find(|x| x.id == oid) {
             Some(x) => *x = o,
             None => cfg.outputs.push(o),
         }
+        cfg.split_old_outputs();
         keep_keys(&mut cfg, &old);
         cfg.check().map_err(bad)?;
         cfg.save(&s2.data_dir).map_err(bad)?;
@@ -404,7 +436,7 @@ async fn hls(State(s): State<Shared>, UrlPath((id, file)): UrlPath<(String, Stri
         return Err((StatusCode::NOT_FOUND, "not found".into()));
     }
     let cfg = StreamsConfig::load(&s.data_dir);
-    if !cfg.outputs.iter().any(|o| o.id == id && o.enabled && o.destinations.iter().any(|d| d.enabled && d.url == "hls")) {
+    if !cfg.outputs.iter().any(|o| o.id == id && o.enabled && o.url == "hls") {
         return Err((StatusCode::NOT_FOUND, "not found".into()));
     }
     let path = s.data_dir.join("streams").join("hls").join(&id).join(&file);
@@ -421,7 +453,7 @@ async fn hls(State(s): State<Shared>, UrlPath((id, file)): UrlPath<(String, Stri
 /// La sortie a-t-elle une destination HTML5 en marche ? (son nom, pour la page)
 fn live_output(s: &Shared, id: &str) -> Option<String> {
     let cfg = StreamsConfig::load(&s.data_dir);
-    cfg.outputs.into_iter().find(|o| o.id == id && o.enabled && o.destinations.iter().any(|d| d.enabled && d.url == "html5")).map(|o| o.name)
+    cfg.outputs.into_iter().find(|o| o.id == id && o.enabled && o.url == "html5").map(|o| o.name)
 }
 
 async fn live_page(State(s): State<Shared>, UrlPath(id): UrlPath<String>, uri: axum::http::Uri) -> ApiResult<axum::response::Response> {
@@ -492,14 +524,16 @@ mod tests {
 
     #[test]
     fn masked_keys_keep_their_value() {
-        let d = |key: &str| Destination { id: "d1".into(), url: "rtmp://x/live".into(), key: key.into(), enabled: true, ..Default::default() };
-        let old = StreamsConfig { outputs: vec![OutputCfg { id: "p".into(), destinations: vec![d("secret")], ..Default::default() }], ..Default::default() };
-        let mut new = StreamsConfig { outputs: vec![OutputCfg { id: "p".into(), destinations: vec![d(MASK)], ..Default::default() }], ..Default::default() };
+        let d = |key: &str| StreamsConfig {
+            outputs: vec![OutputCfg { id: "p".into(), url: "rtmp://x/live".into(), key: key.into(), ..Default::default() }],
+            ..Default::default()
+        };
+        let old = d("secret");
+        let mut new = d(MASK);
         keep_keys(&mut new, &old);
-        assert_eq!(new.outputs[0].destinations[0].key, "secret");
-        let mut changed =
-            StreamsConfig { outputs: vec![OutputCfg { id: "p".into(), destinations: vec![d("new")], ..Default::default() }], ..Default::default() };
+        assert_eq!(new.outputs[0].key, "secret");
+        let mut changed = d("new");
         keep_keys(&mut changed, &old);
-        assert_eq!(changed.outputs[0].destinations[0].key, "new");
+        assert_eq!(changed.outputs[0].key, "new");
     }
 }

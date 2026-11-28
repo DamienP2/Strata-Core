@@ -4,10 +4,11 @@
 //!   (`stream-in/<id>` : l'image en v210 ; `stream-in/<id>/audio` : le son, float32 48 kHz). Les
 //!   applis les lisent comme une entrée SDI. Le flux d'origine est aussi remis tel quel en local
 //!   (TS sur `udp://127.0.0.1:<port>`) pour une appli qui enregistre ou relaie sans décoder.
-//! - **Sorties** : le Core lit un flux MXL (celui qu'une appli écrit, `stream-out/<id>`, ou une
-//!   entrée du serveur), l'encode une fois (GPU si possible) et l'envoie à chaque destination
-//!   (RTMP(S), SRT, UDP, RIST, HLS servi par le Core, lecteur HTML5 servi par le Core). Du noir et du silence quand rien n'arrive.
-//!   Une destination qui tombe est relancée seule, sans couper les autres.
+//! - **Destinations** (les sorties) : chacune indépendante. Le Core lit un flux MXL (celui qu'une
+//!   appli écrit, `stream-out/<id>`, ou une entrée du serveur), l'encode (GPU si possible) et
+//!   l'envoie à une adresse (RTMP(S), SRT, UDP, RIST, HLS ou lecteur HTML5 servis par le Core).
+//!   Du noir et du silence quand rien n'arrive. Une appli qui veut le même flux à plusieurs
+//!   endroits déclare plusieurs destinations.
 //!
 //! Les réglages sont dans `streams.json` (droits 0600 : les clés de diffusion).
 pub mod api;
@@ -168,7 +169,7 @@ impl ProtoOpts {
     }
 }
 
-/// Une destination d'une sortie.
+/// Où part une sortie (pour le moteur ; l'ancien format des réglages en avait plusieurs).
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Destination {
@@ -183,7 +184,8 @@ pub struct Destination {
     pub opts: ProtoOpts,
 }
 
-/// Une sortie réseau.
+/// Une sortie réseau (une destination, dans l'interface) : ce qu'elle envoie, comment c'est
+/// encodé, où ça part.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct OutputCfg {
@@ -200,6 +202,14 @@ pub struct OutputCfg {
     pub audio_kbps: u32,
     /// `auto` (GPU si possible), `nvenc`, `vaapi`, `x264`.
     pub encoder: String,
+    /// `rtmp://a.rtmp.youtube.com/live2`, `srt://cdn:9000`, `udp://239.1.1.1:5000`, `hls`, `html5`.
+    pub url: String,
+    /// La clé de diffusion (ajoutée à l'URL RTMP, `streamid` en SRT).
+    pub key: String,
+    /// Les réglages propres au protocole.
+    pub opts: ProtoOpts,
+    /// L'ancien format (plusieurs destinations par sortie) : lu, puis découpé en sorties.
+    #[serde(skip_serializing)]
     pub destinations: Vec<Destination>,
     /// L'appli qui l'a déclarée (API des applis) ; None : réglée à la main.
     pub app: Option<String>,
@@ -216,9 +226,19 @@ impl Default for OutputCfg {
             video_kbps: 6000,
             audio_kbps: 192,
             encoder: "auto".into(),
+            url: String::new(),
+            key: String::new(),
+            opts: ProtoOpts::default(),
             destinations: Vec::new(),
             app: None,
         }
+    }
+}
+
+impl OutputCfg {
+    /// Où elle part, pour le moteur.
+    pub fn target(&self) -> Destination {
+        Destination { id: "d1".into(), name: self.name.clone(), url: self.url.clone(), key: self.key.clone(), enabled: true, opts: self.opts.clone() }
     }
 }
 
@@ -238,7 +258,42 @@ impl StreamsConfig {
     }
 
     pub fn load(data_dir: &Path) -> StreamsConfig {
-        std::fs::read_to_string(Self::path(data_dir)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+        let mut c: StreamsConfig = std::fs::read_to_string(Self::path(data_dir)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        c.split_old_outputs();
+        c
+    }
+
+    /// L'ancien format : une sortie à plusieurs destinations devient une sortie par destination
+    /// (la première garde l'identifiant, les autres `<sortie>-<destination>` et envoient le même
+    /// flux : celui que l'appli écrit pour la première).
+    pub fn split_old_outputs(&mut self) {
+        let mut out = Vec::with_capacity(self.outputs.len());
+        for mut o in std::mem::take(&mut self.outputs) {
+            let old = std::mem::take(&mut o.destinations);
+            if !o.url.is_empty() || old.is_empty() {
+                out.push(o);
+                continue;
+            }
+            let many = old.len() > 1;
+            for (n, d) in old.into_iter().enumerate() {
+                let mut x = o.clone();
+                if n > 0 {
+                    let tail: String = if d.id.is_empty() { format!("{}", n + 1) } else { d.id.to_ascii_lowercase() };
+                    x.id = format!("{}-{}", o.id, tail);
+                    if x.source.trim().is_empty() {
+                        x.source = output_flow(&o.id);
+                    }
+                }
+                if many {
+                    let what = if d.name.is_empty() { d.url.split("://").next().unwrap_or("").to_uppercase() } else { d.name.clone() };
+                    x.name = format!("{} · {}", o.name, what);
+                }
+                x.enabled = o.enabled && d.enabled;
+                (x.url, x.key, x.opts) = (d.url, d.key, d.opts);
+                out.push(x);
+            }
+        }
+        self.outputs = out;
     }
 
     pub fn save(&self, data_dir: &Path) -> Result<(), String> {
@@ -262,6 +317,7 @@ impl StreamsConfig {
 
     /// Vérifie et complète : identifiants, noms, ports du relais (uniques).
     pub fn check(&mut self) -> Result<(), String> {
+        self.split_old_outputs();
         let valid_id = |id: &str| !id.is_empty() && id.len() <= 48 && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
         let mut ids = std::collections::HashSet::new();
         let mut ports = std::collections::HashSet::new();
@@ -304,26 +360,13 @@ impl StreamsConfig {
             }
             o.video_kbps = o.video_kbps.clamp(300, 100_000);
             o.audio_kbps = o.audio_kbps.clamp(32, 512);
-            let mut dids = std::collections::HashSet::new();
-            let mut served = std::collections::HashSet::new();
-            for (n, d) in o.destinations.iter_mut().enumerate() {
-                d.url = d.url.trim().to_string();
-                d.key = d.key.trim().to_string();
-                if d.id.trim().is_empty() {
-                    d.id = format!("d{}", n + 1);
-                }
-                if !dids.insert(d.id.clone()) {
-                    return Err(format!("{}: two destinations are named {}", o.name, d.id));
-                }
-                if !matches!(d.url.as_str(), "hls" | "html5") && !matches!(scheme(&d.url), Some("rtmp" | "rtmps" | "srt" | "udp" | "rtp" | "rist")) {
-                    return Err(format!("{}: {} is not a destination (rtmp://, rtmps://, srt://, udp://, rtp://, rist://, hls or html5)", o.name, d.url));
-                }
-                if matches!(d.url.as_str(), "hls" | "html5") && !served.insert(d.url.clone()) {
-                    return Err(format!("{}: only one {} destination per output", o.name, d.url.to_uppercase()));
-                }
-                let label = format!("{} › {}", o.name, if d.name.is_empty() { &d.url } else { &d.name });
-                d.opts.check(&label)?;
+            o.url = o.url.trim().to_string();
+            o.key = o.key.trim().to_string();
+            if !matches!(o.url.as_str(), "hls" | "html5") && !matches!(scheme(&o.url), Some("rtmp" | "rtmps" | "srt" | "udp" | "rtp" | "rist")) {
+                return Err(format!("{}: {} is not a destination (rtmp://, rtmps://, srt://, udp://, rtp://, rist://, hls or html5)", o.name, o.url));
             }
+            let label = o.name.clone();
+            o.opts.check(&label)?;
         }
         // Les relais sans port : les suivants libres.
         let mut next = RELAY_BASE;
@@ -437,11 +480,13 @@ mod tests {
             ],
             outputs: vec![OutputCfg {
                 id: "prog".into(),
+                name: "Prog".into(),
                 video_kbps: 50,
                 encoder: "quantum".into(),
+                // L'ancien format, découpé : une sortie par destination.
                 destinations: vec![
                     Destination { url: "rtmp://a.rtmp.youtube.com/live2".into(), key: " abcd ".into(), enabled: true, ..Default::default() },
-                    Destination { url: "hls".into(), enabled: true, ..Default::default() },
+                    Destination { id: "web".into(), name: "Web".into(), url: "hls".into(), enabled: false, ..Default::default() },
                 ],
                 ..Default::default()
             }],
@@ -452,7 +497,12 @@ mod tests {
         assert_eq!((c.inputs[0].relay_port, c.inputs[1].relay_port), (20000, 20002));
         let o = &c.outputs[0];
         assert_eq!((o.video_kbps, o.encoder.as_str()), (300, "auto"));
-        assert_eq!((o.destinations[0].id.as_str(), o.destinations[0].key.as_str(), o.destinations[1].id.as_str()), ("d1", "abcd", "d2"));
+        assert_eq!(c.outputs.len(), 2);
+        assert_eq!((o.id.as_str(), o.name.as_str(), o.key.as_str(), o.enabled), ("prog", "Prog · RTMP", "abcd", true));
+        let w = &c.outputs[1];
+        assert_eq!((w.id.as_str(), w.name.as_str(), w.url.as_str(), w.enabled, w.video_kbps), ("prog-web", "Prog · Web", "hls", false, 300));
+        assert_eq!(w.source, "stream-out/prog");
+        assert!(!serde_json::to_string(&c).unwrap().contains("destinations"));
         let mut bad = c.clone();
         bad.inputs[1].url = "ftp://x".into();
         assert!(bad.check().is_err());
@@ -460,7 +510,7 @@ mod tests {
         bad.outputs[0].format = "1080i50".into();
         assert!(bad.check().is_err());
         let mut bad = c.clone();
-        bad.outputs[0].destinations[0].url = "http://x".into();
+        bad.outputs[0].url = "http://x".into();
         assert!(bad.check().is_err());
     }
 }

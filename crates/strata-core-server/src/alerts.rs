@@ -434,12 +434,7 @@ fn look(s: &AppState) -> Vec<Problem> {
             let Some(st) = s.streams.output_status(&o.id) else { continue };
             // En train de réessayer après un échec : toujours en panne (sinon l'alerte bat).
             for d in st.destinations.iter().filter(|d| d.state == St::Error || (d.state == St::Starting && d.error.is_some())) {
-                let label = o
-                    .destinations
-                    .iter()
-                    .find(|x| x.id == d.id)
-                    .map(|x| if x.name.is_empty() { x.url.clone() } else { x.name.clone() })
-                    .unwrap_or_else(|| d.id.clone());
+                let label = if o.name.is_empty() { crate::streams::redacted(&o.url) } else { o.name.clone() };
                 let why = d.error.clone().unwrap_or_default();
                 push(
                     format!("stream-out:{}:{}", o.id, d.id),

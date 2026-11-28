@@ -167,14 +167,7 @@
 /* Flux réseau (Réglages › Flux réseau) */
 .core-stream-foot { display: flex; flex-direction: column; gap: 4px; font-size: 11px; min-width: 0; }
 .core-stream-foot > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.core-stream-dest { display: flex; align-items: center; gap: 6px; }
-.core-stream-dest .st-mono { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .core-stream-actions { display: flex; justify-content: flex-end; gap: 2px; }
-.core-subhead { margin: 14px 0 6px; font-size: var(--fs-12); text-transform: uppercase; letter-spacing: .04em; color: var(--text-3); }
-.core-dest-row { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-bottom: 8px; }
-.core-dest-tools { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
-.core-dest-tools input { flex: 1; min-width: 0; }
-.core-dest-add { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 8px; }
 @media (max-width: 1100px) { .core-hw-body { flex-direction: column; } .core-hw-figure { flex-basis: auto; width: 100%; } }
 
 /* Une section repliée par défaut (le détail technique, les éléments secondaires). */
@@ -305,4 +298,3 @@ button.core-hw-role.on { border-style: solid; background: color-mix(in srgb, var
 @media (max-width: 700px) { .core-ess-row, .core-ess-row.one { grid-template-columns: 1fr; } }
 .core-served { display: inline-flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent); text-decoration: none; }
 .core-served:hover { text-decoration: underline; }
-.core-stream-dest .core-served { flex: 1; }

@@ -213,7 +213,7 @@ impl Engine {
             None => Vec::new(),
         };
         let wanted_out: Vec<(OutputCfg, Video)> = match &env {
-            Some(e) => cfg.outputs.iter().filter(|o| o.enabled && o.destinations.iter().any(|d| d.enabled)).map(|o| (o.clone(), e.house)).collect(),
+            Some(e) => cfg.outputs.iter().filter(|o| o.enabled && !o.url.is_empty()).map(|o| (o.clone(), e.house)).collect(),
             None => Vec::new(),
         };
         // D'abord arrêtées : une entrée changée libère son port d'écoute (RTMP, SRT en écoute), une
@@ -258,7 +258,7 @@ impl Engine {
                 let stop = Arc::new(AtomicBool::new(false));
                 let status = self.out_status.clone();
                 let (c, s) = (w.0.clone(), stop.clone());
-                tracing::info!("network output {} ({} destinations)", c.name, c.destinations.iter().filter(|d| d.enabled).count());
+                tracing::info!("network output {} ({})", c.name, super::redacted(&c.url));
                 let thread = std::thread::Builder::new().name(format!("out-{}", c.id)).spawn(move || run_output(&c, &env, &s, &status)).ok();
                 run.insert(w.0.id.clone(), Running { key: w, stop, thread });
             }
@@ -891,7 +891,7 @@ fn run_output(c: &OutputCfg, env: &Env, stop: &AtomicBool, status: &Mutex<HashMa
     let src = source_of(c);
     let (vid, aid) = (strata_mxl::flow_id(&src), strata_mxl::flow_id(&audio_of(&src)));
     let hls_dir = env.hls_dir.join(&c.id);
-    if c.destinations.iter().any(|d| d.enabled && d.url == "hls") {
+    if c.url == "hls" {
         let _ = std::fs::create_dir_all(&hls_dir);
     }
     let (mut encoder, mut node) = encoder_of(c, env);
@@ -967,10 +967,9 @@ fn feed_encoder(
     let stdout = p.child.stdout.take().ok_or("no encoder output")?;
     // Les destinations, chacune avec son ffmpeg.
     let dstop = Arc::new(AtomicBool::new(false));
-    let dstatus: Arc<Mutex<Vec<DestStatus>>> =
-        Arc::new(Mutex::new(c.destinations.iter().filter(|d| d.enabled).map(|d| DestStatus { id: d.id.clone(), ..Default::default() }).collect()));
+    let dstatus: Arc<Mutex<Vec<DestStatus>>> = Arc::new(Mutex::new(vec![DestStatus { id: "d1".into(), ..Default::default() }]));
     let mut dests: Vec<DestRun> = Vec::new();
-    for (i, d) in c.destinations.iter().filter(|d| d.enabled).enumerate() {
+    for (i, d) in [c.target()].iter().enumerate() {
         let (tx, rx) = mpsc::sync_channel::<Arc<Vec<u8>>>(512);
         let live = (d.url == "html5").then(|| env.live.channel(&c.id));
         let (d, dstop, dstatus, dir) = (d.clone(), dstop.clone(), dstatus.clone(), hls_dir.to_path_buf());

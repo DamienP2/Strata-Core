@@ -261,27 +261,33 @@ ffmpeg) : une appli ne parle jamais SRT ou RTMP, elle lit et écrit des flux MXL
   48 kHz stéréo ; du silence si la source n'en a pas). Le son est calé sur l'image : l'échantillon
   d'une image est à l'instant de son grain. `relay` (si réglé) : le flux d'origine, tel quel, en
   MPEG-TS sur `udp://127.0.0.1:<port>`, pour enregistrer ou relayer sans décoder.
-- **Les sorties** : une appli déclare la sienne, puis écrit son image et son son en MXL ; le Core
-  l'encode une fois (NVENC ou VA-API si le serveur a un GPU, sinon x264) et l'envoie à chaque
-  destination. Une destination qui tombe est relancée seule. Sans image depuis une seconde : du
-  noir et du silence, le flux continue.
+- **Les destinations** : chacune indépendante (un flux, un encodage, une adresse). Une appli
+  déclare la sienne, puis écrit son image et son son en MXL ; le Core l'encode (NVENC ou VA-API si
+  le serveur a un GPU, sinon x264) et l'envoie. Sans image depuis une seconde : du noir et du
+  silence, le flux continue. Le même flux à plusieurs endroits : une destination par endroit, les
+  suivantes avec `"source": "stream-out/<appli>-<id de la première>"` (le flux n'est écrit qu'une
+  fois).
 
 ```
 POST $STRATA_CORE_URL/api/streams/app/outputs/programme
-{"app": "livecut", "name": "Programme", "format": "1080p50", "videoKbps": 8000,
- "destinations": [
-   {"id": "yt", "name": "YouTube", "url": "rtmp://a.rtmp.youtube.com/live2", "key": "xxxx-xxxx", "enabled": true},
-   {"id": "hls", "url": "hls", "enabled": true}
- ]}
-→ {"id": "livecut-programme", "mxlFlow": "…", "audioFlow": "…", "status": {…}}
+{"app": "livecut", "name": "Programme YouTube", "format": "1080p50", "videoKbps": 8000,
+ "url": "rtmp://a.rtmp.youtube.com/live2", "key": "xxxx-xxxx"}
+→ {"id": "livecut-programme", "mxlFlow": "…", "audioFlow": "…", "url": "rtmp://a.rtmp.youtube.com/live2", "status": {…}}
+
+POST $STRATA_CORE_URL/api/streams/app/outputs/programme-web
+{"app": "livecut", "name": "Programme web", "source": "stream-out/livecut-programme", "url": "html5"}
+→ {"id": "livecut-programme-web", "servedUrl": "/live/livecut-programme-web/", …}
 ```
 
 - Depuis la machine, sans session (comme les alertes). L'identifiant devient `<appli>-<id>`.
 - Une clé non redonnée (vide) garde la précédente ; les clés ne sont jamais renvoyées.
-- `GET …/api/streams/app/outputs?app=livecut` : l'état de ses sorties (par destination : envoie,
-  erreur, débit) ; `DELETE …/api/streams/app/outputs/programme?app=livecut` la retire.
-- `"enabled": false` arrête l'envoi sans oublier la sortie.
-- Destinations : `rtmp://` et `rtmps://` (la clé s'ajoute à l'adresse), `srt://` (la clé part en
+- `GET …/api/streams/app/outputs?app=livecut` : l'état de ses destinations (envoie, erreur,
+  débit) ; `DELETE …/api/streams/app/outputs/programme?app=livecut` en retire une.
+- `"enabled": false` arrête l'envoi sans oublier la destination. `opts` : les réglages du
+  protocole (comme dans les réglages : `srtLatencyMs`, `srtPassphrase`, `ttl`…).
+- L'ancien format (`"destinations": [...]`, plusieurs adresses par sortie) est encore accepté : le
+  Core en fait une destination par adresse.
+- Adresses : `rtmp://` et `rtmps://` (la clé s'ajoute à l'adresse), `srt://` (la clé part en
   `streamid`), `udp://`, `rtp://`, `rist://` (MPEG-TS), `hls` : servi par le Core sur
   `/hls/<sortie>/index.m3u8`, et `html5` : un lecteur web servi par le Core sur `/live/<sortie>/`
   (MP4 fragmenté à moins d'une seconde du direct, à la cadence de la sortie ; le flux seul :

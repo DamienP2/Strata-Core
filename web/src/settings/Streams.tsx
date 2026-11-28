@@ -36,15 +36,6 @@ interface Input {
   status?: InputStatus | null;
 }
 
-interface Destination {
-  id: string;
-  name: string;
-  url: string;
-  key: string;
-  enabled: boolean;
-  opts?: ProtoOpts;
-}
-
 /** Les réglages propres au protocole (vide ou 0 : par défaut). */
 interface ProtoOpts {
   srtMode?: string;
@@ -95,11 +86,14 @@ interface Output {
   videoKbps: number;
   audioKbps: number;
   encoder: 'auto' | 'nvenc' | 'vaapi' | 'x264';
-  destinations: Destination[];
+  /** Où elle part : `rtmp://…`, `srt://…`, `hls`, `html5`… */
+  url: string;
+  key: string;
+  opts?: ProtoOpts;
   app?: string | null;
   mxlFlow?: string;
-  hlsUrl?: string | null;
-  liveUrl?: string | null;
+  /** L'adresse d'un flux servi par le Core (HLS, HTML5). */
+  servedUrl?: string | null;
   status?: OutputStatus | null;
 }
 
@@ -108,7 +102,8 @@ interface StreamsView {
   problem?: string | null;
   inputs: Input[];
   outputs: Output[];
-  sources: { flow: string; label: string; kind: string }[];
+  /** `output` : le flux qu'une appli écrit pour cette destination (envoyé aussi ailleurs). */
+  sources: { flow: string; label: string; kind: string; output?: string }[];
 }
 
 const MASK = '••••••••';
@@ -148,13 +143,11 @@ function withKind(url: string, k: Kind): string {
 const full = (path: string) => `${location.origin}${path}`;
 
 /** Le type de flux, puis l'adresse et les réglages de ce type. */
-function ProtoFields({ url, opts, output, kinds, taken = [], served, onUrl, onOpts, extra }: {
+function ProtoFields({ url, opts, output, kinds, served, onUrl, onOpts, extra }: {
   url: string;
   opts: ProtoOpts;
   output: boolean;
   kinds: Kind[];
-  /** Les types déjà pris (un seul HLS et un seul HTML5 par sortie). */
-  taken?: Kind[];
   /** L'adresse d'un flux servi par le Core (connue une fois la sortie enregistrée). */
   served?: string | null;
   onUrl: (u: string) => void;
@@ -193,7 +186,7 @@ function ProtoFields({ url, opts, output, kinds, taken = [], served, onUrl, onOp
         <Field label={t('Type')} group>
           <Dropdown
             value={kind ?? ''}
-            options={kinds.map((k) => ({ value: k, label: kindLabel(k), disabled: k !== kind && taken.includes(k) }))}
+            options={kinds.map((k) => ({ value: k, label: kindLabel(k) }))}
             onChange={(k) => onUrl(withKind(url, k as Kind))}
           />
         </Field>
@@ -305,7 +298,7 @@ const OUT_FORMATS = ['1080p25', '1080p50', '1080p59.94', '720p50', '720p59.94', 
 function clean(v: StreamsView) {
   return {
     inputs: v.inputs.map(({ id, name, url, enabled, format, relay, relayPort }) => ({ id, name, url, enabled, format, relay, relayPort })),
-    outputs: v.outputs.map(({ id, name, enabled, source, format, videoKbps, audioKbps, encoder, destinations, app }) => ({ id, name, enabled, source, format, videoKbps, audioKbps, encoder, destinations, app })),
+    outputs: v.outputs.map(({ id, name, enabled, source, format, videoKbps, audioKbps, encoder, url, key, opts, app }) => ({ id, name, enabled, source, format, videoKbps, audioKbps, encoder, url, key, opts, app })),
   };
 }
 
@@ -383,7 +376,7 @@ export function StreamsPage() {
   };
   const idsOf = (d: StreamsView) => [...d.inputs.map((x) => x.id), ...d.outputs.map((x) => x.id)];
   const newInput: Input = { id: '', name: '', url: '', enabled: true, format: '', relay: false, relayPort: 0 };
-  const newOutput: Output = { id: '', name: '', enabled: true, source: '', format: '', videoKbps: 6000, audioKbps: 192, encoder: 'auto', destinations: [] };
+  const newOutput: Output = { id: '', name: '', enabled: true, source: '', format: '', videoKbps: 6000, audioKbps: 192, encoder: 'auto', url: 'rtmp://', key: '' };
 
   return (
     <>
@@ -474,7 +467,8 @@ export function StreamsPage() {
             {data.outputs.map((o) => {
               const st = o.status;
               const src = o.source ? data.sources.find((s) => s.flow === o.source)?.label ?? o.source : o.app ? t('App {name}', { name: o.app }) : t('An app');
-              const sub = [src, st?.format, st?.encoder?.toUpperCase(), st && st.kbps > 0 ? `${Math.round(st.kbps)} kb/s` : null].filter(Boolean).join(' · ');
+              const ds = st?.destinations[0];
+              const sub = [proto(o.url), src, st?.format, st?.encoder?.toUpperCase()].filter(Boolean).join(' · ');
               return (
                 <Tile
                   key={o.id}
@@ -482,31 +476,28 @@ export function StreamsPage() {
                   head={
                     <>
                       <strong className="core-input-wire">{o.name}</strong>
-                      {o.enabled ? stateBadge(st?.state, st?.live ? t('On air') : t('Black on air')) : <Badge>{t('Off')}</Badge>}
+                      {!o.enabled ? (
+                        <Badge>{t('Off')}</Badge>
+                      ) : ds && ds.state !== 'running' ? (
+                        stateBadge(ds.state, '')
+                      ) : (
+                        stateBadge(st?.state, st?.live ? (ds && ds.kbps > 0 ? `${t('On air')} · ${Math.round(ds.kbps)} kb/s` : t('On air')) : t('Black on air'))
+                      )}
                     </>
                   }
                   sub={sub}
-                  error={o.enabled ? st?.error : null}
+                  error={o.enabled ? (ds?.error ? friendly(ds.error) : st?.error) : null}
                   foot={
                     <div className="core-stream-foot">
-                      {o.destinations.map((d) => {
-                        const ds = st?.destinations.find((x) => x.id === d.id);
-                        return (
-                          <span key={d.id} className="core-stream-dest" title={ds?.error ? friendly(ds.error) : d.url}>
-                            {!d.enabled ? <Badge>{t('Off')}</Badge> : ds ? stateBadge(ds.state, ds.kbps > 0 ? `${Math.round(ds.kbps)} kb/s` : t('Sending')) : <Badge>—</Badge>}
-                            <span>{d.name || proto(d.url)}</span>
-                            {d.url === 'hls' || d.url === 'html5' ? (
-                              (d.url === 'hls' ? o.hlsUrl : o.liveUrl) && (
-                                <a className="st-mono core-served" href={(d.url === 'hls' ? o.hlsUrl : o.liveUrl)!} target="_blank" rel="noreferrer">
-                                  {full((d.url === 'hls' ? o.hlsUrl : o.liveUrl)!)} <ExternalLink size={12} />
-                                </a>
-                              )
-                            ) : (
-                              <span className="st-mono st-muted">{d.url}</span>
-                            )}
-                          </span>
-                        );
-                      })}
+                      {o.servedUrl ? (
+                        <a className="st-mono core-served" href={o.servedUrl} target="_blank" rel="noreferrer">
+                          {full(o.servedUrl)} <ExternalLink size={12} />
+                        </a>
+                      ) : (
+                        <span className="st-mono st-muted" title={o.url}>
+                          {o.url}
+                        </span>
+                      )}
                       <span className="core-stream-actions">
                         <button type="button" className="st-icon-btn ghost" title={t('Edit')} onClick={() => setEditOut(o)}>
                           <Pencil size={14} />
@@ -614,12 +605,11 @@ function InputEditor({ value, busy, onClose, onSave }: { value: Input; busy: boo
 function OutputEditor({ value, sources, busy, onClose, onSave }: { value: Output; sources: StreamsView['sources']; busy: boolean; onClose: () => void; onSave: (v: Output) => void }) {
   const [v, setV] = useState<Output>(value);
   const set = <K extends keyof Output>(k: K, x: Output[K]) => setV({ ...v, [k]: x });
-  const setDest = (i: number, d: Partial<Destination>) => set('destinations', v.destinations.map((x, k) => (k === i ? { ...x, ...d } : x)));
-  const addDest = () => set('destinations', [...v.destinations, { id: `d${Date.now().toString(36)}`, name: '', url: 'rtmp://', key: '', enabled: true }]);
-  const valid = v.name.trim() && v.destinations.length > 0 && v.destinations.every((d) => d.url.trim());
+  const kind = kindOf(v.url);
+  const valid = v.name.trim() && kind && (SERVED.includes(kind) || v.url.split('://')[1]?.trim());
   return (
     <Modal
-      title={value.name ? t('Edit {name}', { name: value.name }) : t('New output')}
+      title={value.name ? t('Edit {name}', { name: value.name }) : t('New destination')}
       icon={<ArrowUpFromLine size={16} />}
       wide
       onClose={onClose}
@@ -637,16 +627,35 @@ function OutputEditor({ value, sources, busy, onClose, onSave }: { value: Output
     >
       <FieldGrid two>
         <Field label={t('Name')}>
-          <input value={v.name} placeholder={t('Program')} onChange={(e) => set('name', e.target.value)} />
+          <input value={v.name} placeholder={t('YouTube, CDN…')} onChange={(e) => set('name', e.target.value)} />
         </Field>
         <Field label={t('What is sent')} group>
           <Dropdown
             value={v.source}
-            options={[{ value: '', label: v.app ? t('App {name}', { name: v.app }) : t('An app (writes the stream in MXL)') }, ...sources.map((s) => ({ value: s.flow, label: s.label }))]}
+            options={[
+              { value: '', label: v.app ? t('App {name}', { name: v.app }) : t('An app (writes the stream in MXL)') },
+              ...sources.filter((s) => !s.output || s.output !== value.id).map((s) => ({ value: s.flow, label: s.kind === 'app' ? t('Same stream as {name}', { name: s.label }) : s.label })),
+            ]}
             onChange={(x) => set('source', x)}
           />
         </Field>
       </FieldGrid>
+      <ProtoFields
+        url={v.url}
+        opts={v.opts ?? {}}
+        output
+        kinds={OUT_KINDS}
+        served={value.url === v.url ? value.servedUrl : null}
+        onUrl={(u) => set('url', u)}
+        onOpts={(o) => set('opts', o)}
+        extra={
+          (v.url.startsWith('rtmp') || v.key) && (
+            <Field label={t('Stream key')}>
+              <input className="st-mono" type="password" autoComplete="off" value={v.key} onFocus={(e) => v.key === MASK && e.target.select()} onChange={(e) => set('key', e.target.value)} />
+            </Field>
+          )
+        }
+      />
       <FieldGrid two>
         <Field label={t('Video sent')} group>
           <Dropdown value={v.format} options={[{ value: '', label: t('As the source') }, ...OUT_FORMATS.map((x) => ({ value: x, label: x }))]} onChange={(x) => set('format', x)} />
@@ -669,47 +678,6 @@ function OutputEditor({ value, sources, busy, onClose, onSave }: { value: Output
         <NumberField label={t('Audio bitrate')} value={v.audioKbps} onChange={(x) => set('audioKbps', x)} step={32} min={32} max={512} suffix="kb/s" />
       </FieldGrid>
       <Switch checked={v.enabled} onChange={(x) => set('enabled', x)} label={t('On air')} />
-      <h4 className="core-subhead">{t('Destinations')}</h4>
-      {v.destinations.map((d, i) => (
-        <div key={d.id} className="core-dest-row">
-            <ProtoFields
-              url={d.url}
-              opts={d.opts ?? {}}
-              output
-              kinds={OUT_KINDS}
-              taken={v.destinations.filter((_, k) => k !== i).map((x) => kindOf(x.url)).filter((k): k is Kind => !!k && SERVED.includes(k))}
-              served={d.url === 'hls' ? value.hlsUrl : d.url === 'html5' ? value.liveUrl : null}
-              onUrl={(u) => setDest(i, { url: u })}
-              onOpts={(o) => setDest(i, { opts: o })}
-              extra={
-                (d.url.startsWith('rtmp') || d.key) && (
-                  <Field label={t('Stream key')}>
-                    <input
-                      className="st-mono"
-                      type="password"
-                      autoComplete="off"
-                      value={d.key}
-                      onFocus={(e) => d.key === MASK && e.target.select()}
-                      onChange={(e) => setDest(i, { key: e.target.value })}
-                    />
-                  </Field>
-                )
-              }
-            />
-          <div className="core-dest-tools">
-            <input value={d.name} placeholder={t('Name (YouTube, CDN…)')} onChange={(e) => setDest(i, { name: e.target.value })} />
-            <Switch checked={d.enabled} onChange={(x) => setDest(i, { enabled: x })} label={t('On')} />
-            <button type="button" className="st-icon-btn ghost" title={t('Delete')} onClick={() => set('destinations', v.destinations.filter((_, k) => k !== i))}>
-              <Trash2 size={14} />
-            </button>
-          </div>
-        </div>
-      ))}
-      <div className="core-dest-add">
-        <button type="button" className="st-btn" onClick={addDest}>
-          <Plus size={14} /> {t('Add a destination')}
-        </button>
-      </div>
     </Modal>
   );
 }
