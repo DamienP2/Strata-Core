@@ -91,6 +91,20 @@ répond sur le port 3212 (IS-04 Node API v1.2/v1.3, IS-05 Connection API v1.1). 
 - L'API n'a pas de mot de passe (comme NMOS le prévoit) : elle ne doit être joignable que depuis
   le réseau de la régie. L'installateur ouvre 3212/tcp et 5353/udp si ufw est actif.
 
+## Sauvegardes
+
+*Ce serveur › Sauvegardes* : les réglages du Core (comptes, groupes, SSO, nom et HTTPS, cartes
+SDI, réseau, flux ST 2110 et réseau, horloge, NDI, NMOS, alertes, SNMP) dans une archive
+`.tar.gz`, gardée dans `/var/lib/strata-core/backups`. Une par jour (les 14 dernières), une à la
+demande (avec les applis et leurs données si on le veut), et une juste avant chaque restauration.
+
+- **Télécharger** une sauvegarde, l'**envoyer** sur un autre serveur, la **restaurer** : le Core
+  redémarre sur les réglages de la sauvegarde, et chacun se reconnecte.
+- L'identité du serveur (sa clé, son rattachement au cockpit) n'est restaurée que si on le
+  demande : seulement pour le même serveur, réinstallé.
+- Les archives contiennent des secrets (empreintes des mots de passe, clés, mots de passe du SSO
+  et de l'e-mail) : à garder en lieu sûr.
+
 ## Recette
 
 La check-list des essais sur le vrai matériel : [RECETTE.md](RECETTE.md). Les essais sans appli

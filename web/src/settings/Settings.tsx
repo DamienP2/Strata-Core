@@ -2,7 +2,7 @@
 // (vue d'ensemble, nom et adresses, HTTPS), Applis (la Bibliothèque, puis une page par appli installée)
 // et Personnes (Utilisateurs, Groupes, Annuaire). Les autres sections viendront avec leurs briques
 // Matériel (Cartes SDI, NDI, ST 2110, Réseau, GPU, Horloge) ; Santé (Ressources, Journal, Alertes, SNMP).
-import { Activity, BellRing, Cast, Clock, Gpu as GpuIcon, Server as ServersIcon, Network as SnmpIcon, CloudDownload, ScrollText, EthernetPort as Ethernet, Globe, KeyRound, LayoutDashboard, LayoutGrid, Lock, MonitorPlay, Radio, Users as UsersIcon, UsersRound, Waves } from 'lucide-react';
+import { Activity, Archive, BellRing, Cast, Clock, Gpu as GpuIcon, Server as ServersIcon, Network as SnmpIcon, CloudDownload, ScrollText, EthernetPort as Ethernet, Globe, KeyRound, LayoutDashboard, LayoutGrid, Lock, MonitorPlay, Radio, Users as UsersIcon, UsersRound, Waves } from 'lucide-react';
 import { Suspense, lazy, useEffect, useState } from 'react';
 import { NavItem, NavSection, SidePage, t } from '@strata/ui';
 import { appIcon } from '../icons';
@@ -13,6 +13,7 @@ import { Groups } from './Groups';
 import { Users } from './Users';
 import { Addresses, Https, Overview } from './Server';
 import { Updates } from './Updates';
+import { Backups } from './Backups';
 import { Servers } from './Servers';
 // Le matériel (et three.js, pour ses cartes en 3D) n'est chargé qu'en ouvrant ses pages.
 const hw = () => import('./hardware/Hardware');
@@ -51,7 +52,7 @@ export function Settings({ path }: { path: string }) {
   let page: React.ReactNode = null;
   const hardware = ['sdi', 'ndi', 'st2110', 'flux', 'reseau', 'gpu', 'horloge'];
   const health = ['ressources', 'journal', 'alertes', 'snmp'];
-  const fixed = [...hardware, ...health, 'serveurs', 'serveur', 'adresses', 'https', 'mises-a-jour', 'utilisateurs', 'groupes', 'annuaire'].includes(path);
+  const fixed = [...hardware, ...health, 'serveurs', 'serveur', 'adresses', 'https', 'mises-a-jour', 'sauvegardes', 'utilisateurs', 'groupes', 'annuaire'].includes(path);
   if (path === 'serveur') page = <Overview apps={apps} />;
   else if (path === 'adresses') page = <Addresses />;
   else if (path === 'https') page = <Https />;
@@ -68,6 +69,7 @@ export function Settings({ path }: { path: string }) {
   else if (path === 'alertes') page = <AlertsPage onCount={setProblems} />;
   else if (path === 'snmp') page = <SnmpPage />;
   else if (path === 'mises-a-jour') page = <Updates apps={apps} jobs={jobs} reloadApps={reload} onCount={setPending} />;
+  else if (path === 'sauvegardes') page = <Backups />;
   else if (path === 'utilisateurs') page = <Users />;
   else if (path === 'groupes') page = <Groups />;
   else if (path === 'annuaire') page = <Directory />;
@@ -83,6 +85,7 @@ export function Settings({ path }: { path: string }) {
         <NavItem icon={Lock} label="HTTPS" on={path === 'https'} onClick={() => navigate('/reglages/https')} />
         <NavItem icon={ServersIcon} label={t('Servers')} on={path === 'serveurs'} onClick={() => navigate('/reglages/serveurs')} />
         <NavItem icon={CloudDownload} label={t('Updates')} on={path === 'mises-a-jour'} onClick={() => navigate('/reglages/mises-a-jour')} count={pending || undefined} />
+        <NavItem icon={Archive} label={t('Backups')} on={path === 'sauvegardes'} onClick={() => navigate('/reglages/sauvegardes')} />
       </div>
       <div>
         <NavSection title={t('Apps')} />

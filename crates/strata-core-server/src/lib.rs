@@ -8,6 +8,7 @@ pub mod alerts;
 pub mod api;
 pub mod apps;
 pub mod auth;
+pub mod backup;
 pub mod cli;
 pub mod cluster;
 pub mod config;
@@ -89,6 +90,8 @@ pub enum Ending {
 /// Sert jusqu'à Ctrl-C, SIGTERM ou une demande de redémarrage.
 pub async fn serve(bind: Option<SocketAddr>, data_dir: PathBuf, web_dir: Option<PathBuf>) -> anyhow::Result<Ending> {
     std::fs::create_dir_all(&data_dir)?;
+    // Une restauration préparée avant le redémarrage : en place avant de rien lire.
+    backup::apply_pending(&data_dir);
     let s = state::AppState::new(data_dir.clone());
     let bind = bind.or(s.config.load().bind).unwrap_or(DEFAULT_BIND.parse()?);
     let listener = tokio::net::TcpListener::bind(bind).await?;
@@ -143,6 +146,7 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
     snmp::apply(&s).await;
     nmos::apply(&s).await;
     cluster::start(&s);
+    backup::start(&s);
     let keeper = {
         let s = s.clone();
         tokio::spawn(async move {
