@@ -46,6 +46,12 @@ const SHAPED: [RegExp, string, string[]][] = [
   [/^ffmpeg is missing \((.+)\): run the installer again and choose Repair, or sudo apt install ffmpeg$/, 'ffmpeg is missing ({why}): run the installer again and choose Repair, or sudo apt install ffmpeg', ['why']],
   [/^MXL cannot open its folder \((.+)\): run the installer again and choose Repair, then restart the Core$/, 'MXL cannot open its folder ({why}): run the installer again and choose Repair, then restart the Core', ['why']],
   [/^MXL does not load \((.+)\): run the installer again and choose Update$/, 'MXL does not load ({why}): run the installer again and choose Update', ['why']],
+  // Réseau
+  [/^(.+): a fixed address is needed \(10\.0\.0\.2\/24\)$/, '{name}: a fixed address is needed (10.0.0.2/24)', ['name']],
+  [/^(.+): not an address with its prefix: (.+) \(10\.0\.0\.2\/24\)$/, '{name}: not an address with its prefix: {a} (10.0.0.2/24)', ['name', 'a']],
+  [/^(.+): not a gateway address: (.+)$/, '{name}: not a gateway address: {a}', ['name', 'a']],
+  [/^(.+): not a DNS server address: (.+)$/, '{name}: not a DNS server address: {a}', ['name', 'a']],
+  [/^(.+): the MTU is between 576 and 9216$/, '{name}: the MTU is between 576 and 9216', ['name']],
   // Mises à jour
   [/^(.+) has no release of the Core$/, '{repo} has no release of the Core', ['repo']],
   [/^this Core is already the latest \((.+)\)$/, 'This Core is already the latest ({version})', ['version']],

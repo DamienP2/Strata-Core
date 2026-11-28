@@ -1,10 +1,10 @@
 // Réglages › Matériel : Cartes SDI, NDI, ST 2110, Réseau, Horloge. Les réglages sont partagés par
 // les cinq pages (store.ts) et enregistrés d'un coup.
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Cable, Gauge, MonitorPlay, Network as NetIcon, Pencil, Plus, Radio, RefreshCw, Search, Trash2, Waves } from 'lucide-react';
 import { Badge, Card, Dropdown, Empty, Field, FieldGrid, InfoTip, Modal, NumberField, PageHead, Segmented, SubTabs, Switch, confirmDialog, t, tn, toast, type DropOption } from '@strata/ui';
 import { navigate } from '../../router';
-import { api } from '../../api';
+import { api, movedTo } from '../../api';
 import { friendly } from '../../errors';
 import { HwSaveBar, useHardware } from './common';
 import { Meter } from '../health/Resources';
@@ -340,7 +340,145 @@ function RolesCard({ nics, cfg }: { nics: Nic[]; cfg: HwConfig }) {
 
 /** Toutes les interfaces, rangées par carte : cartes ajoutées, carte mère, Wi-Fi, virtuelles (celles
  *  sans adresse ni rôle sont seulement comptées). */
-function InterfacesCard({ nics, cfg }: { nics: Nic[]; cfg: HwConfig }) {
+/** Les adresses réglées par Strata, et un changement à confirmer. */
+interface IfaceIp {
+  name: string;
+  mode: 'static' | 'dhcp';
+  addresses: string[];
+  gateway?: string | null;
+  dns: string[];
+  mtu?: number | null;
+}
+interface IpState {
+  interfaces: IfaceIp[];
+  pendingUntil: number | null;
+  reverted: boolean;
+  error: string | null;
+  defaultRoute: string | null;
+}
+
+/** Un changement d'adresse à garder ou défaire, avant le retour arrière automatique. */
+function PendingIp({ ip }: { ip: IpState }) {
+  const [now, setNow] = useState(() => Date.now() / 1000);
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now() / 1000), 1000);
+    return () => clearInterval(id);
+  }, []);
+  if (!ip.pendingUntil) return null;
+  const left = Math.max(0, Math.round(ip.pendingUntil - now));
+  const act = async (what: 'confirm' | 'revert') => {
+    try {
+      await api('POST', `/api/hardware/ip/${what}`);
+      toast(what === 'confirm' ? t('Network settings kept') : t('Previous network settings restored'));
+    } catch (e) {
+      toast(friendly(e), 'error');
+    }
+  };
+  return (
+    <div className="core-pending">
+      <span>
+        <strong>{t('New network settings to confirm')}</strong> {t('Without confirmation, the previous ones come back in {time}.', { time: `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}` })}
+      </span>
+      <span className="st-spacer" />
+      <button type="button" className="st-btn small" onClick={() => void act('revert')}>
+        {t('Go back now')}
+      </button>
+      <button type="button" className="st-btn small primary" onClick={() => void act('confirm')}>
+        {t('Keep')}
+      </button>
+    </div>
+  );
+}
+
+/** Les adresses d'une interface : celles du système (Ubuntu), DHCP, ou fixes. */
+function IpModal({ nic, current, onClose }: { nic: Nic; current?: IfaceIp; onClose: () => void }) {
+  const [mode, setMode] = useState<'system' | 'dhcp' | 'static'>(current?.mode ?? 'system');
+  const [addresses, setAddresses] = useState((current?.addresses ?? (nic.ipv4.length ? nic.ipv4 : [])).join(', '));
+  const [gateway, setGateway] = useState(current?.gateway ?? '');
+  const [dns, setDns] = useState((current?.dns ?? []).join(', '));
+  const [mtu, setMtu] = useState(current?.mtu ? String(current.mtu) : '');
+  const [busy, setBusy] = useState(false);
+  const list = (s: string) => s.split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean);
+  const save = async () => {
+    setBusy(true);
+    try {
+      const r = await api<{ guard: boolean; movedTo?: string | null }>('PUT', `/api/hardware/ip/${encodeURIComponent(nic.name)}`, {
+        mode,
+        addresses: list(addresses),
+        gateway: gateway.trim() || null,
+        dns: list(dns),
+        mtu: mtu.trim() ? Number(mtu) : null,
+      });
+      onClose();
+      if (r.movedTo) {
+        movedTo(`${location.protocol}//${r.movedTo}${location.port ? `:${location.port}` : ''}/reglages/reseau`);
+      } else {
+        toast(r.guard ? t('Applied: confirm it within 2 minutes, or the previous settings come back') : t('Network settings applied'));
+      }
+    } catch (e) {
+      toast(friendly(e), 'error');
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal
+      title={t('Addresses of {name}', { name: nic.name })}
+      icon={<NetIcon size={16} />}
+      onClose={onClose}
+      onSubmit={() => void save()}
+      footer={
+        <>
+          <button type="button" className="st-btn" onClick={onClose}>
+            {t('Cancel')}
+          </button>
+          <button type="submit" className="st-btn primary" disabled={busy}>
+            {t('Apply')}
+          </button>
+        </>
+      }
+    >
+      <Field label={t('Addresses')} group>
+        <Segmented<'system' | 'dhcp' | 'static'>
+          value={mode}
+          onChange={setMode}
+          options={[
+            { value: 'system', label: t('As set by Ubuntu') },
+            { value: 'dhcp', label: 'DHCP' },
+            { value: 'static', label: t('Fixed') },
+          ]}
+        />
+      </Field>
+      {mode === 'static' && (
+        <FieldGrid two>
+          <Field label={t('Address and prefix')}>
+            <input className="st-mono" value={addresses} placeholder="10.0.0.2/24" onChange={(e) => setAddresses(e.target.value)} />
+          </Field>
+          <Field label={t('Gateway')}>
+            <input className="st-mono" value={gateway} placeholder={t('none')} onChange={(e) => setGateway(e.target.value)} />
+          </Field>
+        </FieldGrid>
+      )}
+      {mode !== 'system' && (
+        <FieldGrid two>
+          <Field label={t('DNS servers')}>
+            <input className="st-mono" value={dns} placeholder="10.0.0.53" onChange={(e) => setDns(e.target.value)} />
+          </Field>
+          <Field label="MTU">
+            <input className="st-mono" value={mtu} placeholder="1500 / 9000" onChange={(e) => setMtu(e.target.value.replace(/[^0-9]/g, ''))} />
+          </Field>
+        </FieldGrid>
+      )}
+      <p className="st-muted core-note">
+        {mode === 'system'
+          ? t('The interface goes back to the settings of Ubuntu (netplan).')
+          : t('If this is the interface you reach the server through, the change must be confirmed within 2 minutes; otherwise the previous settings come back by themselves.')}
+      </p>
+    </Modal>
+  );
+}
+
+function InterfacesCard({ nics, cfg, ip }: { nics: Nic[]; cfg: HwConfig; ip: IpState | null }) {
+  const [editing, setEditing] = useState<Nic | null>(null);
   const groups: { title: string; note?: string; list: Nic[] }[] = [];
   const cards = new Map<string, Nic[]>();
   const board: Nic[] = [];
@@ -368,12 +506,13 @@ function InterfacesCard({ nics, cfg }: { nics: Nic[]; cfg: HwConfig }) {
             <th>{t('Link')}</th>
             <th>MTU</th>
             <th>{t('Roles')}</th>
+            <th className="r" />
           </tr>
         </thead>
         <tbody>
           {groups.map((g) => [
             <tr key={`g-${g.title}-${g.note ?? ''}`} className="core-table-group">
-              <td colSpan={5}>
+              <td colSpan={6}>
                 {g.title} {g.note && <span className="st-mono">{g.note}</span>}
               </td>
             </tr>,
@@ -383,7 +522,13 @@ function InterfacesCard({ nics, cfg }: { nics: Nic[]; cfg: HwConfig }) {
                   <strong className="st-mono">{x.name}</strong>
                   {x.connector === 'sfp' && <span className="st-muted"> · SFP</span>}
                 </td>
-                <td className="st-mono">{x.ipv4.join(', ') || <span className="st-muted">—</span>}</td>
+                <td>
+                  <span className="st-mono">{x.ipv4.join(', ') || <span className="st-muted">—</span>}</span>{' '}
+                  {(() => {
+                    const set = ip?.interfaces.find((i) => i.name === x.name);
+                    return set ? <Badge tone="ok">{set.mode === 'dhcp' ? 'DHCP' : t('fixed')}</Badge> : null;
+                  })()}
+                </td>
                 <td>
                   <span className="core-nic-state">
                     <span className={`st-dot ${x.up ? 'ok' : x.up === false ? 'bad' : ''}`} />
@@ -400,12 +545,21 @@ function InterfacesCard({ nics, cfg }: { nics: Nic[]; cfg: HwConfig }) {
                     ))}
                   </span>
                 </td>
+                <td className="r">
+                  {x.kind !== 'virtual' && (
+                    <button type="button" className="st-icon-btn ghost" title={t('Addresses')} onClick={() => setEditing(x)}>
+                      <Pencil size={14} />
+                    </button>
+                  )}
+                </td>
               </tr>
             )),
           ])}
         </tbody>
       </table>
       {hidden > 0 && <p className="st-muted core-note">{tn(hidden, '{n} virtual interface without address is not shown', '{n} virtual interfaces without address are not shown')}</p>}
+      {ip?.error && <p className="core-warn">{friendly(ip.error)}</p>}
+      {editing && <IpModal nic={editing} current={ip?.interfaces.find((i) => i.name === editing.name)} onClose={() => setEditing(null)} />}
     </Card>
   );
 }
@@ -647,6 +801,7 @@ function NmosCard({ draft, opts, status }: { draft: HwConfig; opts: DropOption<s
 /** Réseau : les cartes de la machine et leurs rôles (un clic sur un port). Le ST 2110 (usage des
  *  ports, charge, NMOS) est sur sa page. */
 export function NetworkPage() {
+  const ip = usePoll<IpState>('/api/hardware/ip');
   const hw = useHardware();
   if (!hw) return null;
   const [snap, draft] = hw;
@@ -655,8 +810,9 @@ export function NetworkPage() {
       <PageHead title={t('Network')} sub={tn(snap.nics.length, '{n} interface', '{n} interfaces')}>
         <Rescan />
       </PageHead>
+      {ip && <PendingIp ip={ip} />}
       <RolesCard nics={snap.nics} cfg={draft} />
-      <InterfacesCard nics={snap.nics} cfg={draft} />
+      <InterfacesCard nics={snap.nics} cfg={draft} ip={ip} />
       <HwSaveBar />
     </>
   );

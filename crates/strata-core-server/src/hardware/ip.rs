@@ -321,13 +321,32 @@ pub fn pending() -> Option<u64> {
     (active && at > now_secs()).then_some(at)
 }
 
+/// La dernière erreur d'application (aussi celle d'un changement appliqué après la réponse).
+static LAST_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+pub fn last_error() -> Option<String> {
+    LAST_ERROR.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
 /// Écrit la demande et la fait appliquer (bloquant).
 pub fn apply(w: &Wanted) -> Result<Outcome, String> {
+    let r = apply_inner(w);
+    *LAST_ERROR.lock().unwrap_or_else(|e| e.into_inner()) = r.as_ref().err().cloned();
+    r
+}
+
+fn apply_inner(w: &Wanted) -> Result<Outcome, String> {
     check(w)?;
     // L'état actuel, pour un retour arrière.
     let _ = std::fs::write(prev_json(), serde_json::to_string_pretty(&read_wanted()).unwrap_or_default());
     std::fs::write(etc(), serde_json::to_string_pretty(w).unwrap_or_default()).map_err(|e| format!("cannot write {}: {e}", etc().display()))?;
     if let Some(e) = super::clock::run_for("systemctl", &["restart", "strata-net"], Duration::from_secs(60)) {
+        // Rien n'a été appliqué : la demande d'avant reste celle en place.
+        if read_outcome().is_none_or(|o| o.ok) {
+            if let Ok(prev) = std::fs::read_to_string(prev_json()) {
+                let _ = std::fs::write(etc(), prev);
+            }
+        }
         return Err(read_outcome().and_then(|o| o.error).unwrap_or(format!("strata-net: {e} (run the installer again and choose Repair)")));
     }
     match read_outcome() {

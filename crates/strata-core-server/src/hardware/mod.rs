@@ -848,7 +848,7 @@ async fn ip_state(CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
             "interfaces": w.interfaces,
             "pendingUntil": ip::pending(),
             "reverted": o.as_ref().is_some_and(|o| o.reverted),
-            "error": o.and_then(|o| o.error),
+            "error": ip::last_error().or_else(|| o.and_then(|o| o.error)),
             "defaultRoute": ip::default_route_iface(),
         })
     })

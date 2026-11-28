@@ -40,7 +40,7 @@ export interface AuthState {
 
 /** L'état de l'interface : la connexion, et la liaison avec le serveur. */
 /** `down` : l'écran est bloqué (mise à jour, redémarrage, serveur injoignable) jusqu'au retour du Core. */
-export type Down = 'update' | 'restart' | 'lost';
+export type Down = 'update' | 'restart' | 'lost' | 'moved';
 /** Une bibliothèque qui manque ou plante : le Core tourne sans, ces fonctions ne sont pas là. */
 export interface Unavailable {
   lib: string;
@@ -59,6 +59,13 @@ export const useApp = create<{ auth: AuthState | null; connected: boolean; down:
  *  retour, puis la page se recharge. */
 export function expectRestart(kind: 'update' | 'restart') {
   useApp.setState({ down: kind });
+}
+
+/** L'adresse du serveur change : la page dit où aller confirmer (`url`). */
+export let movedUrl = '';
+export function movedTo(url: string) {
+  movedUrl = url;
+  useApp.setState({ down: 'moved' });
 }
 
 export async function api<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {

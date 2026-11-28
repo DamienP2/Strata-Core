@@ -9,7 +9,7 @@ import {
   addTranslations, installEscape, installTooltips, instanceKey, nameTab, openAppTab, setLang, setTheme, setTimezone, t, toast, useLang,
   type CockpitData, type CockpitInstance, type Lang, type ThemePref,
 } from '@strata/ui';
-import { api, ApiError, expectRestart, useApp, type AuthState, type PublicUser, type Unavailable } from './api';
+import { api, ApiError, expectRestart, movedUrl, useApp, type AuthState, type PublicUser, type Unavailable } from './api';
 import { fr } from './fr';
 import { appIcon } from './icons';
 import { navigate, useRoute } from './router';
@@ -76,7 +76,7 @@ function useHeartbeat() {
         fails++;
         if (down || fails >= 2) {
           sawDown = true;
-          useApp.setState({ down: down === 'update' || down === 'restart' ? down : 'lost', connected: false });
+          useApp.setState({ down: down === 'update' || down === 'restart' || down === 'moved' ? down : 'lost', connected: false });
         }
       }
       if (!stop) timer = window.setTimeout(() => void beat(), useApp.getState().down || fails > 0 ? 2000 : 5000);
@@ -147,11 +147,20 @@ function DownOverlay() {
   }, [down]);
   if (!down) return null;
   const Icon = down === 'update' ? CloudDownload : down === 'restart' ? RotateCw : Unplug;
-  const title = down === 'update' ? t('The server is being updated') : down === 'restart' ? t('The server is restarting') : t('The server does not answer');
+  const title =
+    down === 'update'
+      ? t('The server is being updated')
+      : down === 'restart'
+        ? t('The server is restarting')
+        : down === 'moved'
+          ? t('The address of the server changes')
+          : t('The server does not answer');
   const text =
-    down === 'lost'
-      ? t('Trying again every 2 seconds. This page reloads by itself as soon as the server answers.')
-      : t('Please wait: the Core restarts. This page reloads by itself as soon as it answers.');
+    down === 'moved'
+      ? t('Open the new address and confirm the change within 2 minutes; otherwise the previous address comes back and this page reloads by itself.')
+      : down === 'lost'
+        ? t('Trying again every 2 seconds. This page reloads by itself as soon as the server answers.')
+        : t('Please wait: the Core restarts. This page reloads by itself as soon as it answers.');
   const elapsed = `${Math.floor(since / 60)}:${String(since % 60).padStart(2, '0')}`;
   return (
     <div className="core-down" role="alertdialog" aria-modal="true" aria-label={title}>
@@ -161,6 +170,13 @@ function DownOverlay() {
         </span>
         <h2>{title}</h2>
         <p>{text}</p>
+        {down === 'moved' && movedUrl && (
+          <p>
+            <a className="st-btn primary" href={movedUrl}>
+              {movedUrl}
+            </a>
+          </p>
+        )}
         <p className="core-down-wait">
           <LoaderCircle size={15} className="st-spin" /> {t('For {time}', { time: elapsed })}
         </p>
