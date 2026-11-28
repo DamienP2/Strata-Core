@@ -545,6 +545,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/hardware/clock", get(clock))
         .route("/api/hardware/clock/apply", axum::routing::post(clock_apply))
         .route("/api/hardware/ndi/sources", get(ndi_sources))
+        .route("/api/hardware/ndi/{source}/preview.jpg", get(ndi_preview))
         .route("/api/hardware/shared", get(shared))
         .route("/api/hardware/inputs", get(inputs))
         .route("/api/hardware/inputs/{card}/{n}/preview.jpg", get(preview))
@@ -1041,6 +1042,16 @@ async fn ndi_sources(CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
     require(me.admin)?;
     let list = blocking(|| ndi::sources(3000)).await?.map_err(bad)?;
     Ok(Json(json!({ "sources": list })))
+}
+
+/// L'aperçu d'une source NDI (reçue pendant qu'on la regarde).
+async fn ndi_preview(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(source): UrlPath<String>) -> ApiResult<impl IntoResponse> {
+    require(me.admin)?;
+    let s2 = s.clone();
+    let jpeg = blocking(move || s2.previews.jpeg(&format!("ndi/{source}"), || preview::Feed::Ndi(None, source.clone())))
+        .await?
+        .map_err(|e| (StatusCode::NOT_FOUND, e))?;
+    Ok(jpeg_response(jpeg))
 }
 
 /// Ce que les applis lisent du matériel : réservé à la machine elle-même (les applis, lancées

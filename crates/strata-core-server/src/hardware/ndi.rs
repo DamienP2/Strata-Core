@@ -92,6 +92,32 @@ struct FindCreate {
     p_extra_ips: *const c_char,
 }
 
+#[repr(C)]
+struct RecvCreate {
+    source: Source,
+    color_format: i32,
+    bandwidth: i32,
+    allow_video_fields: bool,
+    p_ndi_recv_name: *const c_char,
+}
+
+/// `NDIlib_video_frame_v2_t`.
+#[repr(C)]
+struct VideoFrame {
+    xres: i32,
+    yres: i32,
+    fourcc: u32,
+    frame_rate_n: i32,
+    frame_rate_d: i32,
+    aspect: f32,
+    frame_format: i32,
+    timecode: i64,
+    p_data: *mut u8,
+    line_stride: i32,
+    p_metadata: *const c_char,
+    timestamp: i64,
+}
+
 struct Lib {
     _lib: libloading::Library,
     path: String,
@@ -99,6 +125,15 @@ struct Lib {
     find_create: unsafe extern "C" fn(*const FindCreate) -> Instance,
     find_wait: unsafe extern "C" fn(Instance, u32) -> bool,
     find_sources: unsafe extern "C" fn(Instance, *mut u32) -> *const Source,
+    recv: Option<RecvFns>,
+}
+
+/// La réception (aperçus) : facultative, une bibliothèque sans elle garde la recherche.
+struct RecvFns {
+    create: unsafe extern "C" fn(*const RecvCreate) -> Instance,
+    capture: unsafe extern "C" fn(Instance, *mut VideoFrame, *mut c_void, *mut c_void, u32) -> i32,
+    free_video: unsafe extern "C" fn(Instance, *const VideoFrame),
+    destroy: unsafe extern "C" fn(Instance),
 }
 
 // Les fonctions de la bibliothèque s'appellent de n'importe quel fil.
@@ -137,6 +172,14 @@ fn load() -> Result<Lib, String> {
                 find_create: *lib.get(b"NDIlib_find_create_v2\0").map_err(why)?,
                 find_wait: *lib.get(b"NDIlib_find_wait_for_sources\0").map_err(why)?,
                 find_sources: *lib.get(b"NDIlib_find_get_current_sources\0").map_err(why)?,
+                recv: (|| {
+                    Some(RecvFns {
+                        create: *lib.get(b"NDIlib_recv_create_v3\0").ok()?,
+                        capture: *lib.get(b"NDIlib_recv_capture_v2\0").ok()?,
+                        free_video: *lib.get(b"NDIlib_recv_free_video_v2\0").ok()?,
+                        destroy: *lib.get(b"NDIlib_recv_destroy\0").ok()?,
+                    })
+                })(),
                 path: path.clone(),
                 version,
                 _lib: lib,
@@ -234,6 +277,97 @@ pub fn sources(wait_ms: u32) -> Result<Vec<String>, String> {
     }
     out.sort();
     out.dedup();
+    Ok(out)
+}
+
+/// Un récepteur NDI pour l'aperçu d'une source : le flux de plus basse qualité que la source
+/// propose (le « proxy » de NDI), en RGBX.
+pub struct Receiver {
+    inst: Instance,
+    _name: std::ffi::CString,
+    last: Option<(u32, u32, Vec<u8>)>,
+}
+
+// Utilisé sous le verrou de son aperçu seulement.
+unsafe impl Send for Receiver {}
+
+impl Receiver {
+    pub fn open(source: &str) -> Result<Receiver, String> {
+        let r = lib()?;
+        let f = r.recv.as_ref().ok_or("this NDI library cannot receive")?;
+        let name = std::ffi::CString::new(source).map_err(|_| "bad source name")?;
+        let create = RecvCreate {
+            source: Source { p_ndi_name: name.as_ptr(), p_url_address: std::ptr::null() },
+            // RGBX_RGBA, la plus basse qualité, images entières.
+            color_format: 2,
+            bandwidth: 0,
+            allow_video_fields: false,
+            p_ndi_recv_name: c"Strata Core preview".as_ptr(),
+        };
+        // SAFETY : la structure vit le temps de l'appel ; le nom reste à nous.
+        let inst = unsafe { (f.create)(&create) };
+        if inst.is_null() {
+            return Err("NDI cannot receive this source".into());
+        }
+        Ok(Receiver { inst, _name: name, last: None })
+    }
+
+    /// La dernière image reçue (vide la file) : (largeur, hauteur, RGBX). None si rien de neuf.
+    pub fn latest(&mut self, wait_ms: u32) -> Option<(u32, u32, &[u8])> {
+        let f = lib().ok()?.recv.as_ref()?;
+        let mut got = false;
+        let mut wait = wait_ms;
+        loop {
+            // SAFETY : une image remplie par NDI, rendue ci-dessous.
+            let mut v: VideoFrame = unsafe { std::mem::zeroed() };
+            let kind = unsafe { (f.capture)(self.inst, &mut v, std::ptr::null_mut(), std::ptr::null_mut(), wait) };
+            // 1 : une image vidéo.
+            if kind != 1 {
+                break;
+            }
+            let (w, h, stride) = (v.xres.max(0) as u32, v.yres.max(0) as u32, v.line_stride.max(0) as usize);
+            if w > 0 && h > 0 && !v.p_data.is_null() && stride >= w as usize * 4 {
+                // SAFETY : `stride × h` octets, valides jusqu'à free_video.
+                let data = unsafe { std::slice::from_raw_parts(v.p_data, stride * h as usize) };
+                let mut px = Vec::with_capacity((w * h * 4) as usize);
+                for y in 0..h as usize {
+                    px.extend_from_slice(&data[y * stride..y * stride + w as usize * 4]);
+                }
+                self.last = Some((w, h, px));
+                got = true;
+            }
+            unsafe { (f.free_video)(self.inst, &v) };
+            wait = 0;
+        }
+        if !got {
+            return None;
+        }
+        self.last.as_ref().map(|(w, h, p)| (*w, *h, p.as_slice()))
+    }
+}
+
+impl Drop for Receiver {
+    fn drop(&mut self) {
+        if let Some(f) = lib().ok().and_then(|l| l.recv.as_ref()) {
+            // SAFETY : créé par `open`, détruit une fois.
+            unsafe { (f.destroy)(self.inst) };
+        }
+    }
+}
+
+/// Un JPEG de `width` de large au plus, depuis du RGBX.
+pub fn jpeg_rgbx(px: &[u8], w: u32, h: u32, width: u32) -> Result<Vec<u8>, String> {
+    let step = w.div_ceil(width.max(16)).max(1);
+    let (ow, oh) = (w / step, h / step);
+    let mut rgb = Vec::with_capacity((ow * oh * 3) as usize);
+    for oy in 0..oh {
+        for ox in 0..ow {
+            let p = ((oy * step * w + ox * step) * 4) as usize;
+            rgb.extend_from_slice(&px[p..p + 3]);
+        }
+    }
+    let mut out = Vec::new();
+    jpeg_encoder::Encoder::new(&mut out, 72).encode(&rgb, ow as u16, oh as u16, jpeg_encoder::ColorType::Rgb).map_err(|e| e.to_string())?;
     Ok(out)
 }
 

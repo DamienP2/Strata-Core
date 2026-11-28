@@ -9,7 +9,7 @@ import { friendly } from '../../errors';
 import { HwSaveBar, useHardware } from './common';
 import { Meter } from '../health/Resources';
 import { TagInput } from '../TagInput';
-import { FlowsCard, InputsCard, OutputsCard, usePoll } from './Inputs';
+import { FlowsCard, InputsCard, OutputsCard, Preview, Tile, usePoll } from './Inputs';
 import { DeckLink3D, SDI_COLOR, printedOf } from './Card3D';
 import { cardOf, editCard, editHw, loadHw, type DetectedCard, type Flow, type Fn, type Capacity, type HwConfig, type Nic, type NmosStatus, type Port, type Snapshot } from './store';
 
@@ -1072,21 +1072,66 @@ export function St2110Page() {
 
 // ---------- NDI ----------
 
-export function NdiPage() {
-  const hw = useHardware();
+/** Les sources NDI du réseau, cherchées à l'ouverture puis toutes les 10 s, chacune avec son
+ *  aperçu (reçu en basse qualité pendant qu'on regarde). */
+function NdiSources() {
   const [sources, setSources] = useState<string[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [looking, setLooking] = useState(false);
-  if (!hw) return null;
-  const [snap, draft] = hw;
   const look = async () => {
     setLooking(true);
     try {
       setSources((await api<{ sources: string[] }>('GET', '/api/hardware/ndi/sources')).sources);
+      setError(null);
     } catch (e) {
-      toast(friendly(e), 'error');
+      setError(friendly(e));
     }
     setLooking(false);
   };
+  useEffect(() => {
+    void look();
+    const id = setInterval(() => void look(), 10000);
+    return () => clearInterval(id);
+  }, []);
+  return (
+    <Card
+      icon={<Search size={16} />}
+      title={sources ? tn(sources.length, '{n} visible source', '{n} visible sources') : t('Visible sources')}
+      actions={
+        <button type="button" className="st-btn small" disabled={looking} onClick={() => void look()}>
+          <RefreshCw size={13} className={looking ? 'st-spin' : undefined} /> {t('Look again')}
+        </button>
+      }
+    >
+      {error && <p className="core-warn">{error}</p>}
+      {sources === null ? (
+        <span className="st-muted">{t('Looking…')}</span>
+      ) : sources.length === 0 ? (
+        <span className="st-muted">{t('No source seen')}</span>
+      ) : (
+        <div className="core-inputs">
+          {sources.map((name) => {
+            const m = /^(.*?) \((.*)\)$/.exec(name);
+            return (
+              <Tile
+                key={name}
+                pic={<Preview src={`/api/hardware/ndi/${encodeURIComponent(name)}/preview.jpg`} on empty={t('No picture')} />}
+                head={<strong>{m ? m[2] : name}</strong>}
+                sub={m ? m[1] : undefined}
+                foot={null}
+              />
+            );
+          })}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+export function NdiPage() {
+  const hw = useHardware();
+  if (!hw) return null;
+  const [snap, draft] = hw;
   return (
     <>
       <PageHead title="NDI" sub={snap.ndi.path ? `${t('NDI library')}${snap.ndi.version ? ` · ${snap.ndi.version}` : ''}` : t('NDI library not installed')} />
@@ -1113,25 +1158,7 @@ export function NdiPage() {
           </Field>
         </FieldGrid>
       </Card>
-      <Card icon={<Search size={16} />} title={t('Visible sources')}>
-        <div className="st-row">
-          <button type="button" className="st-btn" disabled={looking || !snap.ndi.path} onClick={() => void look()}>
-            <Search size={14} /> {looking ? t('Looking…') : t('Look for sources')}
-          </button>
-        </div>
-        {sources &&
-          (sources.length ? (
-            <div className="core-lines">
-              {sources.map((s) => (
-                <div key={s} className="core-line">
-                  <strong>{s}</strong>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <span className="st-muted">{t('No source seen')}</span>
-          ))}
-      </Card>
+      {snap.ndi.path && <NdiSources />}
       <HwSaveBar />
     </>
   );

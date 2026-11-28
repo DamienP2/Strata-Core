@@ -35,6 +35,8 @@ pub enum Feed {
     Flow(st2110::Receiver),
     /// Un flux MXL (entrée du Core, ou sortie écrite par une appli).
     Mxl { mxl: Arc<strata_mxl::Mxl>, id: strata_mxl::Uuid, reader: Option<strata_mxl::VideoReader> },
+    /// Une source NDI reçue pour l'occasion (flux de basse qualité).
+    Ndi(Option<super::ndi::Receiver>, String),
 }
 
 impl Feed {
@@ -69,6 +71,7 @@ impl Previews {
                 return Ok(jpeg.clone());
             }
         }
+        let first = e.made.is_none();
         let fresh = match &mut e.feed {
             Feed::Share { path, reader } => from_share(path, reader),
             Feed::Flow(rx) => match rx.picture() {
@@ -76,6 +79,17 @@ impl Previews {
                 None => Ok(None),
             },
             Feed::Mxl { mxl, id, reader } => from_mxl(mxl, *id, reader),
+            Feed::Ndi(rx, source) => {
+                if rx.is_none() {
+                    *rx = Some(super::ndi::Receiver::open(source)?);
+                }
+                // La première fois, le temps que la source réponde.
+                let wait = if first { 1500 } else { 100 };
+                match rx.as_mut().and_then(|r| r.latest(wait)) {
+                    Some((w, h, px)) => super::ndi::jpeg_rgbx(px, w, h, WIDTH).map(Some),
+                    None => Ok(None),
+                }
+            }
         };
         match fresh {
             Ok(Some(jpeg)) => {
@@ -101,7 +115,7 @@ impl Previews {
         let e = e.lock().unwrap_or_else(|p| p.into_inner());
         match &e.feed {
             Feed::Flow(rx) => Some(rx.status()),
-            Feed::Share { .. } | Feed::Mxl { .. } => None,
+            Feed::Share { .. } | Feed::Mxl { .. } | Feed::Ndi(..) => None,
         }
     }
 

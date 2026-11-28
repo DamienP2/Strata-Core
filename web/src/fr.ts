@@ -221,7 +221,6 @@ export const fr: Record<string, string> = {
   'The computer’s': 'Celui de l’ordinateur',
   'Visible sources': 'Sources visibles',
   'Looking…': 'Recherche…',
-  'Look for sources': 'Chercher les sources',
   'No source seen': 'Aucune source vue',
   'Restart the apps that use NDI: they read these settings when they start.': 'Relancez les applis qui utilisent NDI : elles lisent ces réglages à leur démarrage.',
   Locked: 'Verrouillé',
@@ -932,4 +931,6 @@ export const fr: Record<string, string> = {
   '{name}: not a gateway address: {a}': '{name} : {a} n’est pas une adresse de passerelle',
   '{name}: not a DNS server address: {a}': '{name} : {a} n’est pas une adresse de serveur DNS',
   '{name}: the MTU is between 576 and 9216': '{name} : le MTU est entre 576 et 9216',
+  '{n} visible source': '{n} source visible',
+  '{n} visible sources': '{n} sources visibles',
 };
