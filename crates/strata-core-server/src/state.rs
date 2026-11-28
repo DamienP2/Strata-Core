@@ -37,6 +37,8 @@ pub struct AppState {
     pub ndi_outputs: crate::hardware::ndi_out::NdiOutputs,
     /// Les générateurs de mires (Santé › Mires et analyse).
     pub testgen: crate::testgen::Engine,
+    /// L'analyseur (Santé › Mires et analyse).
+    pub analyzer: crate::analyze::Analyzer,
     /// Les aperçus des réglages (entrées, sorties, flux), seulement pendant qu'on regarde.
     pub previews: crate::hardware::preview::Previews,
     /// Les flux ST 2110 reçus et envoyés par le Core (MTL).
@@ -97,6 +99,7 @@ impl AppState {
             playouts: Default::default(),
             ndi_outputs: Default::default(),
             testgen: Default::default(),
+            analyzer: Default::default(),
             previews: Default::default(),
             mxl: Default::default(),
             st2110: Default::default(),

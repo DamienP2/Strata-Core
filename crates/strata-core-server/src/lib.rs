@@ -6,6 +6,7 @@
 //! santé, mises à jour, plusieurs serveurs.
 pub mod access;
 pub mod alerts;
+pub mod analyze;
 pub mod api;
 pub mod apps;
 pub mod auth;
@@ -291,6 +292,7 @@ pub async fn serve_on(s: Shared, listener: tokio::net::TcpListener, web_dir: Opt
         s2.playouts.stop_all();
         s2.ndi_outputs.stop_all();
         s2.testgen.stop_all();
+        s2.analyzer.stop_all();
         s2.captures.stop_all();
     })
     .await;

@@ -1,13 +1,15 @@
 // Réglages › Santé › Mires et analyse. Générateur · envoyé : des mires (image, son, timecode)
 // envoyées par le Core vers une sortie SDI, un flux ST 2110, une destination NDI, un flux réseau ou
 // un flux MXL pour les applis. Analyseur · reçu : vérifier n'importe quelle source.
-import { useRef, useState } from 'react';
+import { lazy, Suspense, useRef, useState } from 'react';
 import { Pencil, Plus, Trash2, TvMinimal } from 'lucide-react';
 import { Badge, Dropdown, Empty, Field, FieldGrid, Modal, PageHead, Segmented, SubTabs, Switch, confirmDialog, t, toast } from '@strata/ui';
 import { api } from '../../api';
 import { friendly } from '../../errors';
 import { usePoll } from '../../poll';
 import { Preview, Tile } from '../hardware/Inputs';
+
+const Analyzer = lazy(() => import('./Analyzer').then((m) => ({ default: m.Analyzer })));
 
 export interface Generator {
   id: string;
@@ -118,6 +120,7 @@ export function TestPatternsPage() {
       <SubTabs<'generator' | 'analyzer'>
         items={[
           { id: 'generator', label: t('Generator · sent'), count: gens.length },
+          { id: 'analyzer', label: t('Analyzer · received') },
         ]}
         value={tab}
         onChange={setTab}
@@ -188,6 +191,11 @@ export function TestPatternsPage() {
             })}
           </div>
         ))}
+      {tab === 'analyzer' && (
+        <Suspense fallback={null}>
+          <Analyzer />
+        </Suspense>
+      )}
       {editing && data && (
         <Editor
           value={editing}

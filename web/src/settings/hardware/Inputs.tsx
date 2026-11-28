@@ -70,7 +70,7 @@ export function Preview({ src, on, empty, children }: { src: string; on: boolean
     const load = () => {
       const mine = ++seq;
       const start = Date.now();
-      const url = `${src}?n=${start}-${n++}`;
+      const url = `${src}${src.includes('?') ? '&' : '?'}n=${start}-${n++}`;
       const next = () => {
         if (gone || mine !== seq) return;
         timer = setTimeout(load, Math.max(0, 1000 - (Date.now() - start)));

@@ -315,3 +315,44 @@ button.core-hw-role.on { border-style: solid; background: color-mix(in srgb, var
 .core-path input { flex: 1; min-width: 0; }
 .core-bg { display: flex; align-items: center; gap: 12px; min-height: 32px; }
 .core-bg input[type="color"] { width: 40px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; }
+
+/* Santé › Mires et analyse : l'analyseur */
+.core-an-source { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 16px; }
+.core-an-source .st-dropdown { min-width: 320px; flex: 1 1 320px; max-width: 640px; }
+.core-an-label { font-size: var(--fs-11); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--text-3); }
+.core-an { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+.core-an-main { flex: 999 1 520px; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.core-an-side { flex: 1 1 360px; max-width: 480px; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.core-an-pic .core-input-pic, .core-an-pic > div { aspect-ratio: 16 / 9; }
+.core-an-scopes { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+.core-an-wave, .core-an-vec { display: block; width: 100%; height: auto; border-radius: 4px; }
+.core-an-vec { max-width: 220px; margin: 0 auto; border-radius: 50%; }
+.core-an-checks { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.core-an-check { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-12); align-items: flex-start; }
+.core-an-meters { display: grid; gap: 6px; align-items: end; }
+.core-an-scale { position: relative; height: 180px; margin-bottom: 44px; font-size: 10px; color: var(--text-3); }
+.core-an-scale span { position: absolute; right: 2px; transform: translateY(50%); }
+.core-an-ch { display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 11px; color: var(--text-3); min-width: 0; }
+.core-an-bar { position: relative; width: 100%; max-width: 18px; height: 180px; border-radius: 3px; background: var(--panel-3); overflow: hidden; }
+.core-an-fill { position: absolute; left: 0; right: 0; bottom: 0; background: linear-gradient(0deg, var(--pvw) 0%, var(--pvw) 70%, var(--warn) 85%, var(--live) 100%); background-size: 100% 180px; background-position: bottom; transition: height 120ms linear; }
+.core-an-hold { position: absolute; left: 0; right: 0; height: 2px; background: var(--text); }
+.core-an-solo { width: 26px; height: 22px; display: grid; place-items: center; border-radius: 5px; border: 1px solid var(--line-2); background: var(--panel-3); color: var(--text-3); cursor: pointer; padding: 0; }
+.core-an-solo:hover { color: var(--text); }
+.core-an-solo.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.core-an-phase { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; margin-top: 12px; font-size: var(--fs-12); color: var(--text-2); }
+.core-an-phase-bar { position: relative; height: 6px; border-radius: 3px; background: linear-gradient(90deg, var(--live) 0%, var(--warn) 40%, var(--pvw) 70%); }
+.core-an-phase-bar span { position: absolute; top: -3px; width: 2px; height: 12px; background: var(--text); }
+.core-an-loud { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: end; }
+.core-an-big { display: flex; flex-direction: column; gap: 2px; font-size: var(--fs-11); }
+.core-an-big b { font-size: 22px; font-variant-numeric: tabular-nums; color: var(--text); }
+.core-an-big b.small { font-size: 15px; }
+.core-an-note { margin: 10px 0 0; font-size: var(--fs-12); }
+.core-an-lip { display: flex; align-items: center; gap: 16px; }
+.core-an-lip > div { display: flex; flex-direction: column; gap: 2px; font-size: var(--fs-11); }
+.core-an-lipv { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.core-an-spark { flex: 1; height: 48px; }
+.core-an-dl { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 16px; margin: 0; font-size: var(--fs-12); color: var(--text-2); }
+.core-an-dl dd { margin: 0; color: var(--text); text-align: right; font-variant-numeric: tabular-nums; }
+.core-an-listen { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.core-an-vol { display: flex; align-items: center; gap: 8px; flex: 1 1 140px; font-size: var(--fs-12); color: var(--text-2); }
+.core-an-vol input { flex: 1; }
